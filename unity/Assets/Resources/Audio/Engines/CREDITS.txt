@@ -1,0 +1,21 @@
+Sons de motor - Wikimedia Commons (atribuicoes abaixo)
+
+revuelto_v12.org&utm_campaign=imageinfo&utm_content=original | File:Lamborghini Gallardo LP570-4 Superleggera.ogg | licenca=CC BY-SA 3.0 | autor=Edvvc | https://upload.wikimedia.org/wikipedia/commons/0/0b/Lamborghini_Gallardo_LP570-4_Superleggera.ogg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original
+gtr_v6.org&utm_campaign=imageinfo&utm_content=original | File:Nissan GT-R SpecV.ogg | licenca=CC BY-SA 3.0 | autor=Edvvc | https://upload.wikimedia.org/wikipedia/commons/6/69/Nissan_GT-R_SpecV.ogg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original
+Sons de motor reais baixados (fonte: Wikimedia Commons)
+========================================================
+Porsche: File:2006 Porsche Cayman S engine sound.wav | CC BY-SA 3.0
+
+f1_v6: File:Beatrice Lola-Hart THL 1 (1985).ogg | CC (ver pagina do ficheiro no Commons) | Wikimedia Commons
+r8_v10: File:Audi R8 (2000).ogg | CC (ver pagina do ficheiro no Commons) | Wikimedia Commons
+revuelto_v12: File:Lamborghini Aventador LP700-4 (2011).ogg | CC (ver pagina do ficheiro no Commons) | Wikimedia Commons
+gtr_v6: File:Nissan GT-R SpecV.ogg | CC (ver pagina do ficheiro no Commons) | Wikimedia Commons
+p1_v8: File:McLaren-Mercedes MP4 23 (2008).ogg | CC (ver pagina do ficheiro no Commons) | Wikimedia Commons
+bugatti_w16: File:Bugatti Veyron Pur Sang.ogg | CC (ver pagina do ficheiro no Commons) | Wikimedia Commons
+corvette_v8: File:Chevrolet Corvette C6 ZR1 recorded2010.ogg | CC (ver pagina do ficheiro no Commons) | Wikimedia Commons
+mustang_v8: File:AC Cobra (1964).ogg | CC (ver pagina do ficheiro no Commons) | Wikimedia Commons
+Atualizacao de sons (2026-10-20), todos Wikimedia Commons:
+- Ferrari F355 under-hood exhaust sound (CC BY-SA 3.0) -> Ferrari
+- Lamborghini Gallardo LP570-4 Superleggera (CC BY-SA 3.0) -> Lamborghini Temerario
+- Brawn-Mercedes BGP 001 2009 (CC BY-SA 3.0) -> Formula 1 (F1/F2008/F1 Studio)
+Backup dos sons anteriores: EngineAudioBackup/ (raiz do projeto)

@@ -1,0 +1,5 @@
+﻿<Solution>
+  <Project Path="RaceX.csproj" />
+  <Project Path="Assembly-CSharp-Editor.csproj" />
+  <Project Path="RaceX.Tests.csproj" />
+</Solution>

@@ -1,0 +1,116 @@
+unity/Library/
+unity/Temp/
+unity/Logs/
+unity/obj/
+unity/UserSettings/
+unity/*.csproj
+unity/*.sln
+server/node_modules/
+unity_build.log
+unity_test.log
+unity_exit.txt
+test_results.xml
+
+# Auto-generated entries
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist/
+build/
+*.log
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Sensitive files (auto-detected)
+autoshots3_run.log
+autoshots4_run.log
+autoshots5_run.log
+autoshots6_run.log
+blender_convert.log
+build
+build_android.log
+build_android.sh
+build_android_fix.log
+build_win.log
+build_windows.sh
+convert_bugatti.log
+convert_f1cars.log
+convert_f1studio2.log
+convert_ferrari.log
+convert_new.log
+convert_new2.log
+convert_new3.log
+convert_v2.log
+convert_v3.log
+convert_v4.log
+Corvette_C7_OBJ.rar (large file: 74MB)
+diag.log
+download_sounds4.log
+download_sounds5.log
+download_sounds6.log
+download_sounds7.log
+download_sounds8.log
+emu.log
+f1_2022_for_livery_design.rar (large file: 77MB)
+f1_2022_textured_studio (1).blend (large file: 239MB)
+f1_2022_textured_studio.blend (large file: 239MB)
+Ferrari+Concept1.obj (large file: 686MB)
+Lamborghini+Revuelto.blend (large file: 54MB)
+Mustang.zip (large file: 97MB)
+Nissan_GTR_nismo_2022.blend (large file: 187MB)
+porscheblender.rar (large file: 199MB)
+test_run.log
+test_run2.log
+test_run3.log
+test_run4.log
+test_run5.log
+test_run6.log
+test_run7.log
+test_run8.log
+test_run9.log
+textures.rar (large file: 62MB)
+Textures_Corvette_C7.rar (large file: 150MB)
+unity_test.log
+uploads_files_4478463_Underground+Garage+Scene.blend (large file: 74MB)
+
+unity/.utmp/
+
+# Artefatos pesados fora do jogo (modelos-fonte, backups, screenshots)
+*.blend
+*.blend1
+*.rar
+*.zip
+*.mht
+*.pdf
+model_backup/
+extracted_new/
+HANDOFF_F1/
+EngineAudioBackup/
+autoshots*/
+apk_*.png
+*.apk
+unity/.utmp/
+.tmpcheck/
+.vercel_deploy/
