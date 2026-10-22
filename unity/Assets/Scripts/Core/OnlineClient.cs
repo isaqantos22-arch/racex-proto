@@ -68,7 +68,7 @@ namespace RaceX.Core
     public static class OnlineClient
     {
         public const string ServerUrlKey = "RaceX.ServerUrl";
-        public const string DefaultServerUrl = "ws://localhost:3000/socket.io/?EIO=4&transport=websocket";
+        public const string DefaultServerUrl = "wss://racex-multiplayer.onrender.com/socket.io/?EIO=4&transport=websocket";
 
         public static bool Connected;
         public static bool ConnectFailed => connectFailed;
