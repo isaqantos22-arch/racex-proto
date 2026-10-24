@@ -19,6 +19,9 @@ namespace RaceX.Car
         [Range(0f, 1f)] public float brakeInput;
         public bool handbrake;
         public bool inputLocked;
+        /// <summary>Pit lane: quando true, PitLaneSystem controla os inputs (ext*).</summary>
+        public bool pitControlled;
+        public float extThrottle, extBrake, extSteer;
         public float assistLevel = 1f;
 
         public event Action<float, Vector3> Collided;
@@ -211,7 +214,8 @@ namespace RaceX.Car
         {
             float speedFactor = Mathf.Clamp01(SpeedKmh / Mathf.Max(1f, spec.topSpeedKmh));
             float maxAngle = spec.maxSteerAngle * Mathf.Lerp(1f, spec.steerAtTopSpeed, speedFactor);
-            float target = (inputLocked ? 0f : Mathf.Clamp(steerInput, -1f, 1f)) * maxAngle;
+            float steerIn = pitControlled ? extSteer : Mathf.Clamp(steerInput, -1f, 1f);
+            float target = (inputLocked ? 0f : steerIn) * maxAngle;
             currentSteerAngle = Mathf.MoveTowards(currentSteerAngle, target, 120f * Time.fixedDeltaTime);
             wheels[FL].steerAngle = currentSteerAngle;
             wheels[FR].steerAngle = currentSteerAngle;
@@ -255,9 +259,10 @@ namespace RaceX.Car
             {
                 Gear = -1;
             }
-            else if (Gear < 0 && (throttle > 0.1f || (brake < 0.1f && fwd > -0.5f)))
+            else if (Gear < 0)
             {
-                Gear = 1; // acelerar sai da ré imediatamente; o torque pra frente freia o recuo
+                // Sai da ré quando o acelerador é pressionado (pedal real, qualquer mapeamento de input).
+                if (throttleInput > 0.1f) Gear = 1;
             }
 
             float groundRpm = Mathf.Abs(fwd) / (2f * Mathf.PI * spec.wheelRadius) * 60f;
@@ -292,6 +297,11 @@ namespace RaceX.Car
         {
             float throttle = inputLocked ? 0f : throttleInput;
             if (Gear < 0) throttle = inputLocked ? 0f : brakeInput;
+            if (pitControlled)
+            {
+                throttle = extThrottle;
+                if (Gear < 0) throttle = 0f;
+            }
 
             float torque = 0f;
             bool overSpeed = SpeedKmh >= spec.topSpeedKmh || engineRpm >= spec.rpmLimit;
@@ -324,6 +334,7 @@ namespace RaceX.Car
         void ApplyBrakes()
         {
             float brake = inputLocked ? 1f : (Gear < 0 ? 0f : brakeInput);
+            if (pitControlled) brake = Mathf.Max(brake, extBrake);
             float front = spec.brakeTorque * brake * spec.frontBrakeBias * 2f;
             float rear = spec.brakeTorque * brake * (1f - spec.frontBrakeBias) * 2f;
 
@@ -345,14 +356,16 @@ namespace RaceX.Car
             float speed = Mathf.Abs(ForwardSpeed);
             if (speed < 5f || GroundedWheels == 0) return;
             if (assistLevel <= 0.01f) return;
+            // Pneus gastos/duros: correção lateral proporcionalmente mais fraca (o carro "escorrega" mais).
+            float grip = RaceX.Core.PitLaneSystem.TireGrip(this);
             Vector3 av = rb.angularVelocity;
-            float yawMax = Mathf.Lerp(2.4f, 0.9f, Mathf.Clamp01(SpeedKmh / Mathf.Max(1f, spec.topSpeedKmh)));
+            float yawMax = Mathf.Lerp(2.4f, 0.9f, Mathf.Clamp01(SpeedKmh / Mathf.Max(1f, spec.topSpeedKmh))) / Mathf.Max(0.9f, grip);
             if (assistLevel > 0.01f && Mathf.Abs(av.y) > yawMax) rb.angularVelocity = new Vector3(av.x, Mathf.Sign(av.y) * yawMax, av.z);
             Vector3 fwd = transform.forward; fwd.y = 0f;
             Vector3 vel = Velocity; vel.y = 0f;
             float slip = Vector3.SignedAngle(fwd, vel, Vector3.up);
             if (Mathf.Abs(slip) > 16f)
-                rb.AddTorque(transform.up * (-Mathf.Sign(slip) * (Mathf.Abs(slip) - 16f) * 0.03f * spec.massKg * assistLevel), ForceMode.Force);
+                rb.AddTorque(transform.up * (-Mathf.Sign(slip) * (Mathf.Abs(slip) - 16f) * 0.03f * spec.massKg * assistLevel * grip), ForceMode.Force);
         }
 
         void ApplyDownforce()
@@ -398,6 +411,22 @@ namespace RaceX.Car
             if (relative > 18f)
                 DamageFactor = Mathf.Max(0.72f, DamageFactor - Mathf.Clamp01((relative - 18f) / 90f) * 0.14f);
             Collided?.Invoke(relative, point);
+
+            // ANTI-VOAR: parede/objeto estático (sem rigidbody) em velocidade média — mata o ricochete
+            // que lança o carro pro alto (patrimônio do pit: muro, prédio, portão, pórtico).
+            if (collision.rigidbody == null && collision.contactCount > 0)
+            {
+                Vector3 n = collision.GetContact(0).normal;
+                Vector3 v = rb != null ? rb.linearVelocity : Vector3.zero;
+                float vn = Vector3.Dot(v, n);
+                if (vn < -4f) // batendo contra a parede (componente normal para dentro)
+                {
+                    Vector3 tangent = v - n * vn;      // só desliza
+                    rb.linearVelocity = tangent * 0.5f; // rebate a 50%, sem componente normal
+                    Vector3 av = rb.angularVelocity;
+                    if (av.magnitude > 6f) rb.angularVelocity = av.normalized * 6f; // sem capotar
+                }
+            }
         }
 
 

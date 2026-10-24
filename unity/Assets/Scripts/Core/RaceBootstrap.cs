@@ -28,8 +28,8 @@ namespace RaceX.Core
             var settings = GameManager.Settings;
             bool split = settings.mode == GameMode.LocalSplitScreen;
             bool online = settings.mode == GameMode.Online;
+            if (settings.laps <= 0) settings.laps = TrackLibrary.RealLaps(settings.track); // 0 = voltas reais (regra F1)
             SettingsManager.ApplyQuality(SettingsManager.Quality, split);
-
             PostFxSetup.Ensure();
 
             var def = TrackLibrary.Get(settings.track);
@@ -38,6 +38,17 @@ namespace RaceX.Core
 
             var race = new GameObject("RaceManager").AddComponent<RaceManager>();
             race.Initialize(track, settings);
+            RaceX.Core.PitLaneSystem pit = null;
+            if (settings.pitStops)
+            {
+                var pitGo = new GameObject("PitLaneSystem");
+                pit = pitGo.AddComponent<RaceX.Core.PitLaneSystem>();
+                pit.Setup(race);
+                pit.boxCount = Mathf.Clamp(settings.totalCars, 4, 24); // nº de boxes = nº de carros da sessão
+            }
+            // Treino livre da carreira (sex/sáb): todos NASEM no pit, saída em fila.
+            bool pitStart = pit != null && settings.laps >= 900;
+            Pose? PitPose(int slot) => pitStart ? pit.PitSpawnPose(slot) : (Pose?)null;
             RaceX.Core.ReplaySystem.StartRecording(race);
             GameAudio.EnterRace(settings.track);
 
@@ -52,17 +63,42 @@ namespace RaceX.Core
             else
             {
                 var slots = AssignHumanSlots(total, settings.HumanCount);
+                // Carreira: grid REAL — ordem vindas da classificação (índice 0 = pole).
+                var careerGridNames = (RaceX.Career.CareerData.raceActive
+                    && RaceX.Career.CareerMode.RaceGrid != null
+                    && RaceX.Career.CareerMode.RaceGrid.Count >= total)
+                    ? RaceX.Career.CareerMode.RaceGrid : null;
+                if (careerGridNames != null && settings.HumanCount == 1)
+                {
+                    int hSlot = careerGridNames.IndexOf(settings.players[0].name);
+                    slots[0] = Mathf.Clamp(hSlot, 0, total - 1);
+                }
                 var models = PickNpcModels(total - settings.HumanCount, settings.formulaOnly, SettingsManager.AllowF1);
-                var names = new List<string>(DriverNames);
-                Shuffle(names);
+                // Carreira: IAs recebem os nomes dos rivais da temporada (ordem fixa do roster),
+                // para que a classificação da corrida pontue a tabela real.
+                var names = (RaceX.Career.CareerData.raceActive && RaceX.Career.CareerMode.RaceRoster != null
+                    && RaceX.Career.CareerMode.RaceRoster.Count >= total - settings.HumanCount)
+                    ? new List<string>(RaceX.Career.CareerMode.RaceRoster)
+                    : new List<string>(DriverNames);
+                // Grid real: rivais ocupam os slots na ordem exata da classificação (sem shuffle).
+                if (careerGridNames != null && settings.HumanCount == 1)
+                {
+                    names = new List<string>();
+                    foreach (var n in careerGridNames)
+                        if (n != settings.players[0].name) names.Add(n);
+                    if (names.Count < total - settings.HumanCount) Shuffle(names);
+                }
+                else Shuffle(names);
                 for (int p = 0; p < settings.HumanCount; p++)
                 {
                     var ps = settings.players[p];
                     usedColors.Add(ps.colorIndex);
-                    var humanModel = settings.formulaOnly ? CarModel.F1 : (!SettingsManager.AllowF1 && ps.car == CarModel.F1 ? CarModel.Titan : ps.car);
+                    var humanModel = RaceX.Career.CareerData.raceActive
+                        ? RaceX.Career.CareerMode.PlayerCar()
+                        : (settings.formulaOnly ? CarModel.F1 : (!SettingsManager.AllowF1 && ps.car == CarModel.F1 ? CarModel.Titan : ps.car));
                     var hspec = CarSpec.CreateDefault(humanModel);
                     CareerStats.ApplyUpgrades(hspec);
-                    humans.Add(race.SpawnCar(hspec, ps.colorIndex, ps.name, slots[p], true, p));
+                    humans.Add(race.SpawnCar(hspec, ps.colorIndex, ps.name, slots[p], true, p, PitPose(slots[p])));
                 }
 
                 int npc = 0, color = 0;
@@ -73,9 +109,13 @@ namespace RaceX.Core
                     int c = color % CarPalette.Colors.Length;
                     usedColors.Add(c);
                     color++;
-                    var entry = race.SpawnCar(CarSpec.CreateDefault(models[npc]), c, names[npc % names.Count], slot, false, -1);
+                    var carModel = RaceX.Career.CareerData.raceActive
+                        ? RaceX.Career.CareerMode.CarForDriver(names[npc % names.Count])
+                        : models[npc];
+                    var entry = race.SpawnCar(CarSpec.CreateDefault(carModel), c, names[npc % names.Count], slot, false, -1, PitPose(slot));
                     var ai = entry.car.gameObject.AddComponent<CarAI>();
-                    ai.Initialize(track.Waypoints, race, settings.difficulty);
+                    ai.Initialize(track.Waypoints, race, settings.difficulty,
+                        RaceX.Career.CareerData.raceActive ? RaceX.Career.CareerMode.SkillBiasFor(names[npc % names.Count]) : 0f);
                     ai.SetLane(((npc * 37) % 9 - 4) * 0.42f);
                     RaceX.UI.Nametag.Attach(entry.car, names[npc % names.Count]);
                     npc++;

@@ -145,6 +145,7 @@ namespace RaceX.UI
             if (!online)
             {
                 Time.timeScale = open ? 0f : 1f;
+                Time.fixedDeltaTime = 0.02f; // passo de física fixo (colisões estáveis)
             }
             AudioListener.pause = open && !online;
             if (!open) SettingsManager.Save();
@@ -152,6 +153,8 @@ namespace RaceX.UI
 
         void OnDestroy()
         {
+            if (!online) Time.timeScale = 1f;
+            Time.fixedDeltaTime = 0.02f;
             AudioListener.pause = false;
         }
     }

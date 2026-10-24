@@ -24,12 +24,16 @@ namespace RaceX.UI
         UnityEngine.UI.Button ffButton;
         bool fastForward;
 
-        /// <summary>Acelera o tempo 5x (pula a minutagem restante do treino); de novo = volta a 1x.</summary>
+        /// <summary>Acelera o tempo 5x (pula a minutagem restante do treino); de novo = volta a 1x.
+        /// O fixedDeltaTime fica 0.02 SEMPRE: o timeScale faz a física rodar 5 passos por frame —
+        /// colisões ficam estáveis (passo grande de 0.1 s fazia o carro voar ao encostar).</summary>
         void ToggleFastForward()
         {
             fastForward = !fastForward;
             float ts = fastForward ? 5f : 1f;
             Time.timeScale = ts;
+            Time.fixedDeltaTime = 0.02f;
+            Time.maximumDeltaTime = fastForward ? 0.12f : 0.05f; // cabe 6 passos de 0.02 por frame no 5x
             if (fastForward) RaceX.Career.CareerMode.CompressSessionClock(5f); // relógio REAL da sessão também corre 5x
             if (ffButton != null)
             {
