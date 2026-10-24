@@ -71,6 +71,7 @@ namespace RaceX.UI
             var rt = Rect(name, parent, anchor, anchor, pivot, pos, size);
             var img = rt.gameObject.AddComponent<Image>();
             img.color = color;
+            img.raycastTarget = false; // decoração NUNCA captura clique (highlight sobre botão o engolia)
             return img;
         }
 
@@ -95,6 +96,7 @@ namespace RaceX.UI
         public static Button Button(string name, Transform parent, string label, Vector2 anchor, Vector2 pivot, Vector2 pos, Vector2 size, Action onClick, int fontSize = 32)
         {
             var img = Panel(name, parent, anchor, pivot, pos, size, new Color(0.08f, 0.1f, 0.14f, 0.75f));
+            img.raycastTarget = true; // fundo do botão é a superfície de clique (Panel decorativo segue false)
             var btn = img.gameObject.AddComponent<Button>();
             var colors = btn.colors;
             colors.highlightedColor = new Color(0.25f, 0.5f, 0.9f, 1f);

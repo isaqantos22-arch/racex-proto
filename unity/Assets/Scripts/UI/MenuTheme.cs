@@ -17,6 +17,7 @@ namespace RaceX.UI
         public static Button StyledButton(RectTransform parent, string name, string label, Vector2 anchorRef, Vector2 anchorSelf, Vector2 pos, Vector2 size, int font, Action onClick)
         {
             var img = UIFactory.Panel(name, parent, anchorRef, anchorSelf, pos, size, Panel);
+            img.raycastTarget = true; // fundo do botão é a superfície de clique
             var btn = img.gameObject.AddComponent<Button>();
             var cb = btn.colors;
             var plain = Color.white;

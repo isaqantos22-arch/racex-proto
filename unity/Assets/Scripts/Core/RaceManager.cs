@@ -38,6 +38,51 @@ namespace RaceX.Core
         public RaceState State { get; private set; } = RaceState.Setup;
         public int CountdownValue { get; private set; }
         public float RaceTime => State == RaceState.Racing || State == RaceState.Finished ? Time.time - raceStartTime : 0f;
+
+        /// <summary>Limite REAL de tempo da sessão (0 = sem limite/por distância). Expira encerra a sessão com a ordem atual.</summary>
+        public float SessionTimeLeft
+        {
+            get
+            {
+                if (sessionTimeLimit <= 0f || State != RaceState.Racing) return -1f;
+                return Mathf.Max(0f, sessionTimeLimit - (Time.time - sessionStart));
+            }
+        }
+        float sessionTimeLimit;
+        float sessionStart;
+        bool timeExpired;
+        int lapAtExpiry;
+
+        /// <summary>Volta atual do humano (0 se não há).</summary>
+        int HumanLapNow()
+        {
+            foreach (var e in entries)
+            {
+                if (!e.isHuman) continue;
+                var p = GetProgress(e);
+                return p?.lap ?? 0;
+            }
+            return 0;
+        }
+
+        /// <summary>Volta atual de um carro qualquer (IA/treino).</summary>
+        public int LapOf(CarController c)
+        {
+            foreach (var e in entries)
+            {
+                if (e.car != c) continue;
+                var p = GetProgress(e);
+                return p?.lap ?? 0;
+            }
+            return 0;
+        }
+
+        bool HumanFinished()
+        {
+            foreach (var e in entries)
+                if (e.isHuman && e.finished) return true;
+            return false;
+        }
         public readonly List<RaceEntry> entries = new List<RaceEntry>();
         public readonly List<RaceEntry> finishOrder = new List<RaceEntry>();
 
@@ -57,9 +102,9 @@ namespace RaceX.Core
             track.Checkpoints.LapCompleted += OnLapCompleted;
         }
 
-        public RaceEntry SpawnCar(CarSpec spec, int colorIndex, string driverName, int slot, bool human, int playerIndex)
+        public RaceEntry SpawnCar(CarSpec spec, int colorIndex, string driverName, int slot, bool human, int playerIndex, Pose? customPose = null)
         {
-            Pose pose = Track.GetGridPose(slot);
+            Pose pose = customPose ?? Track.GetGridPose(slot);
             var car = CarFactory.Create(spec, colorIndex, (human ? "Player_" : "NPC_") + driverName, pose.position, pose.rotation);
             car.inputLocked = true;
             var bounds = car.gameObject.AddComponent<TrackBounds>();
@@ -73,6 +118,10 @@ namespace RaceX.Core
             };
             entries.Add(entry);
             byCar[car] = entry;
+            // Treino da carreira: restaura a melhor volta JÁ gravada no save — sair pro menu/hub
+            // não apaga o que foi feito (não precisa refazer as voltas).
+            if (Settings.laps >= 900 && Settings.careerPhase >= 0)
+                entry.bestLap = RaceX.Career.CareerMode.LoadPracticeBest(driverName);
             return entry;
         }
 
@@ -101,6 +150,7 @@ namespace RaceX.Core
         {
             State = RaceState.Racing;
             raceStartTime = Time.time;
+            ConfigureSessionTime(Settings.sessionTimeLimit);
             foreach (var e in entries)
             {
                 e.lapStartTime = raceStartTime;
@@ -118,10 +168,36 @@ namespace RaceX.Core
             e.lapTimes.Add(lapTime);
             bool best = e.bestLap <= 0f || lapTime < e.bestLap;
             if (best) e.bestLap = lapTime;
+            // Treino da carreira: grava a melhor volta no SAVE — sair pro hub/menu não perde as voltas feitas.
+            if (best && Settings.laps >= 900 && Settings.careerPhase >= 0)
+                Career.CareerMode.SavePracticeBest(e.name, e.bestLap);
             if (e.isHuman) SettingsManager.TrySaveBestLap((int)Settings.track, (int)e.model, lapTime);
             LapCompleted?.Invoke(e, lapTime, best);
 
             if (lapNumber >= Settings.laps) Finish(e, now);
+        }
+
+        /// <summary>Configura o limite de tempo da sessão (chamado no início da corrida).</summary>
+        public void ConfigureSessionTime(float limitSeconds)
+        {
+            sessionTimeLimit = Mathf.Max(0f, limitSeconds);
+            sessionStart = Time.time;
+        }
+
+        /// <summary>Fim de sessão por tempo: congela a ordem atual e mostra resultados.</summary>
+        void EndByTime()
+        {
+            State = RaceState.Finished;
+            foreach (var e in entries)
+            {
+                if (!e.isHuman || e.car == null) continue;
+                var input = e.car.GetComponent<RaceX.Input.PlayerInputHandler>();
+                if (input != null) input.enabled = false;
+                if (e.car.GetComponent<CarAI>() == null)
+                    e.car.gameObject.AddComponent<CarAI>().Initialize(Track.Waypoints, this, Settings.difficulty);
+                e.car.inputLocked = false;
+            }
+            RaceFinished?.Invoke();
         }
 
         void Finish(RaceEntry e, float now)
@@ -152,13 +228,48 @@ namespace RaceX.Core
         void Update()
         {
             if (State != RaceState.Racing) return;
-            foreach (var e in entries) e.raceDistance = Track.Checkpoints.RaceDistance(e.car);
-            entries.Sort((a, b) =>
+            // Relógio REAL da carreira: tempo passado em menu/hub também desconta (deadline UTC).
+            if (Settings.careerPhase >= 0 && sessionTimeLimit > 0f)
             {
-                if (a.finished && b.finished) return finishOrder.IndexOf(a).CompareTo(finishOrder.IndexOf(b));
-                if (a.finished != b.finished) return a.finished ? -1 : 1;
-                return b.raceDistance.CompareTo(a.raceDistance);
-            });
+                int careerLeft = RaceX.Career.CareerMode.SessionSecondsLeft();
+                if (careerLeft > 0)
+                {
+                    float realLimit = (Time.time - sessionStart) + careerLeft;
+                    if (realLimit < sessionTimeLimit) sessionTimeLimit = realLimit;
+                }
+            }
+            // Fim POR TEMPO com volta de cortesia: expirou? quem está na volta completa, então encerra.
+            if (sessionTimeLimit > 0f && Time.time - sessionStart >= sessionTimeLimit)
+            {
+                if (!timeExpired)
+                {
+                    timeExpired = true;
+                    lapAtExpiry = HumanLapNow();
+                }
+                if (HumanLapNow() > lapAtExpiry || HumanFinished()) { EndByTime(); }
+                return;
+            }
+            foreach (var e in entries) e.raceDistance = Track.Checkpoints.RaceDistance(e.car);
+            if (Settings.laps >= 900)
+            {
+                // SESSÃO CRONOMETRADA (treino/classi): placar AO VIVO é por MELHOR VOLTA —
+                // quem tem tempo sobe na hora; quem está com 0 mantém a ordem INICIAL (grid).
+                // Não espera ultrapassagem nem distância — isso é corrida, não sessão de tempo.
+                entries.Sort((a, b) =>
+                {
+                    bool ha = a.bestLap > 0f, hb = b.bestLap > 0f;
+                    if (ha && hb) return a.bestLap.CompareTo(b.bestLap);
+                    if (ha != hb) return ha ? -1 : 1;
+                    return a.gridSlot.CompareTo(b.gridSlot);
+                });
+            }
+            else
+                entries.Sort((a, b) =>
+                {
+                    if (a.finished && b.finished) return finishOrder.IndexOf(a).CompareTo(finishOrder.IndexOf(b));
+                    if (a.finished != b.finished) return a.finished ? -1 : 1;
+                    return b.raceDistance.CompareTo(a.raceDistance);
+                });
             for (int i = 0; i < entries.Count; i++) entries[i].position = i + 1;
         }
 
@@ -166,6 +277,16 @@ namespace RaceX.Core
         {
             var list = new List<RaceEntry>(finishOrder);
             foreach (var e in entries) if (!list.Contains(e)) list.Add(e);
+            // Sessão só por tempo (treinos/classificação): ordem SEMPRE por MELHOR VOLTA,
+            // nunca por distância/ultrapassagem (o quem andou mais tempo não é o mais rápido).
+            if (Settings.laps >= 900)
+                list.Sort((a, b) =>
+                {
+                    bool ha = a.bestLap > 0f, hb = b.bestLap > 0f;
+                    if (ha && hb) return a.bestLap.CompareTo(b.bestLap);
+                    if (ha != hb) return ha ? -1 : 1;
+                    return a.gridSlot.CompareTo(b.gridSlot);
+                });
             return list;
         }
     }
