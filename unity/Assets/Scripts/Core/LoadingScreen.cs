@@ -32,10 +32,17 @@ namespace RaceX.Core
         public static void Show(string cenaAlvo, RaceSettings settings)
         {
             Time.timeScale = 1f;
+            // GUARDA: um só LoadingRunner (carreira re-chamando LoadRace no mesmo quadro empilhava
+            // dois LoadSceneAsync da mesma cena e o progresso morria abaixo de 0.9 — "travou em 55%").
+            var existing = Object.FindFirstObjectByType<LoadingRunner>();
+            if (existing != null) Object.Destroy(existing.gameObject);
             var go = new GameObject("LoadingScreen");
             Object.DontDestroyOnLoad(go);
             var runner = go.AddComponent<LoadingRunner>();
             runner.targetScene = cenaAlvo;
+            // MODO CARREIRA = loading ANTIGO (simples, provado): barra única 0-100% sem fases.
+            // Barra real com pré-carga de carros fica SÓ para single/multiplayer.
+            runner.realBar = settings != null && settings.careerPhase < 0;
             if (settings != null && settings.players != null && settings.players.Length > 0)
             {
                 runner.playerModel = (CarModel)settings.players[0].car; // pré-carga o FBX do jogador AINDA no loading (barra real), nunca na ativação
@@ -49,6 +56,7 @@ namespace RaceX.Core
         public string targetScene;
         public CarModel playerModel = (CarModel)(-1);
         public bool formulaOnly;
+        public bool realBar = true;
 
         Text dicaText, pctText;
         Image fill;
@@ -115,23 +123,42 @@ namespace RaceX.Core
                 Destroy(gameObject);
                 yield break;
             }
+
+            // MODO CARREIRA: comportamento ANTIGO (simples e provado) — barra única 0-100% pela
+            // própria carga da cena, sem fases nem pré-carga de carros. Nada de trava em 55%.
+            if (!realBar)
+            {
+                op.allowSceneActivation = true;
+                while (!op.isDone)
+                {
+                    SetProgress(op.progress / 0.9f); // barra antiga: carga 0-100%
+                    yield return null;
+                }
+                SetProgress(1f);
+                yield return new WaitForSecondsRealtime(0.3f);
+                Destroy(canvas.gameObject);
+                Destroy(gameObject);
+                yield break;
+            }
+
+            // SINGLE/MULTI: barra REAL em 3 fases — (A) carga da cena 0-55%, (B) pré-carga dos
+            // modelos 55-90% (progresso MEDIDO do LoadAsync), (C) ativação 90-100%.
+            // TODAS as fases têm PRAZO MÁXIMO: se algo travar, o loading segue em frente em vez
+            // de pendurar para sempre (o Resources.Load síncrono no bootstrap cobre o que faltar).
             op.allowSceneActivation = false;
-            // Barra REAL em 3 fases: (A) carga da cena 0-55%, (B) pré-carga do modelo do carro
-            // 55-90% (progresso MEDIDO do LoadAsync — era isto que congelava ~1min na ativação,
-            // pois o FBX era carregado síncrono DEPOIS da cena pronta), (C) ativação 90-100%.
             float lastBucket = 0f;
+            float phaseA0 = Time.unscaledTime;
             while (op.progress < 0.9f)
             {
                 SetProgress(op.progress / 0.9f * 0.55f);
                 float bucket = Mathf.Floor(op.progress / 0.9f / 0.15f);
                 if (bucket > lastBucket) { lastBucket = bucket; TrocaDica(); }
+                if (Time.unscaledTime - phaseA0 > 30f) break; // trava da cena: segue sem esperar
                 yield return null;
             }
             SetProgress(0.55f);
+            if (!op.isDone)
             {
-                // Pré-carga REAL de todos os modelos que a corrida usa (jogador + pool de NPCs).
-                // Cada modelo reporta o progresso do LoadAsync — a barra anda com carga verdadeira,
-                // e a ativação da cena fica LEVE (nada de Resources.Load síncrono de FBX pesado).
                 var models = new List<CarModel>();
                 if (playerModel >= 0) models.Add(playerModel);
                 if (formulaOnly)
@@ -150,9 +177,16 @@ namespace RaceX.Core
                     float span = 0.35f / models.Count;
                     for (int i = 0; i < models.Count; i++)
                     {
+                        // Pré-carga COM PRAZO (15 s por modelo): PrewarmAsync sempre termina, mas
+                        // o prazo garante que nenhum LoadAsync lento pendure o loading inteiro.
                         int idx = i;
-                        yield return ImportedCarModels.PrewarmAsync(models[idx],
-                            p => SetProgress(0.55f + (idx + Mathf.Clamp01(p)) * span));
+                        float m0 = Time.unscaledTime;
+                        var pre = ImportedCarModels.PrewarmAsync(models[idx], p => SetProgress(0.55f + (idx + Mathf.Clamp01(p)) * span));
+                        while (pre.MoveNext())
+                        {
+                            if (Time.unscaledTime - m0 > 15f) break;
+                            yield return null;
+                        }
                     }
                 }
             }
@@ -161,7 +195,13 @@ namespace RaceX.Core
             if (dicaText != null) dicaText.text = "ATIVANDO CENA — AGUARDE...";
             yield return new WaitForSecondsRealtime(0.15f);
             op.allowSceneActivation = true;
-            while (!op.isDone) yield return null; // congelamento curto (modelos já estão em memória)
+            float act0 = Time.unscaledTime;
+            while (!op.isDone)
+            {
+                SetProgress(0.9f + Mathf.Clamp01((Time.unscaledTime - act0) / 20f) * 0.1f);
+                if (Time.unscaledTime - act0 > 45f) break; // ativação presa: solta o canvas do mesmo jeito
+                yield return null;
+            }
             SetProgress(1f); // 100% só com a cena viva de verdade
             yield return new WaitForSecondsRealtime(0.3f);
             Destroy(canvas.gameObject);
