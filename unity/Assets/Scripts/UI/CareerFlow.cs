@@ -114,6 +114,7 @@ namespace RaceX.UI
 
             UIFactory.Label("NameHint", s, "NOME DO PILOTO", 30, TextAnchor.MiddleCenter, c, c, new Vector2(0f, 246f), new Vector2(900f, 40f), MenuTheme.TextDim);
             var bg = UIFactory.Panel("NameBg", s, c, c, new Vector2(0f, 170f), new Vector2(900f, 76f), new Color(1f, 1f, 1f, 0.06f));
+            bg.raycastTarget = true; // campo clicável (mesmo conserto do login)
             var ph = UIFactory.Label("NamePh", bg.transform, "Digite o nome do piloto", 30, TextAnchor.MiddleCenter, new Vector2(0f, 0f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero, MenuTheme.TextDim);
             var phRt = (RectTransform)ph.transform;
             phRt.anchorMin = Vector2.zero;

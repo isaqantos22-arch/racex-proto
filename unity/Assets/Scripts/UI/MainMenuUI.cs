@@ -469,6 +469,7 @@ namespace RaceX.UI
             var c = new Vector2(0.5f, 0.5f);
             UIFactory.Label("AccLbl" + label, parent, label, 30, TextAnchor.MiddleRight, c, new Vector2(1f, 0.5f), new Vector2(-670f, y), new Vector2(420f, 76f));
             var bg = UIFactory.Panel("AccBg" + label, parent, c, c, new Vector2(70f, y), new Vector2(780f, 80f), new Color(1f, 1f, 1f, 0.07f));
+            bg.raycastTarget = true; // o campo PRECISA ser clicável (targetGraphic do InputField) — raycast false fazia o toque atravessar e ninguém digitava
             var ph = UIFactory.Label("AccPh" + label, bg.transform, placeholder, 30, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(740f, 64f), new Color(1f, 1f, 1f, 0.25f));
             ph.raycastTarget = false;
             var txt = UIFactory.Label("AccTx" + label, bg.transform, value ?? "", 30, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(740f, 64f), MenuTheme.Text);
@@ -488,7 +489,7 @@ namespace RaceX.UI
             foreach (Transform child in accountBody) Destroy(child.gameObject);
             accEmailField = AccountField(accountBody, "E-MAIL", 0, AccountClient.Email ?? "", InputField.ContentType.EmailAddress, "voce@exemplo.com");
             accPassField = AccountField(accountBody, "SENHA", 1, "", InputField.ContentType.Password, "mínimo 6 caracteres");
-            accNameField = AccountField(accountBody, "NOME NO JOGO", 2, AccountClient.Name ?? "", InputField.ContentType.Standard, "como aparecerá no lobby");
+            accNameField = AccountField(accountBody, "NOME NO JOGO", 2, AccountClient.Name ?? "", InputField.ContentType.Standard, "");
             var c = new Vector2(0.5f, 0.5f);
             MenuTheme.StyledButton(accountBody, "AccLogin", "ENTRAR", c, c, new Vector2(-310f, -240f), new Vector2(540f, 88f), 32, AccountDoLogin);
             MenuTheme.StyledButton(accountBody, "AccSignup", "CRIAR CONTA", c, c, new Vector2(310f, -240f), new Vector2(540f, 88f), 32, AccountDoSignup);
@@ -497,8 +498,14 @@ namespace RaceX.UI
         void AccountDoLogin()
         {
             if (accEmailField == null || accPassField == null) return;
+            string email = accEmailField.text.Trim(), pass = accPassField.text;
+            if (string.IsNullOrEmpty(email) || string.IsNullOrEmpty(pass))
+            {
+                SetAccountStatus("Preencha o e-mail e a senha.");
+                return;
+            }
             SetAccountStatus("Entrando...");
-            AccountClient.LogIn(accEmailField.text.Trim(), accPassField.text, (ok, err) =>
+            AccountClient.LogIn(email, pass, (ok, err) =>
             {
                 if (ok)
                 {
@@ -513,8 +520,14 @@ namespace RaceX.UI
         void AccountDoSignup()
         {
             if (accEmailField == null || accPassField == null) return;
+            string email = accEmailField.text.Trim(), pass = accPassField.text;
+            if (string.IsNullOrEmpty(email) || pass.Length < 6)
+            {
+                SetAccountStatus("Preencha o e-mail e uma senha de no mínimo 6 caracteres.");
+                return;
+            }
             SetAccountStatus("Criando conta...");
-            AccountClient.SignUp(accEmailField.text.Trim(), accPassField.text, string.IsNullOrWhiteSpace(accNameField.text) ? "Jogador" : accNameField.text.Trim(), (ok, err) =>
+            AccountClient.SignUp(email, pass, string.IsNullOrWhiteSpace(accNameField.text) ? "Jogador" : accNameField.text.Trim(), (ok, err) =>
             {
                 if (ok)
                 {
