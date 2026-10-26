@@ -65,10 +65,29 @@ namespace RaceX.UI
             current = null;
             var cb = onClosed;
             onClosed = null;
+            // Fechou o menu com corrida viva → devolve o carro ao jogador NO ATO (sem fila do pit
+            // nem limite de 80 km/h pendente — bug do "voltei do menu e o carro veio reduzido").
+            RaceX.Core.PitLaneSystem.ReleasePlayerNow();
             // Aberto como overlay (ex.: resultados da corrida)? Devolve o controle a quem abriu.
             if (cb != null) { cb(); return; }
             // Restaura a UI do menu principal
             MainMenuUI.SetMenuVisible(true);
+        }
+
+        /// <summary>O hub está aberto (overlay da sessão)?</summary>
+        public static bool IsOpen => canvas != null;
+
+        /// <summary>Fecha o hub SEM callback e SEM mostrar o menu principal (usado quando o painel
+        /// de resultados precisa aparecer por cima — ex.: fim da Q2 pelo relógio real com o hub aberto).</summary>
+        public static void ForceCloseSilent()
+        {
+            if (canvas == null) return;
+            UnityEngine.Object.Destroy(canvas.gameObject);
+            canvas = null;
+            content = null;
+            current = null;
+            onClosed = null;
+            Time.timeScale = 1f; // sessão acabou: devolve o fluxo do jogo
         }
 
         /// <summary>Destroi a tela atual e cria uma nova (padrão Destroy + rebuild).</summary>
@@ -310,6 +329,10 @@ namespace RaceX.UI
             var top = new Vector2(0.5f, 1f);
             UIFactory.Label("TopBar", s, "PILOTO: " + d.pilotName.ToUpperInvariant() + "   |   TEMPORADA " + d.season + "   |   " + d.category + "   |   " + d.pointsPlayer + " PTS", 22, TextAnchor.MiddleCenter, top, top, new Vector2(0f, -150f), new Vector2(1800f, 34f), MenuTheme.Text);
             UIFactory.Label("StatsLine", s, "VITÓRIAS: " + d.careerWins + "   |   PÓDIOS: " + d.careerPodiums + "   |   TÍTULOS: " + d.titles, 18, TextAnchor.MiddleCenter, top, top, new Vector2(0f, -196f), new Vector2(1400f, 28f), MenuTheme.TextDim);
+            // Deixa CLARO que a tabela abaixo é a TEMPORADA (pontos acumulados) — não a sessão em curso.
+            int champPos = d.standings != null ? d.standings.FindIndex(x => x.isPlayer) : -1;
+            if (champPos >= 0)
+                UIFactory.Label("ChampPos", s, "VOCÊ É " + (champPos + 1) + "º NO CAMPEONATO (tabela da temporada) — a posição da SESSÃO atual aparece no resultado dela", 17, TextAnchor.MiddleCenter, top, top, new Vector2(0f, -218f), new Vector2(1700f, 26f), new Color(0.8f, 0.8f, 0.8f));
 
             // Relógio REAL da sessão correndo (treino/quali): conta mesmo dentro do menu.
             int sessLeft = CareerMode.SessionSecondsLeft();
@@ -324,9 +347,9 @@ namespace RaceX.UI
                 var anchor = col == 0 ? new Vector2(0f, 0.5f) : new Vector2(1f, 0.5f);
                 var box = UIFactory.Rect("Standings" + col, s, anchor, anchor, anchor, new Vector2(col == 0 ? 20f : -20f, -20f), new Vector2(colW, 470f));
                 if (col == 0)
-                    MenuTheme.SubHeader(box, showTeams ? "EQUIPES (1-6)" : "PILOTOS 1-12");
+                    MenuTheme.SubHeader(box, showTeams ? "EQUIPES (1-6)" : "CAMPEONATO — PILOTOS 1-12");
                 else if (!showTeams)
-                    MenuTheme.SubHeader(box, "PILOTOS 13-24");
+                    MenuTheme.SubHeader(box, "CAMPEONATO — PILOTOS 13-24");
                 if (showTeams)
                 {
                     var totals = new List<Tuple<string, int>>();

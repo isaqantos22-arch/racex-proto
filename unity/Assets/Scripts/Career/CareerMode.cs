@@ -103,6 +103,9 @@ namespace RaceX.Career
             "P. Duval", "Q. Marques"
         };
 
+        /// <summary>Acesso de LEITURA aos rivais (testes de Editor / arnês de lógica).</summary>
+        public static string[] RivalNamesAccess => RivalNames;
+
         /// <summary>Escada GT: índice 0 = equipe mais FRACA (onde o jogador desconhecido começa), 11 = mais forte.</summary>
         public static readonly string[] GTTeams =
         {
@@ -631,6 +634,24 @@ namespace RaceX.Career
             if (data == null || CareerData.raceActive) return;
             ClearSessionClock();
             int phase = Mathf.Clamp(data.weekendPhase, PH_FP, PH_RACE);
+            // PULAR RESPEITANDO O QUE FOI FEITO (regra do usuário): se existe SESSÃO VIVA da fase
+            // atual (hub aberto por cima da cena) com voltas registradas, usa a ORDEM REAL dela
+            // (por melhor volta) para o corte — o jogador entra classificado pela volta que fez,
+            // e não "em último como se não tivesse corrido". Sem sessão viva: comportamento antigo.
+            List<string> realOrder = null;
+            var rm = UnityEngine.Object.FindFirstObjectByType<RaceManager>();
+            if (rm != null && rm.Settings.laps >= 900 && !string.IsNullOrEmpty(data.pilotName))
+            {
+                var fs = rm.FinalStandings();
+                if (fs != null && fs.Count > 0 && fs.Exists(x => x.isHuman && x.bestLap > 0f))
+                {
+                    realOrder = new List<string>();
+                    foreach (var e2 in fs) realOrder.Add(e2.name);
+                }
+            }
+            // A sessão (se viva) ENCERRA aqui no save: sem isso o botão de sessão do hub fica morto
+            // (LaunchNextRace retorna com raceActive=true) e a fase nunca é lançada de novo.
+            CareerData.raceActive = false;
             switch (phase)
             {
                 case PH_FP:
@@ -673,26 +694,41 @@ namespace RaceX.Career
                     Save();
                     break;
                 case PH_Q1:
-                    data.qChain.Clear();
-                    foreach (var n in RivalNames) data.qChain.Add(n);
-                    data.qLocked.Clear();
-                    SimQualiPhase(data.qChain, data.qLocked, PH_Q2);
-                    SimQualiPhase(data.qChain, data.qLocked, PH_Q3);
+                    if (realOrder != null && realOrder.Contains(data.pilotName))
+                        ApplyElimination(data.qChain, data.qLocked, realOrder, 8); // volta REAL do jogador vale
+                    else
+                    {
+                        data.qChain.Clear();
+                        foreach (var n in RivalNames) data.qChain.Add(n);
+                        data.qLocked.Clear();
+                        SimQualiPhase(data.qChain, data.qLocked, PH_Q2);
+                        SimQualiPhase(data.qChain, data.qLocked, PH_Q3);
+                    }
                     FinalizeQualiGrid(false);
-                    data.weekendPhase = PH_RACE;
+                    data.weekendPhase = PH_Q2;
                     Save();
                     break;
                 case PH_Q2:
-                    data.qChain.Remove(data.pilotName);
-                    SimQualiPhase(data.qChain, data.qLocked, PH_Q2);
-                    SimQualiPhase(data.qChain, data.qLocked, PH_Q3);
+                    if (realOrder != null && realOrder.Contains(data.pilotName))
+                        ApplyElimination(data.qChain, data.qLocked, realOrder, 6); // volta REAL do jogador vale
+                    else
+                    {
+                        data.qChain.Remove(data.pilotName);
+                        SimQualiPhase(data.qChain, data.qLocked, PH_Q2);
+                        SimQualiPhase(data.qChain, data.qLocked, PH_Q3);
+                    }
                     FinalizeQualiGrid(false);
-                    data.weekendPhase = PH_RACE;
+                    data.weekendPhase = PH_Q3;
                     Save();
                     break;
                 case PH_Q3:
-                    data.qChain.Remove(data.pilotName);
-                    SimQualiPhase(data.qChain, data.qLocked, PH_Q3);
+                    if (realOrder != null && realOrder.Contains(data.pilotName))
+                        ApplyElimination(data.qChain, data.qLocked, realOrder, 0); // grid pela ordem REAL
+                    else
+                    {
+                        data.qChain.Remove(data.pilotName);
+                        SimQualiPhase(data.qChain, data.qLocked, PH_Q3);
+                    }
                     FinalizeQualiGrid(false);
                     data.weekendPhase = PH_RACE;
                     Save();
@@ -947,6 +983,8 @@ namespace RaceX.Career
         }
 
         /// <summary>Segundos restantes do relógio REAL da sessão (0 = expirou/sem sessão cronometrada).</summary>
+        public static bool SessionClockActive => data != null && data.sessionDeadlineUtc > 0;
+
         public static int SessionSecondsLeft()
         {
             if (data == null || data.sessionDeadlineUtc <= 0) return 0;
@@ -972,6 +1010,16 @@ namespace RaceX.Career
             if (data.sessionDeadlineUtc <= now) return;
             data.sessionDeadlineUtc = now + (long)((data.sessionDeadlineUtc - now) / Mathf.Max(1.01f, factor));
             Save();
+        }
+
+        /// <summary>PRAZO VENCIDO (relógio real) notificado pelo RaceManager/testes: encerra a sessão
+        /// da fase atual com a ordem de melhor volta gravada e AVANÇA a fase — o mesmo caminho de
+        /// SkipSession (que já sabe respeitar voltas reais). É o método que o teste de lógica usa.</summary>
+        public static void NotifySessionExpired()
+        {
+            if (data == null) return;
+            data.sessionDeadlineUtc = 0;
+            SkipSession();
         }
 
         /// <summary>Grava a melhor volta de um piloto no TREINO (sobrevive a menus/recarregar a sessão). Só salva se melhorou.</summary>

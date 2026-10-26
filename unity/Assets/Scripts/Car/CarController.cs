@@ -135,8 +135,8 @@ namespace RaceX.Car
 
         void FixedUpdate()
         {
-            if (DamageFactor < 1f)
-                DamageFactor = Mathf.Min(1f, DamageFactor + Time.fixedDeltaTime * 0.008f);
+            // DANO PERMANENTE (regra do usuário): bateu, é dano até o PIT — sem auto-reparo em
+            // corrida. O Repair() (PitLaneSystem, ao entrar no pit) é a ÚNICA forma de voltar a 100%.
             if (spec == null || rb.isKinematic) return;
 
             Vector3 v = Velocity;
@@ -178,7 +178,7 @@ namespace RaceX.Car
                 if (w.GetGroundHit(out WheelHit hit))
                 {
                     grounded++;
-                    var surface = hit.collider.GetComponent<TrackSurface>();
+                    hit.collider.TryGetComponent<TrackSurface>(out var surface);
                     surfaces[i] = surface;
                     surfaceGrip[i] = surface != null ? surface.FrictionMultiplier : 1f;
                     if (surface != null && surface.IsOffTrack) offTrack++;
@@ -206,7 +206,10 @@ namespace RaceX.Car
 
             if (IsOffTrack)
             {
-                rb.AddForce(-Velocity * (spec.massKg * 0.25f), ForceMode.Force);
+                // Arrasto FORA DA PISTA: 0.04*v (era 0.25, depois 0.08 — ainda fazia governador:
+                // o equilíbrio motor x arrasto limitava a velocidade final na grama). A 113 km/h
+                // agora dá só 1.25 m/s² — o motor supera; a punição segue no GRIP (0.55).
+                rb.AddForce(-Velocity * (spec.massKg * 0.04f), ForceMode.Force);
             }
         }
 
@@ -300,7 +303,8 @@ namespace RaceX.Car
             if (pitControlled)
             {
                 throttle = extThrottle;
-                if (Gear < 0) throttle = 0f;
+                if (Gear < 0 && extThrottle > 0.1f) Gear = 1; // piloto automático em ré: engata a 1ª (sai da ré)
+                else if (Gear < 0) throttle = 0f;
             }
 
             float torque = 0f;
@@ -311,24 +315,27 @@ namespace RaceX.Car
             }
 
             int driven = spec.drivetrain == Drivetrain.AWD ? 4 : 2;
-            float tc = spec.tractionControl * assistLevel;
-            for (int i = 0; i < 4; i++)
-            {
-                if (!IsDriven(i)) { wheels[i].motorTorque = 0f; continue; }
-                float share;
-                if (spec.drivetrain == Drivetrain.AWD)
-                    share = (i <= FR ? spec.awdFrontShare : 1f - spec.awdFrontShare) * 0.5f;
-                else
-                    share = 1f / driven;
-
-                float wheelTorque = torque * share * DamageFactor;
-                if (tc > 0f && wheels[i].GetGroundHit(out WheelHit hit))
+                float tc = spec.tractionControl * assistLevel;
+                for (int i = 0; i < 4; i++)
                 {
-                    float excess = Mathf.Abs(hit.forwardSlip) - 0.3f;
-                    if (excess > 0f) wheelTorque *= Mathf.Max(0.15f, Mathf.Clamp01(1f - excess * 4f * tc));
+                    if (!IsDriven(i)) { wheels[i].motorTorque = 0f; continue; }
+                    float share;
+                    if (spec.drivetrain == Drivetrain.AWD)
+                        share = (i <= FR ? spec.awdFrontShare : 1f - spec.awdFrontShare) * 0.5f;
+                    else
+                        share = 1f / driven;
+
+                    float wheelTorque = torque * share * DamageFactor;
+                    if (tc > 0f && wheels[i].GetGroundHit(out WheelHit hit))
+                    {
+                        // TC: começa em slip 0.40 (não 0.30), rampa mais suave e piso 0.40 (não 0.15).
+                        // Antes cortava até 85% do torque em aceleração de verdade (slip 0.3-0.6 é
+                        // normal sob potência) — o carro engasgava no meio da reta ("sem potência").
+                        float excess = Mathf.Abs(hit.forwardSlip) - 0.4f;
+                        if (excess > 0f) wheelTorque *= Mathf.Max(0.4f, Mathf.Clamp01(1f - excess * 2.5f * tc));
+                    }
+                    wheels[i].motorTorque = wheelTorque;
                 }
-                wheels[i].motorTorque = wheelTorque;
-            }
         }
 
         void ApplyBrakes()
@@ -346,7 +353,11 @@ namespace RaceX.Car
                     t *= 1f - 0.5f * spec.abs;
                 }
                 if (i >= RL && handbrake && !inputLocked) t = Mathf.Max(t, spec.handbrakeTorque);
-                if (Gear > 0 && !inputLocked && throttleInput < 0.05f && brake < 0.05f && !handbrake) t = spec.massKg * 0.2f;
+                // Freio de arrasto em baixa usa o acelerador EFETIVO (piloto automático incluído):
+                // antes olhava só o throttleInput do jogador — com o pit autopilot acelerando e o
+                // jogador sem tocar nada, esse freio ficava ligado e o carro "só andava se acelera".
+                float driveThr = pitControlled ? extThrottle : throttleInput;
+                if (Gear > 0 && !inputLocked && driveThr < 0.05f && brake < 0.05f && !handbrake) t = spec.massKg * 0.2f;
                 wheels[i].brakeTorque = t;
             }
         }
@@ -404,12 +415,37 @@ namespace RaceX.Car
         /// <summary>Avaria leve de desempenho: cada batida forte corta um pouco da potencia e do torque (recupera lentamente).</summary>
         public float DamageFactor { get; private set; } = 1f;
 
+        // Dano POR ZONA (0..1, acumulado) — alimenta o painel visual do carro no HUD.
+        // Frente/traseira/lados, pela direção da normal do impacto em espaço local.
+        public float DmgFront { get; private set; }
+        public float DmgRear { get; private set; }
+        public float DmgLeft { get; private set; }
+        public float DmgRight { get; private set; }
+
+        /// <summary>Conserta TODO o dano (parada no pit — mecânicos trabalham enquanto o carro está no box).</summary>
+        public void Repair()
+        {
+            DamageFactor = 1f;
+            DmgFront = 0f; DmgRear = 0f; DmgLeft = 0f; DmgRight = 0f;
+        }
+
         void OnCollisionEnter(Collision collision)
         {
             float relative = collision.relativeVelocity.magnitude * 3.6f;
             Vector3 point = collision.contactCount > 0 ? collision.GetContact(0).point : transform.position;
             if (relative > 18f)
-                DamageFactor = Mathf.Max(0.72f, DamageFactor - Mathf.Clamp01((relative - 18f) / 90f) * 0.14f);
+            {
+                DamageFactor = Mathf.Max(0.80f, DamageFactor - Mathf.Clamp01((relative - 18f) / 90f) * 0.10f);
+                // Dano POR ZONA para o painel visual (normal do impacto em espaço local:
+                // normal apontando para trás = bateu a FRENTE; para frente = bateu a TRASEIRA).
+                if (collision.contactCount > 0)
+                {
+                    Vector3 nl = transform.InverseTransformDirection(collision.GetContact(0).normal);
+                    float sev = Mathf.Clamp01((relative - 18f) / 60f);
+                    if (Mathf.Abs(nl.z) >= Mathf.Abs(nl.x)) { if (nl.z < 0f) DmgFront = Mathf.Clamp01(DmgFront + sev); else DmgRear = Mathf.Clamp01(DmgRear + sev); }
+                    else { if (nl.x < 0f) DmgLeft = Mathf.Clamp01(DmgLeft + sev); else DmgRight = Mathf.Clamp01(DmgRight + sev); }
+                }
+            }
             Collided?.Invoke(relative, point);
 
             // ANTI-VOAR: parede/objeto estático (sem rigidbody) em velocidade média — mata o ricochete

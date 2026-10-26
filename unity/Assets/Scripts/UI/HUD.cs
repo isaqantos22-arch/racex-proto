@@ -20,6 +20,11 @@ namespace RaceX.UI
 
         Text lapText, timeText, positionText, speedText, gearText, countdownText, wrongWayText, messageText;
         Text tireText;
+        Text danoText;
+        Image[] wheelImgs;      // painel CARRO: 4 rodas (desgaste verde/amarelo/vermelho)
+        Image dmgFrontImg, dmgRearImg; // barras de dano frente/trás
+        float lastPanelT;
+        static Color ZoneColor(float d) => d < 0.05f ? new Color(0.25f, 0.85f, 0.35f) : d < 0.35f ? new Color(1f, 0.75f, 0.1f) : new Color(1f, 0.22f, 0.15f);
         UnityEngine.UI.Button pitButton;
         UnityEngine.UI.Button ffButton;
         bool fastForward;
@@ -35,10 +40,11 @@ namespace RaceX.UI
             Time.fixedDeltaTime = 0.02f;
             Time.maximumDeltaTime = fastForward ? 0.12f : 0.05f; // cabe 6 passos de 0.02 por frame no 5x
             if (fastForward) RaceX.Career.CareerMode.CompressSessionClock(5f); // relógio REAL da sessão também corre 5x
+            // ESTADO VISÍVEL: desligado = "5x" cinza (é um BOTÃO, não o estado); ligado = "1x" verde.
             if (ffButton != null)
             {
                 var t = ffButton.GetComponentInChildren<UnityEngine.UI.Text>();
-                if (t != null) t.text = fastForward ? "1x" : "5x";
+                if (t != null) { t.text = fastForward ? "1x" : "5x"; t.color = fastForward ? new Color(0.3f, 1f, 0.45f) : MenuTheme.TextDim; }
             }
         }
         Text pitInfoText;
@@ -46,6 +52,12 @@ namespace RaceX.UI
         Color[] rpmBandColors;
         float messageTimer, countdownTimer;
         RectTransform resultsPanel;
+
+        // Cache de UI (otimização mobile): Text só é tocado quando o valor muda —
+        // sem realloc de string nem rebuild de Canvas a cada frame.
+        int lastLap = int.MinValue, lastPos = int.MinValue, lastSpeed = int.MinValue, lastGear = int.MinValue;
+        int lastTimeBucket = int.MinValue, lastPitToken = int.MinValue;
+        string lastTire;
 
         public Image FadeImage { get; private set; }
 
@@ -95,9 +107,33 @@ namespace RaceX.UI
             // Pit stop: botão SEMPRE criado; ativa quando o modo liga (HUD nasce antes do PitLaneSystem).
             pitButton = MenuTheme.StyledButton(root, "PitBtn", "PIT", tr, tr, new Vector2(-160f * s, -140f), new Vector2(110f * s, 90f * s), (int)(26 * s), () => { if (entry != null) RaceX.Core.PitLaneSystem.RequestPit(entry.car); });
             // Acelerar o TEMPO 5x (pula a minutagem do treino): aperta de novo e volta a 1x.
-            ffButton = MenuTheme.StyledButton(root, "FFBtn", "5x", tr, tr, new Vector2(-34f * s, -140f), new Vector2(100f * s, 90f * s), (int)(28 * s), ToggleFastForward);
+            // Posição y−250 (abaixo do PIT) para não invadir a coluna CAM/pausa do canto.
+            ffButton = MenuTheme.StyledButton(root, "FFBtn", "5x", tr, tr, new Vector2(-160f * s, -250f), new Vector2(110f * s, 90f * s), (int)(28 * s), ToggleFastForward);
             tireText = UIFactory.Label("Tire", root, "", (int)(26 * s), TextAnchor.UpperRight, tr, tr, new Vector2(-290f * s, -24f), new Vector2(240f * s, 40f), MenuTheme.TextDim);
             pitInfoText = UIFactory.Label("PitInfo", root, "", (int)(24 * s), TextAnchor.UpperRight, tr, tr, new Vector2(-290f * s, -70f), new Vector2(240f * s, 36f), MenuTheme.Accent);
+
+            // PAINEL CARRO (regra do usuário): silhueta com 4 rodas coloridas por DESGASTE
+            // (verde/amarelo/vermelho) + barras de DANO da frente e da traseira.
+            if (!compact)
+            {
+                var carPanel = UIFactory.Panel("CarPanel", root, tr, tr, new Vector2(-160f * s, -390f * s), new Vector2(150f * s, 225f * s), new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.88f));
+                carPanel.sprite = MenuTheme.RoundedSprite(75, 112, 20);
+                UIFactory.Label("CarTitle", carPanel.transform, "CARRO", (int)(17 * s), TextAnchor.MiddleCenter, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -17f * s), new Vector2(140f * s, 22f * s), MenuTheme.TextDim);
+                dmgFrontImg = UIFactory.Panel("DmgF", carPanel.transform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -38f * s), new Vector2(42f * s, 9f * s), Color.green);
+                dmgFrontImg.sprite = MenuTheme.RoundedSprite(21, 5, 4);
+                dmgRearImg = UIFactory.Panel("DmgR", carPanel.transform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -192f * s), new Vector2(42f * s, 9f * s), Color.green);
+                dmgRearImg.sprite = MenuTheme.RoundedSprite(21, 5, 4);
+                var body = UIFactory.Panel("Body", carPanel.transform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -116f * s), new Vector2(52f * s, 128f * s), new Color(1f, 1f, 1f, 0.14f));
+                body.sprite = MenuTheme.RoundedSprite(26, 64, 10);
+                var wPos = new[] { new Vector2(-33f, -62f), new Vector2(33f, -62f), new Vector2(-33f, -170f), new Vector2(33f, -170f) };
+                wheelImgs = new Image[4];
+                for (int i = 0; i < 4; i++)
+                {
+                    var w = UIFactory.Panel("Wheel" + i, carPanel.transform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), wPos[i] * s, new Vector2(20f * s, 28f * s), Color.green);
+                    w.sprite = MenuTheme.RoundedSprite(10, 14, 5);
+                    wheelImgs[i] = w;
+                }
+            }
 
             float y = raiseForTouch ? 280f : 30f;
             var brc = new Vector2(1f, 0f);
@@ -107,6 +143,8 @@ namespace RaceX.UI
             speedText = UIFactory.Label("Speed", gauge.transform, "0", (int)(84 * s), TextAnchor.MiddleRight, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-110f * s, -10f * s), new Vector2(220f * s, 100f * s), MenuTheme.Accent);
             UIFactory.Label("Unit", gauge.transform, "km/h", (int)(26 * s), TextAnchor.LowerLeft, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-30f * s, -78f * s), new Vector2(80f * s, 30f * s), MenuTheme.TextDim);
             gearText = UIFactory.Label("Gear", gauge.transform, "1", (int)(60 * s), TextAnchor.MiddleCenter, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f * s, -10f * s), new Vector2(80f * s, 100f * s), new Color(1f, 0.85f, 0.2f));
+            // DANO (regra do usuário: dano existe → aparece na tela). Vermelho quando o carro está batido.
+            danoText = UIFactory.Label("Dano", gauge.transform, "", (int)(24 * s), TextAnchor.MiddleCenter, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(-160f * s, -8f * s), new Vector2(140f * s, 30f * s), new Color(1f, 0.3f, 0.2f));
             var rpmBg = UIFactory.Panel("RpmBg", gauge.transform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 18f * s), new Vector2(320f * s, 22f * s), new Color(1f, 1f, 1f, 0.12f));
             rpmBands = new Image[3];
             rpmBandColors = new[] { new Color(0.2f, 0.85f, 0.4f), new Color(1f, 0.75f, 0.1f), new Color(1f, 0.2f, 0.15f) };
@@ -175,22 +213,77 @@ namespace RaceX.UI
             var progress = race.GetProgress(entry);
             int laps = race.Settings.laps;
 
-            lapText.text = laps >= 900
-                ? $"Volta {entry.CurrentLap(laps, progress)}"
-                : $"Volta {entry.CurrentLap(laps, progress)} / {laps}";
+            int lapNo = entry.CurrentLap(laps, progress);
+            if (lapNo != lastLap)
+            {
+                lastLap = lapNo;
+                lapText.text = laps >= 900 ? $"Volta {lapNo}" : $"Volta {lapNo} / {laps}";
+            }
             if (timeText != null)
             {
                 float current = race.State == RaceState.Racing && !entry.finished ? Time.time - entry.lapStartTime : 0f;
-                string sess = "";
-                float left = race.SessionTimeLeft;
-                if (left >= 0f) sess = "  |  FIM DA SESSÃO EM " + FormatTime(left);
-                timeText.text = FormatTime(current) + (entry.bestLap > 0f ? "  ·  Melhor " + FormatTime(entry.bestLap) : "") + sess;
+                // Relógio resolve a string no máx. a cada 0,1 s (não toda frame).
+                int bucket = Mathf.FloorToInt(current * 10f);
+                if (bucket != lastTimeBucket)
+                {
+                    lastTimeBucket = bucket;
+                    string sess = "";
+                    float left = race.SessionTimeLeft;
+                    if (left >= 0f) sess = "  |  FIM DA SESSÃO EM " + FormatTime(left);
+                    timeText.text = FormatTime(current) + (entry.bestLap > 0f ? "  ·  Melhor " + FormatTime(entry.bestLap) : "") + sess;
+                }
             }
-            positionText.text = $"{entry.position}º / {race.entries.Count}";
+            if (entry.position != lastPos)
+            {
+                lastPos = entry.position;
+                positionText.text = $"{entry.position}º / {race.entries.Count}";
+            }
 
-            speedText.text = Mathf.RoundToInt(car.SpeedKmh).ToString();
-            gearText.text = car.IsReversing ? "R" : car.Gear.ToString();
-            if (tireText != null) tireText.text = RaceX.Core.PitLaneSystem.WearText(car);
+            int kmh = Mathf.RoundToInt(car.SpeedKmh);
+            if (kmh != lastSpeed)
+            {
+                lastSpeed = kmh;
+                speedText.text = kmh.ToString();
+            }
+            // PAINEL CARRO (5 Hz): rodas por DESGASTE (verde/amarelo/vermelho) + barras de DANO frente/trás.
+            if (wheelImgs != null && Time.time - lastPanelT > 0.2f)
+            {
+                lastPanelT = Time.time;
+                for (int i = 0; i < 4; i++)
+                {
+                    float w = RaceX.Core.PitLaneSystem.WearOf(car, i);
+                    wheelImgs[i].color = w < 0.4f ? new Color(0.25f, 0.85f, 0.35f) : w < 0.7f ? new Color(1f, 0.75f, 0.1f) : new Color(1f, 0.22f, 0.15f);
+                }
+                dmgFrontImg.color = ZoneColor(car.DmgFront);
+                dmgRearImg.color = ZoneColor(car.DmgRear);
+            }
+            // TELEMETRIA ao vivo (dados reais para diagnóstico — substitui o antigo "DANO 87%"):
+            // marcha+rotação/limite, acelerador recebido, piloto automático, dano, escala de tempo e piso.
+            if (danoText != null)
+            {
+                float df = car.DamageFactor;
+                string dtx = $"M{car.Gear} {Mathf.RoundToInt(car.Rpm)}/{Mathf.RoundToInt(car.spec.rpmLimit)}" +
+                             $" | ACEL {(car.pitControlled ? car.extThrottle : car.throttleInput):0.00}" +
+                             (car.pitControlled ? " [AUTO]" : "") +
+                             (df < 0.999f ? $" | DANO {Mathf.RoundToInt(df * 100f)}%" : "") +
+                             (car.IsOffTrack ? " | GRAMA" : "") +
+                             (Time.timeScale > 1.5f ? $" | {Time.timeScale:0.#}x" : "");
+                if (danoText.text != dtx) danoText.text = dtx;
+            }
+            if (car.Gear != lastGear)
+            {
+                lastGear = car.Gear;
+                gearText.text = car.IsReversing ? "R" : car.Gear.ToString();
+            }
+            if (tireText != null)
+            {
+                string tw = RaceX.Core.PitLaneSystem.WearText(car);
+                if (tw != lastTire)
+                {
+                    lastTire = tw;
+                    tireText.text = tw;
+                }
+            }
             // Botão PIT + rota: visíveis apenas com o modo ativo; aviso de distância até a entrada do pit.
             if (pitButton != null)
             {
@@ -198,12 +291,18 @@ namespace RaceX.UI
                 pitButton.gameObject.SetActive(pitOn);
                 if (pitInfoText != null)
                 {
-                    if (!pitOn) pitInfoText.text = "";
-                    else if (entry != null && entry.car != null && entry.car.pitControlled) pitInfoText.text = "NO PIT — SIGA A LINHA";
-                    else
+                    // token: -3 sem pit, -2 no pit (autopilot), -1 sem janela, >=0 distância em m.
+                    float d = pitOn ? RaceX.Core.PitLaneSystem.DistanceToPitEntry(car) : 0f;
+                    int token = !pitOn ? -3
+                        : entry != null && entry.car != null && entry.car.pitControlled ? -2
+                        : d < 0f ? -1 : Mathf.RoundToInt(d);
+                    if (token != lastPitToken)
                     {
-                        float d = RaceX.Core.PitLaneSystem.DistanceToPitEntry(car);
-                        pitInfoText.text = d < 0f ? "PIT: ENTRE NA FAIXA LARANJA" : $"PIT A {Mathf.RoundToInt(d)} m — LINHA LARANJA";
+                        lastPitToken = token;
+                        pitInfoText.text = token == -3 ? ""
+                            : token == -2 ? "NO PIT — SIGA A LINHA"
+                            : token == -1 ? "PIT: ENTRE NA FAIXA LARANJA"
+                            : $"PIT A {token} m — LINHA LARANJA";
                     }
                 }
             }
@@ -236,6 +335,9 @@ namespace RaceX.UI
         {
             if (carCamera != null) carCamera.ForceThirdPerson();
             if (resultsPanel != null || entry.playerIndex > 0) return;
+            // Hub/menu da carreira aberto quando a sessão terminou? Fecha em silêncio para o
+            // painel de resultados APARECER (a fase já avança no OnCareerSessionFinished abaixo).
+            if (RaceX.UI.CareerFlow.IsOpen) RaceX.UI.CareerFlow.ForceCloseSilent();
             var canvas = GetComponentInParent<Canvas>().transform;
             var c = new Vector2(0.5f, 0.5f);
             var panel = UIFactory.Panel("Results", canvas, c, c, Vector2.zero, new Vector2(1200f, 820f), MenuTheme.Accent);

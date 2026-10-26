@@ -10,6 +10,7 @@ namespace RaceX.Core
     public class PitLaneSystem : MonoBehaviour
     {
         public const float LaneSpeedKmh = 80f; // FIA: limite padrão do pit lane (60 em Mônaco/Melbourne)
+        public const float LaneSpeedMs = LaneSpeedKmh / 3.6f;
         public const float StopSeconds = 4f;
         // FIA: pit lane >= 12 m (fast lane + working lane), separado da pista por muro.
         // Centro do pit a 14 m do centro da pista: pista (~6 m de meia-estrada) + muro + faixa.
@@ -34,21 +35,28 @@ namespace RaceX.Core
             public int plannedLap = -1;
             public bool holding;
             public float releaseTimer;
+            public float scanTimer;    // varredura de entrada do pit a 5 Hz (otimização)
             public bool exiting;      // saída guiada: piloto automático leva até a rampa de SAÍDA
             public Vector3 boxTarget; // caixa do PRÓPRIO carro (dentro da sua garagem)
+            public float boxS;        // posição ao longo da spline da própria caixa (para rotas)
             public readonly List<Vector3> route = new List<Vector3>(); // rota por waypoints (entrada/saída)
             public int routeIdx;      // waypoint atual da rota
+        public float stuckTimer;   // anti-travamento: tempo quase parado seguindo rota
+        public float reverseTimer; // manobra de ré em andamento (anti-travamento)
+        public float reverseCount; // ré repetidas no MESMO waypoint (quebra o loop contra estrutura)
+        public float pitCtrlSince = -1f; // cão de guarda: desde quando pitControlled está ligado
+        public float[] wearW = new float[4]; // desgaste POR RODA (DI, DE, TD, TE) — painel do HUD
         }
 
         RaceManager race;
         TrackSpline spline;
         readonly List<CarState> cars = new List<CarState>();
         float laneStart;
-        float laneLength = 140f;
+        float laneLength = 200f;   // corredor esticado: boxes maiores (pedido do usuário: mais espaço entre carros)
         Vector3 boxPos;
         public bool Enabled { get; private set; }
         /// <summary>Total de boxes/garagens ao longo do lane (setado pelo bootstrap antes dos spawns).</summary>
-        public int boxCount = 24;
+        public int boxCount = 16;
 
         void Awake() { instance = this; }
         void OnDestroy() { if (instance == this) instance = null; }
@@ -115,6 +123,23 @@ namespace RaceX.Core
             return st != null && (st.inPit || st.holding || st.exiting);
         }
 
+        /// <summary>Solta o JOGADOR do fluxo do pit IMEDIATAMENTE (fechou o menu da carreira, quer voltar
+        /// à pista já). Sem isso o carro continuava em fila/rota com o limite de 80 km/h do pit depois
+        /// do menu — a sensação de "carro limitado ao voltar". Se estiver apenas na rota de ENTRADA,
+        /// deixa completar (ela termina no box e para — não há atalho seguro do meio da rota).</summary>
+        public static void ReleasePlayerNow()
+        {
+            if (instance == null || instance.race == null) return;
+            foreach (var e in instance.race.entries)
+            {
+                if (!e.isHuman) continue;
+                var st = instance.Find(e.car);
+                if (st == null) continue;
+                if (st.holding) { st.holding = false; instance.Release(st); }   // fila/garagem → rota de saída JÁ
+                else if (st.exiting) { /* rota de saída em andamento: v59 já devolve o controle ao pisar na pista */ }
+            }
+        }
+
         public void Setup(RaceManager raceManager)
         {
             race = raceManager;
@@ -134,10 +159,21 @@ namespace RaceX.Core
                 if (run > best) { best = run; bestAt = s; }
             }
             laneStart = bestAt;
-            laneLength = Mathf.Clamp(best * 0.75f, 90f, 150f);
+            if (boxCount < 4) boxCount = 16;
+            // Espaço REAL por box: ~9,5 m por garagem + 40 m de balanço (entrada/saída).
+            // Reta curta: o lane se estica pelo spline — nunca mais espremer os carros no spawn.
+            laneLength = Mathf.Max(Mathf.Clamp(best * 0.75f, 120f, 300f), boxCount * 9.5f + 40f);
             var mid = spline.PoseAtDistance(laneStart + laneLength * 0.5f);
             boxPos = mid.position - mid.rotation * new Vector3(laneOffset, 0f, 0f) + Vector3.up * 0.1f;
             BuildGeometry();
+            try
+            {
+                // VÃO no guard-rail da pista no lado do pit: a cerca contínua (~16,7 m do centro)
+                // atravessava a faixa do pit (−8 a −20 m) — quem saía da garagem batia nela e não
+                // havia caminho até a pista. Sem cerca no trecho INTEIRO do pit + margens.
+                race.Track.OpenWallGap(laneStart - 35f, laneLength + 95f, true);
+            }
+            catch (System.Exception ex) { Debug.LogWarning($"[PitLane] vao no guard-rail ignorado: {ex.Message}"); }
             InitCars();
         }
 
@@ -146,16 +182,20 @@ namespace RaceX.Core
 
         /// <summary>Posição de largada dentro do pit lane (treinos): 2 colunas alternadas com 12,5 m
         /// entre carros da mesma fileira e ±1,8 m do centro (4,2 m de folga até cada parede).</summary>
-        /// <summary>Largada do treino: cada carro nasce DENTRO DO SEU PRÓPRIO BOX (garagem), um por box
-        /// ao longo de todo o lane — ninguém nasce colado em ninguém (fim do amontoado na entrada).</summary>
+        /// <summary>Largada do treino: cada carro nasce DENTRO DA SUA GARAGEM (casca), virado para a
+        /// saída (corredor) — sai de ré nunca: frente é para fora.</summary>
         public Pose PitSpawnPose(int slot)
         {
-            // MESMA fórmula do boxTarget (InitCars): box do carro = gridSlot — nasce exatamente na própria caixa.
-            float bs = Mathf.Max(4f, (laneLength - 30f) / Mathf.Max(10, boxCount));
+            // MESMA fórmula das garagens e do boxTarget: box = gridSlot, centro −28 m, de frente para a saída.
+            if (boxCount < 4) boxCount = 16;
+            float bs = (laneLength - 30f) / boxCount;
             float firstS = laneStart + 15f;
             var p = spline.PoseAtDistance(Mathf.Repeat(firstS + slot * bs + bs * 0.5f, spline.Length));
             Vector3 right = p.rotation * Vector3.right;
-            p.position = p.position - right * (laneOffset + 12f); // dentro da garagem (frente aberta para o lane)
+            p.position = p.position - right * 28f; // centro da garagem (abertura −20 m, fundo −36 m)
+            // DE FRENTE PARA A ABERTURA: o carro olha para o corredor — nasce pronto para SAIR
+            // (antes olhava ao longo da pista e o nariz ficava espremido na parede lateral: tremia e não saía).
+            p.rotation = Quaternion.LookRotation(right, Vector3.up);
             // Cola no chão REAL do pit (o terreno varia; sem isso o carro nasce no ar/afundado).
             var up = Physics.Raycast(p.position + Vector3.up * 4f, Vector3.down, out var hit, 12f, ~0, QueryTriggerInteraction.Ignore)
                 ? hit.point
@@ -168,9 +208,12 @@ namespace RaceX.Core
         {
             if (race == null || race.entries.Count == 0) return;
             bool practice = race.Settings.laps >= 900;
-            int slot = 0;
+            // Cria estado para os carros QUE AINDA NÃO TÊM (o bootstrap spawna em lotes —
+            // o humano primeiro, NPCs depois; rodar 1x só deixava a IA sem pit).
+            int slot = cars.Count;
             foreach (var e in race.entries)
             {
+                if (Find(e.car) != null) continue;
                 var st = new CarState { car = e.car, isHuman = e.isHuman, compound = e.isHuman ? 1 : Random.value < 0.35f ? 0 : Random.value < 0.5f ? 1 : 2 };
                 if (!e.isHuman) st.plannedLap = PlanNextStop(st, Random.Range(1, Mathf.Max(2, race.Settings.laps / 4)));
                 if (practice)
@@ -181,13 +224,14 @@ namespace RaceX.Core
                     st.inPit = true;
                     ApplyHold(st);
                 }
-                // Caixa do PRÓPRIO carro: mesma fórmula do PitSpawnPose — nasce e tem alvo no MESMO box.
-                float bs = Mathf.Max(4f, (laneLength - 30f) / Mathf.Max(10, boxCount));
+                // Caixa do PRÓPRIO carro: centro da garagem (−28 m) — IGUAL ao PitSpawnPose (nascem alinhados).
+                float bs = (laneLength - 30f) / boxCount;
                 int bIdx = Mathf.Clamp(e.gridSlot, 0, Mathf.Max(0, boxCount - 1));
                 float firstS = laneStart + 15f;
-                var bp = spline.PoseAtDistance(Mathf.Repeat(firstS + bIdx * bs + bs * 0.5f, spline.Length));
+                st.boxS = Mathf.Repeat(firstS + bIdx * bs + bs * 0.5f, spline.Length);
+                var bp = spline.PoseAtDistance(st.boxS);
                 Vector3 bRight = bp.rotation * Vector3.right;
-                st.boxTarget = bp.position - bRight * (laneOffset + 12f) + Vector3.up * 0.1f;
+                st.boxTarget = bp.position - bRight * 28f + Vector3.up * 0.1f; // centro da garagem
                 cars.Add(st);
             }
         }
@@ -202,49 +246,112 @@ namespace RaceX.Core
             st.car.extSteer = 0f;
         }
 
-        /// <summary>Libera o carro da caixa: SAÍDA GUIADA por ROTA (nunca linha reta):
-        /// corredor do lane (−14 m) até o fim, então a rampa de saída e SÓ ENTÃO a pista.</summary>
+        /// <summary>Libera o carro da caixa: SAÍDA GUIADA por ROTA (nunca linha reta à toa):
+        /// sai RETO da garagem pelo vão (−40 → corredor −14), segue o lane, rampa e SÓ ENTÃO a pista.</summary>
         void Release(CarState st)
         {
             st.holding = false;
             st.exiting = true;
             st.car.pitControlled = true; // mantém o controle até chegar na pista
             st.route.Clear();
-            float sNow = LaneSOf(st.car);
-            // 1º waypoint: centro do lane à frente (alinhado ao corredor).
-            st.route.Add(spline.PoseAtDistance(Mathf.Repeat(sNow + 30f, spline.Length)).position - (spline.PoseAtDistance(Mathf.Repeat(sNow + 30f, spline.Length)).rotation * new Vector3(laneOffset, 0f, 0f)));
-            // 2º: fim do lane (ainda no corredor).
-            var pe = spline.PoseAtDistance(Mathf.Repeat(laneStart + laneLength - 5f, spline.Length));
+            // WAYPOINTS CURTOS (a partir de ONDE O CARRO ESTÁ — nunca de ponto fixo longe):
+            // 1b) LINHA RETA da garagem até o centro do corredor, na altura da PRÓPRIA caixa
+            // (o carro anda reto até o lane e SÓ DEPOIS vira rumo à saída — nunca na diagonal).
+            var pc = spline.PoseAtDistance(st.boxS);
+            Vector3 laneAtBox = pc.position - pc.rotation * new Vector3(laneOffset, 0f, 0f);
+            // 1) 6 m na DIREÇÃO DO CORREDOR (não no nariz do carro): se o carro girou/capotou
+            //    na caixa, usar o forward dele criava rota para TRÁS — o piloto automático
+            //    acelerava sozinho na contramão no pit (bug do respawn/contra-mão).
+            Vector3 outDir = laneAtBox - st.car.transform.position; outDir.y = 0f;
+            if (outDir.sqrMagnitude < 0.01f) outDir = st.car.transform.rotation * Vector3.forward;
+            outDir.y = 0f; outDir.Normalize();
+            st.route.Add(st.car.transform.position + outDir * 6f + Vector3.up * 0.05f);
+            st.route.Add(laneAtBox);
+            // 2) boca da rampa de saída no corredor;
+            var pe = spline.PoseAtDistance(Mathf.Repeat(laneStart + laneLength - 6f, spline.Length));
             st.route.Add(pe.position - pe.rotation * new Vector3(laneOffset, 0f, 0f));
-            // 3º: boca da rampa de saída (meio caminho até a pista).
+            // 3) meio da rampa de saída;
             var px = spline.PoseAtDistance(Mathf.Repeat(laneStart + laneLength + 12f, spline.Length));
             st.route.Add(Vector3.Lerp(px.position - px.rotation * new Vector3(laneOffset, 0f, 0f), px.position, 0.6f) + Vector3.up * 0.05f);
-            // 4º: NA PISTA (além da saída, já no traçado).
-            st.route.Add(px.position + px.rotation * Vector3.forward * 15f);
+            // 4) NA PISTA — ponto de merge ÚNICO por carro (derivado do boxS): antes todos
+            //    convergiam para o MESMO ponto da pista e formavam o bolo/capotaria coletiva.
+            float mergeDist = 10f + Mathf.Repeat(st.boxS * 0.37f, 1f) * 15f;
+            st.route.Add(px.position + px.rotation * Vector3.forward * mergeDist);
             st.routeIdx = 0;
+            st.stuckTimer = 0f; st.reverseTimer = 0f;
             st.car.extThrottle = 0f; st.car.extBrake = 0f; st.car.extSteer = 0f;
         }
 
-        /// <summary>Distância ao longo da spline do carro no pit (para montar a rota).</summary>
+        /// <summary>[sem uso atual] Distância ao longo da spline de um carro — mantido para debug/uso futuro.</summary>
         float LaneSOf(CarController c)
         {
             float d = race.Track.Checkpoints.RaceDistance(c);
             return Mathf.Repeat(d, spline.Length);
         }
 
-        /// <summary>Pilota por ROTA (waypoints em sequência). Retorna false quando a rota acabou.</summary>
+        /// <summary>Pilota por ROTA (waypoints em sequência). Retorna false quando a rota acabou.
+        /// Guarda anti-NaN: waypoint inválido é pulado (não congela o carro).</summary>
         bool DriveRoute(CarState st, float speedLimit)
         {
             if (st.routeIdx >= st.route.Count) return false;
             Vector3 target = st.route[st.routeIdx];
             Vector3 to = target - st.car.transform.position; to.y = 0f;
-            if (to.magnitude < 7f) { st.routeIdx++; return DriveRoute(st, speedLimit); }
+            if (float.IsNaN(to.x) || float.IsNaN(to.z) || (to.magnitude < 7f))
+            {
+                st.routeIdx++;
+                st.stuckTimer = 0f;
+                st.reverseCount = 0f;
+                return DriveRoute(st, speedLimit);
+            }
+            // ANTI-TRAVAMENTO: encostou na cerca/parede e não anda há 3 s → manobra de RÉ (1,2 s)
+            // e retoma a rota. Com a 1ª engatada, extThrottle negativo empurra para trás; se o carro
+            // estava preso em Gear -1 (ré do jogador), um pulso curto de acelerador engata a 1ª.
+            if (st.reverseTimer > 0f)
+            {
+                st.reverseTimer -= Time.deltaTime;
+                if (st.car.Gear < 0)
+                {
+                    st.car.extThrottle = 0.3f; // engata a 1ª (ApplyDrive faz a troca); mal move o carro
+                    st.reverseTimer = Mathf.Max(st.reverseTimer, 1.1f); // a ré de verdade começa depois
+                }
+                else
+                {
+                    st.car.extThrottle = -0.55f;
+                }
+                st.car.extBrake = 0f;
+                st.car.extSteer = 0f;
+                return true;
+            }
+            if (st.car.ForwardSpeed < 0.6f) st.stuckTimer += Time.deltaTime; else st.stuckTimer = 0f;
+            if (st.stuckTimer > 3f)
+            {
+                st.stuckTimer = 0f;
+                // Duas ré sem sair no MESMO waypoint: pula o waypoint — muda o ângulo
+                // de aproximação e quebra o loop "bateu na estrutura → ré → bateu de novo".
+                if (st.reverseCount >= 2f && st.routeIdx < st.route.Count)
+                {
+                    st.reverseCount = 0f;
+                    st.routeIdx++;
+                    return true;
+                }
+                st.reverseCount++;
+                st.reverseTimer = Mathf.Min(2.5f, 1.2f + 0.4f * st.reverseCount); // ré mais longa a cada tentativa
+                return true;
+            }
             float steer = Vector3.SignedAngle(st.car.transform.forward, to.normalized, Vector3.up) / 30f;
+            if (float.IsNaN(steer)) steer = 0f;
             st.car.extSteer = Mathf.Clamp(steer, -1f, 1f);
-            float targetSpeed = Mathf.Min(speedLimit, to.magnitude * 0.35f);
+            // REGRA DO USUÁRIO: no pit é para ser DEVAGAR (manobra) — devagar na PISTA é que não pode.
+            // Alvo = distância até o waypoint (desacelera perto de cada um) com PISO de ~20 km/h
+            // (o piso antigo era zero: waypoint curto = alvo 11-18 km/h + freio 100% = carro
+            // travando/rastejando a 10 km/h e o pit não terminava nunca — provado no [PITWATCH]).
+            // Freio agora é LEVE (0.4) e só com folga. Último waypoint = mesclagem na PISTA:
+            // nesse o alvo é o ritmo cheio do lane (chegada na pista sem rastejar).
+            bool ultimo = st.routeIdx >= st.route.Count - 1;
+            float targetSpeed = ultimo ? speedLimit : Mathf.Max(5.5f, Mathf.Min(speedLimit, to.magnitude * 0.5f));
             float speed = st.car.ForwardSpeed;
-            st.car.extThrottle = speed < targetSpeed ? 0.6f : 0f;
-            st.car.extBrake = speed > targetSpeed + 2f ? 1f : 0f;
+            st.car.extThrottle = speed < targetSpeed ? 0.85f : 0f;
+            st.car.extBrake = speed > targetSpeed + 6f ? 0.4f : 0f;
             return true;
         }
 
@@ -320,6 +427,10 @@ namespace RaceX.Core
             go.AddComponent<MeshFilter>().sharedMesh = mesh;
             var mr = go.AddComponent<MeshRenderer>();
             mr.sharedMaterial = new Material(shader) { color = new Color(0.13f, 0.13f, 0.15f) };
+            // SUPERFÍCIE REAL: collider + asfalto — o corredor do pit tem o MESMO grip da pista
+            // (antes era o Ground de grama por baixo: o carro deslizava e não virava na zona do pit).
+            go.AddComponent<MeshCollider>().sharedMesh = mesh;
+            go.AddComponent<TrackSurface>().type = SurfaceType.Asphalt;
 
             // ROTA VISUAL: linha tracejada LARANJA no meio da faixa (da entrada ao box) — o caminho do pit.
             var dashes = new List<Vector3>();
@@ -356,9 +467,9 @@ namespace RaceX.Core
             var door = new Material(shader) { color = new Color(0.18f, 0.2f, 0.24f) };
             var floor = new Material(shader) { color = new Color(0.24f, 0.25f, 0.28f) };
             float entryS = laneStart, exitS = laneStart + laneLength;
-            // 24 boxes com garagem REAL (frente aberta), DENTRO da área livre do lane
-            // (15 m de margem na entrada e na saída — rampas e pórtico nunca invadem boxes).
-            int boxCount = race != null ? Mathf.Max(10, race.entries.Count) : 24;
+            // Box count UNIFICADO (campo da classe, setado pelo bootstrap ANTES do Setup com o nº de carros).
+            // Nunca usar race.entries.Count aqui: na hora do Setup os carros ainda não nasceram (=0).
+            if (boxCount < 4) boxCount = 16;
             float boxSize = (laneLength - 30f) / boxCount;
             float boxFirst = laneStart + 15f;
             for (int i = 0; i < boxCount; i++)
@@ -370,33 +481,34 @@ namespace RaceX.Core
 
                 // GARAGEM REAL (frente aberta p/ o carro ENTRAR): piso + teto + 3 paredes finas.
                 // Fundo em −32 m, face aberta no −20 m; largura = boxSize, profundidade 12 m.
-                Vector3 garageCenter = laneCenter - right * 26f;
-                // Piso dentro da garagem (1 cm — não levanta carro).
+                Vector3 garageCenter = laneCenter - right * 28f;
+                // Piso dentro da garagem (1 cm — não levanta carro). Profundidade 16 m (fundo −36 m).
                 var f = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 f.name = "PitFloor" + i;
                 f.transform.SetParent(transform, false);
                 f.transform.rotation = p.rotation;
                 f.transform.position = garageCenter + Vector3.up * 0.005f;
-                f.transform.localScale = new Vector3(boxSize - 1f, 0.02f, 12f);
+                f.transform.localScale = new Vector3(boxSize - 2.5f, 0.02f, 16f);
                 f.GetComponent<MeshRenderer>().sharedMaterial = floor;
-                // Fundo (−32 m).
+                f.AddComponent<TrackSurface>().type = SurfaceType.Asphalt; // grip de asfalto dentro da garagem
+                // Fundo (−36 m) — folga de 2 m atrás do carro.
                 var gB = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 gB.name = "PitBuilding" + i;
                 gB.transform.SetParent(transform, false);
-                gB.transform.position = laneCenter - right * 32f + Vector3.up * 2.4f;
+                gB.transform.position = laneCenter - right * 36f + Vector3.up * 2.4f;
                 gB.transform.rotation = p.rotation;
-                gB.transform.localScale = new Vector3(boxSize - 1f, 4.8f, 0.6f);
+                gB.transform.localScale = new Vector3(boxSize - 2.5f, 4.8f, 0.6f);
                 var c_gB = gB.GetComponent<Collider>(); if (c_gB != null) c_gB.sharedMaterial = pitPhys;
                 gB.GetComponent<MeshRenderer>().sharedMaterial = building;
-                // Laterais (esq/dir).
+                // Laterais (esq/dir): (boxSize − 2,5 m)/2 − 0,3 m = folga lateral de ~1,25 m por lado (boxSize 16).
                 for (int side = -1; side <= 1; side += 2)
                 {
                     var gS = GameObject.CreatePrimitive(PrimitiveType.Cube);
                     gS.name = "PitBuilding" + i + (side < 0 ? "L" : "R");
                     gS.transform.SetParent(transform, false);
-                    gS.transform.position = garageCenter + p.rotation * Vector3.forward * (side * (boxSize - 1f) * 0.5f) + Vector3.up * 2.4f;
+                    gS.transform.position = garageCenter + p.rotation * Vector3.forward * (side * (boxSize - 1.25f) * 0.5f) + Vector3.up * 2.4f;
                     gS.transform.rotation = p.rotation;
-                    gS.transform.localScale = new Vector3(0.6f, 4.8f, 12f);
+                    gS.transform.localScale = new Vector3(0.6f, 4.8f, 16f);
                     var c_gS = gS.GetComponent<Collider>(); if (c_gS != null) c_gS.sharedMaterial = pitPhys;
                     gS.GetComponent<MeshRenderer>().sharedMaterial = building;
                 }
@@ -406,17 +518,17 @@ namespace RaceX.Core
                 gT.transform.SetParent(transform, false);
                 gT.transform.position = garageCenter + Vector3.up * 4.8f;
                 gT.transform.rotation = p.rotation;
-                gT.transform.localScale = new Vector3(boxSize - 1f, 0.4f, 12f);
+                gT.transform.localScale = new Vector3(boxSize - 2.5f, 0.4f, 16f);
                 var c_gT = gT.GetComponent<Collider>(); if (c_gT != null) c_gT.sharedMaterial = pitPhys;
                 gT.GetComponent<MeshRenderer>().sharedMaterial = building;
-                // Portão RECOLHIDO (no teto, sem bloquear a entrada) — visual do box.
+                // Portão RECOLHIDO (no teto) — VISUAL APENAS: collider removido (não pode travar a saída).
                 var dr = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 dr.name = "PitDoor" + i;
                 dr.transform.SetParent(transform, false);
                 dr.transform.position = laneCenter - right * 20f + Vector3.up * 4.6f;
                 dr.transform.rotation = p.rotation;
                 dr.transform.localScale = new Vector3(0.25f, 0.5f, boxSize - 1f);
-                var c_dr = dr.GetComponent<Collider>(); if (c_dr != null) c_dr.sharedMaterial = pitPhys;
+                var c_dr = dr.GetComponent<Collider>(); if (c_dr != null) DestroyImmediate(c_dr);
                 dr.GetComponent<MeshRenderer>().sharedMaterial = door;
 
                 // Muro interno com VÃO: só no miolo da faixa (entre 25% e 75%) — as pontas
@@ -455,6 +567,9 @@ namespace RaceX.Core
                 mf.sharedMesh = new Mesh { vertices = new[] { vA, vB, vC, vD }, triangles = new[] { 0, 1, 2, 1, 3, 2 } };
                 mf.sharedMesh.RecalculateNormals();
                 apron.GetComponent<MeshRenderer>().sharedMaterial = new Material(shader) { color = new Color(0.16f, 0.16f, 0.18f) };
+                // Collider + asfalto: rampa de entrada/saída com grip da pista (não grama).
+                apron.AddComponent<MeshCollider>().sharedMesh = mf.sharedMesh;
+                apron.AddComponent<TrackSurface>().type = SurfaceType.Asphalt;
             }
             // Gantries (pórtico SOBRE O PIT LANE) na entrada e saída: postes nas duas bordas
             // do lane (−8 e −20 m) e viga transversal ligando os dois — NUNCA sobre a pista.
@@ -469,7 +584,7 @@ namespace RaceX.Core
                 post1.transform.position = gp.position - gr * 7.5f + Vector3.up * 2.5f;
                 post1.transform.rotation = gp.rotation;
                 post1.transform.localScale = new Vector3(0.5f, 5f, 0.5f);
-                var c_post1 = post1.GetComponent<Collider>(); if (c_post1 != null) c_post1.sharedMaterial = pitPhys;
+                if (post1.GetComponent<Collider>() != null) DestroyImmediate(post1.GetComponent<Collider>()); // VISUAL: poste na borda era armadilha na travessia de entrada/saída
                 post1.GetComponent<MeshRenderer>().sharedMaterial = building;
                 var post2 = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 post2.name = "GantryPost" + k + "b";
@@ -477,7 +592,7 @@ namespace RaceX.Core
                 post2.transform.position = gp.position - gr * 20.5f + Vector3.up * 2.5f;
                 post2.transform.rotation = gp.rotation;
                 post2.transform.localScale = new Vector3(0.5f, 5f, 0.5f);
-                var c_post2 = post2.GetComponent<Collider>(); if (c_post2 != null) c_post2.sharedMaterial = pitPhys;
+                if (post2.GetComponent<Collider>() != null) DestroyImmediate(post2.GetComponent<Collider>()); // VISUAL: idem post1
                 post2.GetComponent<MeshRenderer>().sharedMaterial = building;
                 var beam = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 beam.name = "GantryBeam" + k;
@@ -517,31 +632,130 @@ namespace RaceX.Core
 
         void Update()
         {
-            // Estados dos carros criados LAZY: o Setup roda antes de SpawnCar (entries vazio).
-            if (cars.Count == 0 && race != null && race.entries.Count > 0) InitCars();
+            // Estados dos carros criados LAZY e SEMPRE que houver carro sem estado (o bootstrap
+            // spawna em lotes: humano primeiro, NPCs depois — rodar 1x só dava pit ao humano).
+            if (race != null && race.entries.Count > cars.Count) InitCars();
             if (race == null || race.State != RaceState.Racing) return;
             foreach (var e in race.entries)
             {
                 var st = Find(e.car);
                 if (st == null) continue;
+                ReEngageIfTeleported(st, e);
                 // Fila do treino: parado no pit até chegar a vez de sair (o UpdatePit trata holding/exiting).
                 UpdatePit(st, e);
+                WatchdogPitControl(st, e);
             }
+        }
+
+        /// <summary>CÃO DE GUARDA do piloto automático: nenhuma rota de pit legítima passa de 45 s.
+        /// Se pitControlled sobreviver sem estado válido (ou por tempo demais), solta o carro e
+        /// registra UMA linha no log — o "carro limitado desde o início" nunca mais fica preso,
+        /// e se repetir teremos o estado exato impresso (dados reais, não suposição).</summary>
+        void WatchdogPitControl(CarState st, RaceEntry e)
+        {
+            if (!st.car.pitControlled)
+            {
+                st.pitCtrlSince = -1f;
+                return;
+            }
+            if (st.pitCtrlSince < 0f)
+            {
+                st.pitCtrlSince = Time.time;
+                if (st.isHuman)
+                    Debug.Log($"[PITWATCH] auto-piloto LIGOU no humano: holding={st.holding} exiting={st.exiting} inPit={st.inPit} kmh={st.car.SpeedKmh:0}");
+                return;
+            }
+            bool semEstado = !st.holding && !st.exiting && !st.inPit;
+            float dW = race.Track.Checkpoints.RaceDistance(st.car);
+            var spw = spline.PoseAtDistance(Mathf.Repeat(dW, spline.Length));
+            float latW = Vector3.Dot(st.car.transform.position - spw.position, spw.rotation * Vector3.right);
+            if (semEstado || Time.time - st.pitCtrlSince > 45f)
+            {
+                Debug.LogWarning($"[PITWATCH] LIBERADO FORÇADO {e.name}: holding={st.holding} exiting={st.exiting} inPit={st.inPit} lat={latW:0.0} kmh={st.car.SpeedKmh:0} t={Time.time - st.pitCtrlSince:0}s");
+                st.holding = false; st.exiting = false; st.inPit = false;
+                st.car.pitControlled = false;
+                st.car.extThrottle = 0f; st.car.extBrake = 0f; st.car.extSteer = 0f;
+                st.pitCtrlSince = -1f;
+            }
+        }
+
+        /// <summary>RE-ENGATE de teletransporte: um carro resetado PARA O PIT depois de já ter
+        /// sido liberado (ex.: TrackBounds devolveu ao spawn do box antes de cruzar o checkpoint 0)
+        /// ficava parado no box para sempre — sem holding, sem rota, sem nada. Se ele está
+        /// parado dentro da área do box e fora do fluxo, re-engata a fila (holding → saída).</summary>
+        void ReEngageIfTeleported(CarState st, RaceEntry e)
+        {
+            if (st.holding || st.exiting || st.inPit) return;
+            if (st.car.pitControlled || st.car.SpeedKmh > 2f) return;
+            float d = race.Track.Checkpoints.RaceDistance(st.car);
+            float rel = Mathf.Repeat(d - laneStart, spline.Length);
+            bool noBox = rel > 5f && rel < 30f && st.car.transform.position.y < 6f; // área da garagem
+            if (!noBox) return;
+            st.inPit = true;
+            st.holding = true;
+            st.releaseTimer = e.isHuman ? 2f : 2f + Random.value * 2f;
+            ApplyHold(st);
+            if (st.isHuman) Debug.Log("[PITWATCH] carro resetado no box — fila re-engatada (saída em ~2s)");
         }
 
         void UpdateWear(CarState st)
         {
             float rate = CompoundWearRate[st.compound];
-            float slip = st.car.MaxWheelSlip * 0.0018f;
-            st.wear = Mathf.Clamp01(st.wear + (0.00006f + slip) * rate * Mathf.Clamp(st.car.SpeedKmh / 120f, 0.2f, 2f) * Time.deltaTime * 20f);
+            float slipSum = 0f;
+            for (int i = 0; i < 4; i++)
+            {
+                // Desgaste POR RODA (alimenta o painel visual com verde/amarelo/vermelho).
+                float slip = st.car.WheelSlip[i] * 0.0018f;
+                slipSum += slip;
+                st.wearW[i] = Mathf.Clamp01(st.wearW[i] + (0.00006f + slip) * rate * Mathf.Clamp(st.car.SpeedKmh / 120f, 0.2f, 2f) * Time.deltaTime * 20f);
+            }
+            st.wear = Mathf.Clamp01(st.wear + (0.00006f + slipSum * 0.25f) * rate * Mathf.Clamp(st.car.SpeedKmh / 120f, 0.2f, 2f) * Time.deltaTime * 20f); // média = física da roda (compatível)
+        }
+
+        /// <summary>Desgaste de UMA roda (0..1) para o painel do HUD. Ordem: 0=DI, 1=DE, 2=TD, 3=TE.</summary>
+        public static float WearOf(CarController car, int wheel)
+        {
+            var st = instance != null ? instance.Find(car) : null;
+            return st != null && wheel >= 0 && wheel < 4 ? st.wearW[wheel] : 0f;
         }
 
         void UpdatePit(CarState st, RaceEntry e)
         {
+            // CAPOTADO no pit: desvirar NO LUGAR (mesma posição, sem teleport). O respawn comum
+            // (TrackBounds) é propositalmente ignorado no fluxo do pit — um capotado ali ficava
+            // preso para sempre; e resetar com rota velha dava carro andando na contramão sozinho.
+            if (Vector3.Dot(st.car.transform.up, Vector3.up) < 0.3f && st.car.SpeedKmh < 15f)
+            {
+                var eu = st.car.transform.eulerAngles;
+                st.car.ResetTo(st.car.transform.position, Quaternion.Euler(0f, eu.y, 0f));
+                st.stuckTimer = 0f; st.reverseTimer = 0f;
+                return;
+            }
             // SAÍDA GUIADA por ROTA (waypoints: corredor → rampa → pista) — sem atravessar fila nem muro.
             if (st.exiting)
             {
-                if (DriveRoute(st, LaneSpeedKmh / 3.6f))
+                // De volta à PISTA (lat > −6.2 = pisou na borda da pista): solta o controle NA HORA.
+                // Sem isso o carro ficava preso ao limite de 80 km/h do pit até o fim da rota
+                // (o "voltou reduzido do pit" na reta).
+                float dNow = race.Track.Checkpoints.RaceDistance(st.car);
+                var spx = spline.PoseAtDistance(Mathf.Repeat(dNow, spline.Length));
+                float latOut = Vector3.Dot(st.car.transform.position - spx.position, spx.rotation * Vector3.right);
+                if (latOut > -6.2f)
+                {
+                    st.exiting = false;
+                    st.inPit = false;
+                    st.car.pitControlled = false;
+                    st.car.extThrottle = 0f; st.car.extBrake = 0f; st.car.extSteer = 0f;
+                    // VOLTA CONTA (regra do usuário): realinha os checkpoints com a posição ATUAL —
+                    // sem isso o carro saía do pit com nextCheckpoint velho e o próximo cruzamento
+                    // da linha não disparava (o cronômetro acumulava 2 voltas antes de zerar).
+                    race.Track.Checkpoints.ReSyncAfterPit(st.car);
+                    e.lapStartTime = Time.time;
+                    var aiFast = st.car != null ? st.car.GetComponent<CarAI>() : null;
+                    if (aiFast != null) aiFast.OnPracticeRelease();
+                    return;
+                }
+                if (DriveRoute(st, LaneSpeedMs))
                 {
                     // rota em andamento (DriveRoute já aplicou steer/throttle/brake)
                 }
@@ -552,6 +766,8 @@ namespace RaceX.Core
                     st.inPit = false;
                     st.car.pitControlled = false;
                     st.car.extThrottle = 0f; st.car.extBrake = 0f; st.car.extSteer = 0f;
+                    race.Track.Checkpoints.ReSyncAfterPit(st.car); // volta zera na próxima linha (ver latOut)
+                    e.lapStartTime = Time.time;
                     var ai = st.car != null ? st.car.GetComponent<CarAI>() : null;
                     if (ai != null) ai.OnPracticeRelease();
                 }
@@ -560,29 +776,65 @@ namespace RaceX.Core
 
             if (!st.inPit)
             {
+                // Varredura de entrada a 5 Hz (evita RaceDistance+PoseAtDistance por frame por carro:
+                // 24 carros × 50 Hz = 1200 consultas/s → 120). Detecção de pit não precisa de 50 Hz.
+                st.scanTimer -= Time.deltaTime;
+                if (st.scanTimer > 0f) return;
+                st.scanTimer = 0.2f;
                 float dist = race.Track.Checkpoints.RaceDistance(st.car);
                 float rel = Mathf.Repeat(dist - laneStart, spline.Length);
-                // NPC: pit na volta planejada — pedido SÓ na boca da entrada (rel < 40 m), como na F1.
-                // (Antes: qualquer ponto da zona do pit — poderia dar ré até a entrada em cima da pista.)
-                if (!st.isHuman && !st.requested && race.Settings.laps >= 4 && race.GetProgress(e).lap >= st.plannedLap && rel < 40f)
+                // NPC: pit na volta planejada — pedido na APROXIMAÇÃO da entrada (rel > len−60),
+                // nunca depois da boca (rel 0..40 passava do vão e o commit virava de volta).
+                if (!st.isHuman && !st.requested && race.Settings.laps >= 4 && race.GetProgress(e).lap >= st.plannedLap && rel > spline.Length - 60f)
                     st.requested = true;
-                // Treino/classificação: ENTRADA AUTOMÁTICA — só se o carro está REALMENTE no corredor do pit
-                // (desvio lateral > 7 m para o lado do pit), nunca para quem passa na pista principal.
-                if (PracticeSession && !st.requested && !st.holding && !st.exiting && rel < laneLength && rel > 8f)
+                // ENTRADA REAL (regra do usuário): quem DIRIGE para dentro do corredor (lado do
+                // pit, lat < −9 m, em movimento) tem o fluxo assumido — auto até o próprio box.
+                // PASSAR PERTO da boca, NA PISTA (lat ~0), NÃO captura ninguém.
+                if (!st.inPit && !st.holding && !st.exiting && !st.requested && st.car.SpeedKmh > 5f)
                 {
-                    var sp = spline.PoseAtDistance(Mathf.Repeat(dist, spline.Length));
-                    float lat = Vector3.Dot(st.car.transform.position - sp.position, sp.rotation * Vector3.right);
-                    if (lat < -7f) st.requested = true; // lado do pit: além da borda da pista
+                    var spNow = spline.PoseAtDistance(Mathf.Repeat(dist, spline.Length));
+                    float latIn = Vector3.Dot(st.car.transform.position - spNow.position, spNow.rotation * Vector3.right);
+                    if (latIn < -9f && rel > 12f && rel < laneLength - 20f)
+                    {
+                        st.inPit = true;
+                        st.requested = false;
+                        st.car.pitControlled = true;
+                        st.route.Clear();
+                        var pa = spline.PoseAtDistance(Mathf.Repeat(rel + 25f, spline.Length));
+                        st.route.Add(pa.position - pa.rotation * new Vector3(laneOffset, 0f, 0f)); // corredor avante
+                        st.route.Add(st.boxTarget); // caixa da PRÓPRIA garagem
+                        st.routeIdx = 0;
+                        if (st.isHuman) Debug.Log("[PITWATCH] carro entrou dirigindo no corredor — fluxo assumido (auto até o box)");
+                        return;
+                    }
                 }
-                if (st.requested && (rel < 40f || PracticeSession))
+                // REGRA DO USUÁRIO: o piloto automático da entrada SÓ é chamado quando o carro
+                // ENTRA no pit (pedido via botão/tecla, ou dirigindo para dentro do corredor —
+                // captura mais abaixo). PASSAR PERTO da boca NÃO liga mais o automático: isso
+                // sequestrava a volta do jogador no treino (auto-request na aproximação).
+                // Commit SÓ na APROXIMAÇÃO (rel > len−50: até 50 m ANTES da boca) ou JÁ DENTRO do
+                // vão (rel < 8, no apron do lado do pit). Commit depois da boca (rel 8..40) era o
+                // bug do loop: a rota apontava DE VOLTA à boca — o piloto automático virava à
+                // direita, voltava à pista e refazia entrada/saída em loop.
+                if (st.requested && (rel > spline.Length - 50f || rel < 8f))
                 {
+                    bool approaching = rel > spline.Length - 50f;
                     st.inPit = true;
                     st.requested = false;
                     st.car.pitControlled = true;
-                    // ENTRADA por ROTA: boca da entrada (borda da pista) → corredor do lane → caixa.
+                    st.car.Repair(); // PIT CONSERTA: dano de batida zerado ao entrar (regra do usuário)
+                    // ENTRADA por ROTA a partir de ONDE O CARRO ESTÁ (sem cortar caminho):
                     st.route.Clear();
                     var pe = spline.PoseAtDistance(Mathf.Repeat(laneStart + 8f, spline.Length));
-                    st.route.Add(pe.position - pe.rotation * new Vector3(6.5f, 0f, 0f));   // boca na borda da pista
+                    Vector3 mouth = pe.position - pe.rotation * new Vector3(6.5f, 0f, 0f);
+                    if (approaching)
+                    {
+                        // Vem pela PISTA: 6 m à frente (direção atual) → boca → corredor → box.
+                        Vector3 fw = st.car.transform.rotation * Vector3.forward; fw.y = 0f; fw.Normalize();
+                        st.route.Add(st.car.transform.position + fw * 6f + Vector3.up * 0.05f);
+                        st.route.Add(mouth);   // boca na borda da pista
+                    }
+                    // (já passou da boca: SEM waypoint de boca — nunca volta; vai direto ao corredor)
                     st.route.Add(pe.position - pe.rotation * new Vector3(laneOffset, 0f, 0f)); // corredor (−14 m)
                     var pb = spline.PoseAtDistance(Mathf.Repeat(laneStart + 30f, spline.Length));
                     st.route.Add(pb.position - pb.rotation * new Vector3(laneOffset, 0f, 0f)); // corredor avante
@@ -603,7 +855,7 @@ namespace RaceX.Core
 
             // Piloto automático do pit (na caixa/navegação por rota): limita velocidade, para NA SUA GARAGEM.
             Vector3 toBox = st.car.transform.position; toBox.y = 0f; // placeholder substituído abaixo
-            if (!DriveRoute(st, LaneSpeedKmh / 3.6f))
+            if (!DriveRoute(st, LaneSpeedMs))
             {
                 // Rota acabou: navega ao centro da caixa (últimos metros de aproximação).
                 toBox = st.boxTarget - st.car.transform.position; toBox.y = 0f;
@@ -613,7 +865,7 @@ namespace RaceX.Core
                 {
                     float steer = Vector3.SignedAngle(st.car.transform.forward, toBox.normalized, Vector3.up) / 30f;
                     st.car.extSteer = Mathf.Clamp(steer, -1f, 1f);
-                    float target = Mathf.Min(LaneSpeedKmh / 3.6f, dBox * 0.35f);
+                    float target = Mathf.Min(LaneSpeedMs, dBox * 0.5f);
                     st.car.extThrottle = speed < target ? 0.6f : 0f;
                     st.car.extBrake = speed > target + 1f ? 1f : 0f;
                 }
@@ -625,6 +877,7 @@ namespace RaceX.Core
                 if (st.stopTimer >= StopSeconds)
                 {
                     st.wear = 0f;
+                    for (int wi = 0; wi < 4; wi++) st.wearW[wi] = 0f; // mecânicos trocam AS QUATRO rodas
                     st.stopTimer = 0f;
                     st.car.extThrottle = 0f;
                     if (!st.isHuman)
@@ -649,9 +902,10 @@ namespace RaceX.Core
                     }
                     else
                     {
-                        st.inPit = false;
-                        st.car.pitControlled = false;
-                        st.car.extBrake = 0f; st.car.extSteer = 0f;
+                        // Corrida: stop concluído → SAÍDA GUIADA pela rota (igual ao treino):
+                        // corredor → rampa → pista. (Antes soltava seco na garagem e a IA
+                        // cortava sem guia pela grama — agora sai pelo caminho certo.)
+                        Release(st);
                     }
                 }
             }

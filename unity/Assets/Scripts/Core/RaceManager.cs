@@ -165,6 +165,10 @@ namespace RaceX.Core
             float now = Time.time;
             float lapTime = now - e.lapStartTime;
             e.lapStartTime = now;
+            // Cruzamento ESPEÇURJO pós-pit (saída deposita o carro perto da linha): conta a volta
+            // (legítima — foi completada antes do pit), zera o cronômetro, mas NÃO registra tempo
+            // de 2-9 s como volta/melhor volta.
+            if (lapTime < 10f) return;
             e.lapTimes.Add(lapTime);
             bool best = e.bestLap <= 0f || lapTime < e.bestLap;
             if (best) e.bestLap = lapTime;
@@ -238,9 +242,23 @@ namespace RaceX.Core
                     if (realLimit < sessionTimeLimit) sessionTimeLimit = realLimit;
                 }
             }
-            // Fim POR TEMPO com volta de cortesia: expirou? quem está na volta completa, então encerra.
+            // Fim POR TEMPO. Treino/CLASSIFICAÇÃO (laps>=900 = sessão por tempo): o tempo acabou
+            // = FIM IMEDIATO com a classificação na tela (a Q2 não espera "volta de cortesia" —
+            // quem estava no pit/menu quando o tempo zera sai e VÊ o resultado). A volta de
+            // cortesia continua só em CORRIDA com limite de tempo.
+            // RELÓGIO REAL da carreira (deadline UTC): venceu mesmo com o jogo congelado no
+            // menu/hub (timeScale=0 congela o Time.time local) = FIM IMEDIATO — era o buraco que
+            // deixava a Q2 "nunca acabar" quando o tempo vencia com o hub aberto.
+            if (Settings.careerPhase >= 0 && sessionTimeLimit > 0f
+                && RaceX.Career.CareerMode.SessionClockActive
+                && RaceX.Career.CareerMode.SessionSecondsLeft() <= 0)
+            {
+                EndByTime();
+                return;
+            }
             if (sessionTimeLimit > 0f && Time.time - sessionStart >= sessionTimeLimit)
             {
+                if (Settings.laps >= 900) { EndByTime(); return; }
                 if (!timeExpired)
                 {
                     timeExpired = true;

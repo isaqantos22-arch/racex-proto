@@ -30,6 +30,8 @@ namespace RaceX.Track
         public float wrongWayTimer;
         public bool WrongWay => wrongWayTimer >= 2f;
         public Pose respawn;
+        public Pose spawnPose; // pose do spawn inicial (box no treino com pit) — p/ saber se o respawn já virou checkpoint de pista
+        public bool leftPit;   // TRUE = carro já saiu do pit e correu na pista → respawn NUNCA mais é o box (regra do usuário)
         public float distanceInLap;
     }
 
@@ -55,7 +57,7 @@ namespace RaceX.Track
 
         public RaceProgress Register(CarController car, Pose spawn)
         {
-            var p = new RaceProgress { respawn = spawn };
+            var p = new RaceProgress { respawn = spawn, spawnPose = spawn };
             progress[car] = p;
             return p;
         }
@@ -81,7 +83,28 @@ namespace RaceX.Track
             p.lastCheckpoint = index;
             p.nextCheckpoint = (index + 1) % triggers.Count;
             p.respawn = triggers[index].RespawnPose;
+            p.leftPit = true; // cruzou checkpoint na pista: já saiu do pit (se estava nele)
             CheckpointPassed?.Invoke(car, index);
+        }
+
+        /// <summary>Marca que o carro JÁ CORREU na pista (saiu do pit). Uma vez marcado, o respawn
+        /// de saída de pista NUNCA mais volta ao box — renasce na pista, perto de onde estava.</summary>
+        public void MarkOnTrack(CarController car)
+        {
+            if (progress.TryGetValue(car, out var p)) p.leftPit = true;
+        }
+
+        /// <summary>REGRA DO JOGADOR: depois da 1ª saída do pit, o respawn de saída de pista é
+        /// SEMPRE na pista — nunca a pose do box. Se os checkpoints ainda não atualizaram o respawn
+        /// (ele ainda é o spawn inicial do box), gera um respawn no ponto do spline da pista mais
+        /// próximo do carro: renasce perto de onde saiu, sem voltar ao pit.</summary>
+        public void EnsureTrackRespawn(CarController car)
+        {
+            if (!progress.TryGetValue(car, out var p) || track == null || !p.leftPit) return;
+            if (p.respawn.position != p.spawnPose.position) return; // já é checkpoint da pista
+            var spl = track.Waypoints.Spline;
+            int idx = spl.ClosestIndex(car.transform.position, -1);
+            p.respawn = spl.PoseAtDistance(idx * spl.spacing);
         }
 
         public float RaceDistance(CarController car)
@@ -90,8 +113,32 @@ namespace RaceX.Track
             float length = track.Waypoints.Length;
             float d = track.Waypoints.DistanceAlong(car.transform.position, ref p.splineHint);
             if ((!p.crossedStart || p.lastCheckpoint == 0) && d > length * 0.5f) d -= length;
+
             p.distanceInLap = d;
             return (p.lap - 1) * length + d;
+        }
+
+        /// <summary>REALINHA o progresso de checkpoints com a posição ATUAL do carro (após a saída
+        /// do pit). Sem isso, o carro saía do pit com nextCheckpoint velho: o cruzamento da linha
+        /// não disparava LapCompleted e o cronômetro de volta acumulava 2 voltas antes de zerar.
+        /// Marca crossedStart (a linha passa a valer) e aponta nextCheckpoint para o trigger À FRENTE.</summary>
+        public void ReSyncAfterPit(CarController car)
+        {
+            if (!progress.TryGetValue(car, out var p) || triggers == null || triggers.Count == 0) return;
+            float length = track.Waypoints.Length;
+            int hint = p.splineHint;
+            float d = track.Waypoints.DistanceAlong(car.transform.position, ref hint);
+            int best = 0; float bestGap = float.MaxValue;
+            for (int i = 0; i < triggers.Count; i++)
+            {
+                int h = -1;
+                float dt = track.Waypoints.DistanceAlong(triggers[i].transform.position, ref h);
+                float gap = Mathf.Repeat(dt - d, length);
+                if (gap < bestGap) { bestGap = gap; best = i; }
+            }
+            p.nextCheckpoint = best;
+            p.lastCheckpoint = (best - 1 + triggers.Count) % triggers.Count;
+            p.crossedStart = true;
         }
 
         void Update()
