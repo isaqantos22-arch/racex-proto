@@ -30,15 +30,15 @@ namespace RaceX.UI
         bool fastForward;
 
         /// <summary>Acelera o tempo 5x (pula a minutagem restante do treino); de novo = volta a 1x.
-        /// O fixedDeltaTime fica 0.02 SEMPRE: o timeScale faz a física rodar 5 passos por frame —
-        /// colisões ficam estáveis (passo grande de 0.1 s fazia o carro voar ao encostar).</summary>
+        /// Normal = 0.01 (100 Hz, física ORIGINAL — o 0.02 degradava a fricção e limitava TODOS os carros);
+        /// 5x = 0.02 (menos passos por frame, colisões estáveis na aceleração do tempo).</summary>
         void ToggleFastForward()
         {
             fastForward = !fastForward;
             float ts = fastForward ? 5f : 1f;
             Time.timeScale = ts;
-            Time.fixedDeltaTime = 0.02f;
-            Time.maximumDeltaTime = fastForward ? 0.12f : 0.05f; // cabe 6 passos de 0.02 por frame no 5x
+            Time.fixedDeltaTime = fastForward ? 0.02f : 0.01f;
+            Time.maximumDeltaTime = fastForward ? 0.12f : 0.05f; // cabe 5 passos de 0.01 por frame no normal
             if (fastForward) RaceX.Career.CareerMode.CompressSessionClock(5f); // relógio REAL da sessão também corre 5x
             // ESTADO VISÍVEL: o rótulo mostra o estado ATUAL do tempo — "1x" no normal, "5x" acelerado.
             if (ffButton != null)

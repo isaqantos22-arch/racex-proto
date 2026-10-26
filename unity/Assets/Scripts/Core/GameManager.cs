@@ -73,7 +73,7 @@ namespace RaceX.Core
             }
             instance = this;
             DontDestroyOnLoad(gameObject);
-            Time.fixedDeltaTime = 0.02f; // 50 Hz — o 0.01 (100 Hz) DOBRAVA o custo da física com 24 carros e travava o celular/emulador (HUD e Pause já usam 0.02)
+            Time.fixedDeltaTime = 0.01f; // 100 Hz — valor ORIGINAL. O 0.02 (v62) degradou a fricção do WheelCollider: rodas patinavam (fumaça) e TODOS os carros ficavam limitados ~100 km/h
             AudioListener.volume = SettingsManager.MasterVolume;
             settings.players[0].startCamera = (CameraView)SettingsManager.LastCamera;
 

@@ -44,7 +44,7 @@ namespace RaceX.UI
             // 5 botões sem sobreposição: linha própria para cada um.
             UIFactory.Button("Continue", panel.transform, "CONTINUAR", c, c, new Vector2(0f, careerBtn ? 210f : 150f), new Vector2(520f, 100f), Toggle);
             if (careerBtn)
-                UIFactory.Button("CareerHub", panel.transform, "MENU DA CARREIRA (TEMPO CORRENDO)", c, c, new Vector2(0f, 90f), new Vector2(520f, 100f), () =>
+                UIFactory.Button("CareerHub", panel.transform, "MENU DA CARREIRA", c, c, new Vector2(0f, 90f), new Vector2(520f, 100f), () =>
                 {
                     panel.SetActive(false);
                     Time.timeScale = 1f; // corrida segue com a IA pilotando seu carro (treino real)
@@ -145,7 +145,7 @@ namespace RaceX.UI
             if (!online)
             {
                 Time.timeScale = open ? 0f : 1f;
-                Time.fixedDeltaTime = 0.02f; // passo de física fixo (colisões estáveis)
+                Time.fixedDeltaTime = 0.01f; // 100 Hz ORIGINAL (0.02 degradava a fricção das rodas e limitava todos os carros)
             }
             AudioListener.pause = open && !online;
             if (!open) SettingsManager.Save();
@@ -154,7 +154,7 @@ namespace RaceX.UI
         void OnDestroy()
         {
             if (!online) Time.timeScale = 1f;
-            Time.fixedDeltaTime = 0.02f;
+            Time.fixedDeltaTime = 0.01f;
             AudioListener.pause = false;
         }
     }
