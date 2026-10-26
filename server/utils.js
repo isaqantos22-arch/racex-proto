@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const ROOM_CODE_LENGTH = 6;
 
-const TRACK_IDS = ['forest', 'desert', 'city'];
+const TRACK_IDS = ['forest', 'desert', 'city', 'velocita', 'principado', 'ardenne', 'jardim', 'golfo', 'serra', 'sol', 'parque', 'dragao', 'corniche', 'porto', 'cascatas', 'dourado', 'colinas', 'norte', 'danubio', 'dunas', 'fortaleza', 'texas', 'estadio', 'neon'];
 const LAP_OPTIONS = [1, 2, 3, 5, 7, 10];
 const TOTAL_CAR_OPTIONS = [4, 6, 8, 10, 12, 16];
 const DIFFICULTIES = ['easy', 'medium', 'hard', 'expert'];

@@ -1,4 +1,6 @@
 using System.Collections;
+using System.Collections.Generic;
+using RaceX.Car;
 using RaceX.UI;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -32,13 +34,21 @@ namespace RaceX.Core
             Time.timeScale = 1f;
             var go = new GameObject("LoadingScreen");
             Object.DontDestroyOnLoad(go);
-            go.AddComponent<LoadingRunner>().targetScene = cenaAlvo;
+            var runner = go.AddComponent<LoadingRunner>();
+            runner.targetScene = cenaAlvo;
+            if (settings != null && settings.players != null && settings.players.Length > 0)
+            {
+                runner.playerModel = (CarModel)settings.players[0].car; // pré-carga o FBX do jogador AINDA no loading (barra real), nunca na ativação
+                runner.formulaOnly = settings.formulaOnly;
+            }
         }
     }
 
     class LoadingRunner : MonoBehaviour
     {
         public string targetScene;
+        public CarModel playerModel = (CarModel)(-1);
+        public bool formulaOnly;
 
         Text dicaText, pctText;
         Image fill;
@@ -71,15 +81,22 @@ namespace RaceX.Core
 
         void Update()
         {
+            // Dica troca por TEMPO (10s) ou por PROGRESSO (a cada 15%) — o que vier primeiro.
+            // Só por tempo não trocava: a carga real dura <10s e o resto é a ativação congelada.
             dicaTimer += Time.unscaledDeltaTime;
             if (dicaTimer >= 10f)
             {
                 dicaTimer = 0f;
-                int next;
-                do { next = Random.Range(0, LoadingScreen.Dicas.Length); } while (next == lastDicaIndex && LoadingScreen.Dicas.Length > 1);
-                lastDicaIndex = next;
-                if (dicaText != null) dicaText.text = "DICA  " + LoadingScreen.Dicas[next];
+                TrocaDica();
             }
+        }
+
+        void TrocaDica()
+        {
+            int next;
+            do { next = Random.Range(0, LoadingScreen.Dicas.Length); } while (next == lastDicaIndex && LoadingScreen.Dicas.Length > 1);
+            lastDicaIndex = next;
+            if (dicaText != null) dicaText.text = "DICA  " + LoadingScreen.Dicas[next];
         }
 
         void SetProgress(float p01)
@@ -99,18 +116,54 @@ namespace RaceX.Core
                 yield break;
             }
             op.allowSceneActivation = false;
-            // AsyncOperation.progress vai de 0 a 0.9 enquanto carrega; os 10% finais são a ativação da cena.
+            // Barra REAL em 3 fases: (A) carga da cena 0-55%, (B) pré-carga do modelo do carro
+            // 55-90% (progresso MEDIDO do LoadAsync — era isto que congelava ~1min na ativação,
+            // pois o FBX era carregado síncrono DEPOIS da cena pronta), (C) ativação 90-100%.
+            float lastBucket = 0f;
             while (op.progress < 0.9f)
             {
-                SetProgress(op.progress / 0.9f * 0.9f);
+                SetProgress(op.progress / 0.9f * 0.55f);
+                float bucket = Mathf.Floor(op.progress / 0.9f / 0.15f);
+                if (bucket > lastBucket) { lastBucket = bucket; TrocaDica(); }
                 yield return null;
             }
-            SetProgress(0.95f);
+            SetProgress(0.55f);
+            {
+                // Pré-carga REAL de todos os modelos que a corrida usa (jogador + pool de NPCs).
+                // Cada modelo reporta o progresso do LoadAsync — a barra anda com carga verdadeira,
+                // e a ativação da cena fica LEVE (nada de Resources.Load síncrono de FBX pesado).
+                var models = new List<CarModel>();
+                if (playerModel >= 0) models.Add(playerModel);
+                if (formulaOnly)
+                {
+                    if (!models.Contains(CarModel.F1)) models.Add(CarModel.F1);
+                }
+                else
+                {
+                    foreach (CarModel m in (CarModel[])System.Enum.GetValues(typeof(CarModel)))
+                        if ((m != CarModel.F1 || SettingsManager.AllowF1) && !models.Contains(m))
+                            models.Add(m);
+                }
+                if (models.Count > 0)
+                {
+                    if (dicaText != null) dicaText.text = "CARREGANDO CARROS...";
+                    float span = 0.35f / models.Count;
+                    for (int i = 0; i < models.Count; i++)
+                    {
+                        int idx = i;
+                        yield return ImportedCarModels.PrewarmAsync(models[idx],
+                            p => SetProgress(0.55f + (idx + Mathf.Clamp01(p)) * span));
+                    }
+                }
+            }
+            SetProgress(0.9f);
+            if (pctText != null) pctText.text = "90%";
+            if (dicaText != null) dicaText.text = "ATIVANDO CENA — AGUARDE...";
             yield return new WaitForSecondsRealtime(0.15f);
-            SetProgress(1f);
-            if (dicaText != null) dicaText.text = "ATIVANDO CENA — AGUARDE..."; // o app CONGELA aqui na ativação (~30s): sem este texto parece travado
             op.allowSceneActivation = true;
-            while (!op.isDone) yield return null;
+            while (!op.isDone) yield return null; // congelamento curto (modelos já estão em memória)
+            SetProgress(1f); // 100% só com a cena viva de verdade
+            yield return new WaitForSecondsRealtime(0.3f);
             Destroy(canvas.gameObject);
             Destroy(gameObject);
         }

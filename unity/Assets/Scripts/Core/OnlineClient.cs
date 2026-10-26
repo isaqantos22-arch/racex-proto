@@ -119,7 +119,10 @@ namespace RaceX.Core
             return baseUrl.TrimEnd('/') + "/socket.io/?EIO=4&transport=websocket";
         }
 
-        static void Log(string msg) => Debug.Log("[Online] " + msg);
+        /// <summary>Log detalhado [Online]: OFF por padrão (log limpo no dispositivo).
+        /// Warnings e erros continuam sempre visíveis.</summary>
+        public static bool VerboseLogs = false;
+        static void Log(string msg) { if (VerboseLogs) Debug.Log("[Online] " + msg); }
 
         public static CarModel CarModelFromServer(string name) => name switch
         {
@@ -235,6 +238,23 @@ namespace RaceX.Core
         {
             Emit("room:start", "{}");
         }
+
+        /// <summary>Pista escolhida na sala (atualizada pelo broadcast do servidor).</summary>
+        public static string RoomTrackId = "forest";
+        public static int RoomLaps = 3;
+        public static int RoomTotalCars = 8;
+        public static string RoomDifficulty = "medium";
+
+        /// <summary>Host altera as configurações da sala — o servidor sanitiza, aplica e re-transmite no lobby.</summary>
+        public static void SendRoomSettings(string trackId, int laps, int totalCars, string difficulty)
+        {
+            if (!IsHost) return;
+            Emit("room:settings", "{\"trackId\":" + JsonString(trackId) +
+                 ",\"laps\":" + laps + ",\"totalCars\":" + totalCars +
+                 ",\"difficulty\":" + JsonString(difficulty) + "}");
+        }
+
+        public static void SetRoomTrack(string trackId) => SendRoomSettings(trackId, RoomLaps, RoomTotalCars, RoomDifficulty);
 
         public static void SendPosition(float x, float y, float z, float rot, float speed, int lap, int checkpoint)
         {
@@ -519,6 +539,12 @@ namespace RaceX.Core
             if (pid.Length == 0) Debug.LogWarning("[Online] room:joined sem playerId");
             if (pid.Length > 0) MyPlayerId = pid;
             IsHost = hostId.Length > 0 && hostId == MyPlayerId;
+            string roomTrack = ExtractString(json, "trackId"); // settings do lobby (vem antes dos players no payload)
+            if (roomTrack.Length > 0) RoomTrackId = roomTrack;
+            RoomLaps = Mathf.Clamp(ExtractInt(json, "laps"), 1, 20);
+            RoomTotalCars = Mathf.Clamp(ExtractInt(json, "totalCars"), 1, 16);
+            string roomDiff = ExtractString(json, "difficulty");
+            if (roomDiff.Length > 0) RoomDifficulty = roomDiff;
             LobbyPlayers.Clear();
             string arr = ExtractArray(json, "players");
             if (arr != null)

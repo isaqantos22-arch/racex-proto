@@ -44,7 +44,7 @@ namespace RaceX.Car
             { CarModel.Falcon, new Config { file = "Corvette", forward = Vector3.up, up = Vector3.forward, eyeHeight = 0.86f, eyeForward = -0.06f } },
             { CarModel.Titan, new Config { file = "Porsche", forward = Vector3.back, up = Vector3.up, eyeHeight = 0.78f, eyeForward = -0.04f } },
             { CarModel.Storm, new Config { file = "Temerario", forward = Vector3.back, up = Vector3.up, eyeHeight = 0.80f, eyeForward = -0.05f } },
-            { CarModel.F1, new Config { file = "F1_2022", forward = Vector3.right, up = Vector3.up, eyeHeight = 0.74f, eyeForward = 0.02f } },
+            { CarModel.F1, new Config { file = "F1_2022", forward = Vector3.right, up = Vector3.up, eyeHeight = 0.58f, eyeForward = 0.06f } },
             { CarModel.Ferrari, new Config { file = "Ferrari", forward = Vector3.back, up = Vector3.up, eyeHeight = 0.80f, eyeForward = -0.05f } },
             { CarModel.R8, new Config { file = "R8", forward = Vector3.back, up = Vector3.up, eyeHeight = 0.80f, eyeForward = -0.05f } },
             { CarModel.Mustang, new Config { file = "Mustang", forward = Vector3.back, up = Vector3.up, eyeHeight = 0.80f, eyeForward = -0.05f } },
@@ -52,22 +52,28 @@ namespace RaceX.Car
             { CarModel.GtrNismo, new Config { file = "GtrNismo", forward = Vector3.back, up = Vector3.up, eyeHeight = 0.80f, eyeForward = -0.05f } },
             { CarModel.McLarenP1, new Config { file = "McLarenP1", forward = Vector3.back, up = Vector3.up, eyeHeight = 0.82f, eyeForward = -0.05f } },
             { CarModel.Bugatti, new Config { file = "Bugatti", forward = Vector3.back, up = Vector3.up, eyeHeight = 0.80f, eyeForward = -0.05f } },
-            { CarModel.F2008, new Config { file = "F2008", forward = Vector3.back, up = Vector3.up, eyeHeight = 0.74f, eyeForward = 0.02f } },
-            { CarModel.F1Studio, new Config { file = "F1Studio", forward = Vector3.back, up = Vector3.up, eyeHeight = 0.74f, eyeForward = 0.02f } },
+            { CarModel.F2008, new Config { file = "F2008", forward = Vector3.back, up = Vector3.up, eyeHeight = 0.58f, eyeForward = 0.06f } },
+            { CarModel.F1Studio, new Config { file = "F1Studio", forward = Vector3.back, up = Vector3.up, eyeHeight = 0.58f, eyeForward = 0.06f } },
         };
 
         static readonly Dictionary<string, Entry> cache = new Dictionary<string, Entry>();
 
         public static bool Available(CarModel model) => GetEntry(model) != null;
 
-        /// <summary>Carrega o modelo em segundo plano (não trava a thread principal). Roda o que GetEntry faz ao terminar.</summary>
-        public static IEnumerator PrewarmAsync(CarModel model)
+        /// <summary>Carrega o modelo em segundo plano (não trava a thread principal). Roda o que GetEntry faz ao terminar.
+        /// onProgress (opcional) reporta o progresso REAL do LoadAsync (0-1) — a barra do loading anda com carga verdadeira.</summary>
+        public static IEnumerator PrewarmAsync(CarModel model, System.Action<float> onProgress = null)
         {
             if (!configs.TryGetValue(model, out var cfg)) yield break;
             string key = model + ":" + cfg.file;
-            if (cache.TryGetValue(key, out var cached) && cached != null) yield break;
+            if (cache.TryGetValue(key, out var cached) && cached != null) { onProgress?.Invoke(1f); yield break; }
             var req = Resources.LoadAsync<GameObject>("CarModels/" + cfg.file);
-            yield return req;
+            while (!req.isDone)
+            {
+                onProgress?.Invoke(req.progress);
+                yield return null;
+            }
+            onProgress?.Invoke(1f);
             if (cache.ContainsKey(key) && cache[key] != null) yield break;
             var prefab = req.asset as GameObject;
             if (prefab == null)

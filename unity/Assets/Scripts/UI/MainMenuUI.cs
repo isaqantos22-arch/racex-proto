@@ -4,6 +4,7 @@ using RaceX.Car;
 using RaceX.Core;
 using RaceX.Track;
 using UnityEngine;
+using UnityEngine.Networking;
 using UnityEngine.UI;
 
 namespace RaceX.UI
@@ -11,7 +12,15 @@ namespace RaceX.UI
     /// <summary>Splash → Menu principal → Jogar → Configurações da corrida → Corrida.</summary>
     public class MainMenuUI : MonoBehaviour
     {
-        static readonly string[] TrackNames = { "Circuito Verde", "Desfiladeiro Solar", "Metrópole Noturna" };
+        static readonly string[] TrackNames =
+        {
+            "Circuito Verde", "Desfiladeiro Solar", "Metrópole Noturna", "Velocità Park",
+            "Principado à Beira-Mar", "Floresta de Ardenne", "Jardim da Baía", "Golfo Real",
+            "Serra do Café", "Circuito do Sol", "Parque Real", "Dragão Oriental",
+            "Corniche da Noite", "Porto Sul", "Ilha das Cascatas", "Vale Dourado",
+            "Colinas Verdes", "Campo do Norte", "Curvas do Danúbio", "Dunas do Norte",
+            "Fortaleza Antiga", "Colinas do Texas", "Estádio Central", "Faixa de Neon"
+        };
         static readonly string[] DifficultyNames = { "Fácil", "Médio", "Difícil", "Expert" };
         static readonly string[] CameraNames = { "Terceira pessoa", "Primeira pessoa", "Volante", "Frontal" };
         static readonly string[] QualityNames = { "Baixa", "Média", "Alta", "Ultra" };
@@ -19,6 +28,7 @@ namespace RaceX.UI
 
         Canvas canvas;
         RectTransform current;
+        static MainMenuUI instance;
         Action back;
         RaceSettings settings;
         Transform showroomCar;
@@ -34,24 +44,36 @@ namespace RaceX.UI
 
         string onlineName = "Jogador";
         string onlineCode = "AAAAAA";
-        int codeCursor;
         RectTransform lobbyScreen;
+        Transform lobbyList;
         Text onlineSetupStatus;
         Text lobbyStatus;
-        Transform lobbyList;
+        Text lobbyTrackLabel;
+        Text lobbyLapsLabel, lobbyCarsLabel, lobbyDiffLabel;
         Button lobbyReadyBtn;
         Button lobbyStartBtn;
+        Button lobbyTrackPrev, lobbyTrackNext;
+        Button[] lobbyOptButtons;
         bool carSentForRoom;
         InputField serverUrlField;
         float lobbyPollTimer;
+        InputField accEmailField;
+        InputField accPassField;
+        InputField accNameField;
+        InputField accPhotoField;
+        Text accountStatus;
+        RectTransform accountBody;
+        int accountTab;
 
         void Start()
         {
+            instance = this;
             Time.timeScale = 1f;
             settings = GameManager.Settings;
             UIFactory.EnsureEventSystem();
             canvas = UIFactory.CreateCanvas("MenuCanvas");
             GameAudio.EnterMenu();
+            AccountClient.RestoreSession();
             StartCoroutine(StartupFlow());
         }
 
@@ -68,6 +90,12 @@ namespace RaceX.UI
             if (settings.mode == GameMode.LocalSplitScreen)
                 yield return ImportedCarModels.PrewarmAsync(settings.players[1].car);
             RefreshShowroomCar();
+        }
+
+        /// <summary>Esconde/mostra a UI do menu principal (usado pelo modo carreira para não sobrepor telas).</summary>
+        internal static void SetMenuVisible(bool on)
+        {
+            if (instance != null && instance.canvas != null) instance.canvas.gameObject.SetActive(on);
         }
 
         void Update()
@@ -129,6 +157,26 @@ namespace RaceX.UI
             turntable = floor;
         }
 
+        Coroutine showroomRefreshRoutine;
+
+        /// <summary>Troca de carro no setup/garagem: carrega o modelo (FBX) em segundo plano antes de montar,
+        /// evitando o travamento visível que o Resources.Load síncrono causava ao trocar de carro.</summary>
+        internal void RefreshShowroomCarAsync()
+        {
+            if (showroomRefreshRoutine != null) StopCoroutine(showroomRefreshRoutine);
+            showroomRefreshRoutine = StartCoroutine(RefreshShowroomCarRoutine());
+        }
+
+        IEnumerator RefreshShowroomCarRoutine()
+        {
+            var p = settings.players[0];
+            yield return ImportedCarModels.PrewarmAsync(p.car);
+            if (settings.mode == GameMode.LocalSplitScreen)
+                yield return ImportedCarModels.PrewarmAsync(settings.players[1].car);
+            RefreshShowroomCar();
+            showroomRefreshRoutine = null;
+        }
+
         internal void RefreshShowroomCar()
         {
             float yaw = showroomCar != null ? showroomCar.eulerAngles.y : 200f;
@@ -136,7 +184,9 @@ namespace RaceX.UI
             if (showroomCar2 != null) Destroy(showroomCar2.gameObject);
             bool split = settings.mode == GameMode.LocalSplitScreen;
             var p = settings.players[0];
-            var car = CarFactory.Create(CarSpec.CreateDefault(p.car), p.colorIndex, "Showroom_" + p.car, new Vector3(split ? -2.2f : 0f, 0.1f, 0f), Quaternion.Euler(0f, yaw, 0f));
+            var spec = CarSpec.CreateDefault(p.car);
+            float restY = Mathf.Max(0.1f, spec.wheelRadius - spec.suspensionDistance * 0.5f);
+            var car = CarFactory.Create(CarSpec.CreateDefault(p.car), p.colorIndex, "Showroom_" + p.car, new Vector3(split ? -2.2f : 0f, restY, 0f), Quaternion.Euler(0f, yaw, 0f));
             var rb = car.GetComponent<Rigidbody>();
             if (rb != null) rb.isKinematic = true;
             car.enabled = false;
@@ -144,7 +194,9 @@ namespace RaceX.UI
             if (split)
             {
                 var p2 = settings.players[1];
-                var car2 = CarFactory.Create(CarSpec.CreateDefault(p2.car), p2.colorIndex, "Showroom_" + p2.car, new Vector3(2.2f, 0.1f, 0f), Quaternion.Euler(0f, yaw, 0f));
+                var spec2 = CarSpec.CreateDefault(p2.car);
+                float restY2 = Mathf.Max(0.1f, spec2.wheelRadius - spec2.suspensionDistance * 0.5f);
+                var car2 = CarFactory.Create(CarSpec.CreateDefault(p2.car), p2.colorIndex, "Showroom_" + p2.car, new Vector3(2.2f, restY2, 0f), Quaternion.Euler(0f, yaw, 0f));
                 var rb2 = car2.GetComponent<Rigidbody>();
                 if (rb2 != null) rb2.isKinematic = true;
                 car2.enabled = false;
@@ -222,17 +274,23 @@ namespace RaceX.UI
             showroomWide = true;
             SetShowroomCam(new Vector3(0f, 2.5f, -8.6f), 10f);
             demo.SetAllowed(true);
-            var c = new Vector2(0.5f, 0.5f);
-            var bsize = new Vector2(330f, 60f);
+            // Âncora pelo TOPO da área segura (em vez do centro): garante que o primeiro item
+            // nunca fique cortado, independente da proporção real da tela do aparelho.
+            var top = new Vector2(0.5f, 1f);
+            var bsize = new Vector2(360f, 62f);
+            const float startY = -150f;   // abaixo do título "RACEX PROTO"
+            const float step = 84f;
+            int row = 0;
 
-            MenuTheme.StyledButton(s, "MainPlay", "JOGAR", c, c, new Vector2(-745f, 412f), bsize, 26, ShowPlay);
-            MenuTheme.StyledButton(s, "MainOnline", "ONLINE", c, c, new Vector2(-745f, 334f), bsize, 26, ShowOnlineSetup);
-            MenuTheme.StyledButton(s, "MainGarage", "GARAGEM", c, c, new Vector2(-745f, 256f), bsize, 26, ShowGarage);
-            MenuTheme.StyledButton(s, "MainProgress", "PROGRESSO", c, c, new Vector2(-745f, 178f), bsize, 26, ShowProgress);
-            MenuTheme.StyledButton(s, "MainSettings", "CONFIGURAÇÕES", c, c, new Vector2(-745f, 100f), bsize, 26, ShowSettings);
-            MenuTheme.StyledButton(s, "MainRecords", "RECORDES", c, c, new Vector2(-745f, 22f), bsize, 26, ShowRecords);
-            MenuTheme.StyledButton(s, "MainCredits", "CRÉDITOS", c, c, new Vector2(-745f, -56f), bsize, 26, ShowCredits);
-            if (!Application.isMobilePlatform) MenuTheme.StyledButton(s, "MainQuit", "SAIR", c, c, new Vector2(-745f, -134f), bsize, 26, Application.Quit);
+            MenuTheme.StyledButton(s, "MainCareer", "MODO CARREIRA", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, () => CareerFlow.Open());
+            MenuTheme.StyledButton(s, "MainPlay", "JOGAR", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, ShowPlay);
+            MenuTheme.StyledButton(s, "MainGarage", "GARAGEM", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, ShowGarage);
+            MenuTheme.StyledButton(s, "MainProgress", "PROGRESSO", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, ShowProgress);
+            MenuTheme.StyledButton(s, "MainSettings", "CONFIGURAÇÕES", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, ShowSettings);
+            MenuTheme.StyledButton(s, "MainRecords", "RECORDES", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, ShowRecords);
+            MenuTheme.StyledButton(s, "MainAccount", "CONTA", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, ShowAccount);
+            MenuTheme.StyledButton(s, "MainCredits", "CRÉDITOS", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, ShowCredits);
+            if (!Application.isMobilePlatform) MenuTheme.StyledButton(s, "MainQuit", "SAIR", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, Application.Quit);
         }
 
         internal void ShowPlay()
@@ -240,20 +298,28 @@ namespace RaceX.UI
             back = ShowMain;
             var s = NewScreen("JOGAR");
             MenuButton(s, "SINGLE PLAYER", 0, () => { settings.mode = GameMode.SinglePlayer; ShowRaceSetup(); });
-            var local = MenuButton(s, "MULTIPLAYER LOCAL", 1, () => { settings.mode = GameMode.LocalSplitScreen; ShowRaceSetup(); });
-            local.interactable = !Application.isMobilePlatform;
-            MenuButton(s, "ONLINE", 2, ShowOnlineSetup);
-            MenuButton(s, "VOLTAR", 4, ShowMain);
+            if (Application.isMobilePlatform)
+            {
+                MenuButton(s, "ONLINE", 1, ShowOnlineSetup);
+                MenuButton(s, "VOLTAR", 2, ShowMain);
+            }
+            else
+            {
+                MenuButton(s, "MULTIPLAYER LOCAL", 1, () => { settings.mode = GameMode.LocalSplitScreen; ShowRaceSetup(); });
+                MenuButton(s, "ONLINE", 2, ShowOnlineSetup);
+                MenuButton(s, "VOLTAR", 4, ShowMain);
+            }
         }
 
         internal void ShowOnlineSetup()
         {
             back = () => { UnbindOnline(); ShowMain(); };
             lobbyScreen = null;
+            if (AccountClient.IsLoggedIn && !string.IsNullOrWhiteSpace(AccountClient.Name)) onlineName = AccountClient.Name;
             var s = NewScreen("ONLINE");
             ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.86f);
             int row = 0;
-            InfoRow(s, "NOME", row++, () => onlineName);
+            NameRow(s, row++);
             ServerUrlRow(s, row++);
             OptionRow(s, "Carros IA", row++, () => SettingsManager.OnlineAiCount + " NPCs", d => SettingsManager.OnlineAiCount = Mathf.Clamp(SettingsManager.OnlineAiCount + d * 2, 0, 8));
             ActionRow(s, "CRIAR SALA", row++, CreateOnlineRoom);
@@ -317,42 +383,245 @@ namespace RaceX.UI
 
         static readonly string CodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
+        InputField codeInput;
+
+        /// <summary>Campo de texto editável do nome do jogador — abre o teclado do celular ao tocar.</summary>
+        void NameRow(RectTransform parent, int row)
+        {
+            float y = 330f - row * 84f;
+            var c = new Vector2(0.5f, 0.5f);
+            UIFactory.Label("NameLabel", parent, "NOME", 32, TextAnchor.MiddleRight, c, new Vector2(1f, 0.5f), new Vector2(ContentX - 250f, y), new Vector2(380f, 72f));
+            var bg = UIFactory.Panel("NameFieldBg", parent, c, c, new Vector2(ContentX + 110f, y), new Vector2(560f, 72f), new Color(1f, 1f, 1f, 0.07f));
+            var ph = UIFactory.Label("NameFieldPh", bg.transform, "Seu nome", 34, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(520f, 60f), new Color(1f, 1f, 1f, 0.25f));
+            ph.raycastTarget = false;
+            var txt = UIFactory.Label("NameFieldText", bg.transform, onlineName, 34, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(520f, 60f), MenuTheme.Text);
+            txt.raycastTarget = false;
+            var input = bg.gameObject.AddComponent<InputField>();
+            input.targetGraphic = bg;
+            input.placeholder = ph;
+            input.textComponent = txt;
+            input.text = onlineName;
+            input.characterLimit = 14;
+            input.contentType = InputField.ContentType.Standard;
+
+            input.onValueChanged.AddListener(v => onlineName = string.IsNullOrWhiteSpace(v) ? "Jogador" : v);
+        }
+
         void CodeRow(RectTransform parent, int row)
         {
             float y = 330f - row * 84f;
             var c = new Vector2(0.5f, 0.5f);
             UIFactory.Label("CodeLabel", parent, "CÓDIGO DA SALA", 32, TextAnchor.MiddleRight, c, new Vector2(1f, 0.5f), new Vector2(ContentX - 250f, y), new Vector2(380f, 72f));
-            for (int i = 0; i < onlineCode.Length; i++)
-            {
-                int idx = i;
-                var cell = MenuTheme.StyledButton(parent, "CodeCell" + i, onlineCode[idx].ToString(), c, c, new Vector2(ContentX - 130f + i * 80f, y), new Vector2(72f, 72f), 34, () => { codeCursor = idx; RefreshCodeRow(); });
-                cell.transform.Find("CodeCell" + i + "_Label").GetComponent<Text>().color = idx == codeCursor ? MenuTheme.Accent : MenuTheme.TextDim;
-            }
-            MenuTheme.StyledButton(parent, "CodePrev", "<", c, c, new Vector2(ContentX - 215f, y), new Vector2(76f, 68f), 38, () => { onlineCode = StepCodeChar(codeCursor, -1); RefreshCodeRow(); });
-            MenuTheme.StyledButton(parent, "CodeNext", ">", c, c, new Vector2(ContentX + 356f, y), new Vector2(76f, 68f), 38, () => { onlineCode = StepCodeChar(codeCursor, 1); RefreshCodeRow(); });
+            var bg = UIFactory.Panel("CodeFieldBg", parent, c, c, new Vector2(ContentX + 110f, y), new Vector2(560f, 72f), new Color(1f, 1f, 1f, 0.07f));
+            var ph = UIFactory.Label("CodeFieldPh", bg.transform, "EX.: 7NKUVQ", 34, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(520f, 60f), new Color(1f, 1f, 1f, 0.25f));
+            ph.raycastTarget = false;
+            var txt = UIFactory.Label("CodeFieldText", bg.transform, onlineCode, 34, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(520f, 60f), MenuTheme.Text);
+            txt.raycastTarget = false;
+            var input = bg.gameObject.AddComponent<InputField>();
+            input.targetGraphic = bg;
+            input.placeholder = ph;
+            input.textComponent = txt;
+            input.text = onlineCode;
+            input.characterLimit = 6;
+            input.contentType = InputField.ContentType.Alphanumeric;
+
+            input.onValueChanged.AddListener(v => { onlineCode = NormalizeCode(v); if (input != null && input.text != onlineCode) { input.text = onlineCode; input.MoveTextEnd(false); } });
+            codeInput = input;
         }
 
-        string StepCodeChar(int pos, int delta)
+        /// <summary>Mantém apenas caracteres do alfabeto de códigos (A-Z sem I/O e 2-9), em maiúsculas, até 6.</summary>
+        string NormalizeCode(string raw)
         {
-            var arr = onlineCode.ToCharArray();
-            int idx = CodeAlphabet.IndexOf(arr[pos]);
-            if (idx < 0) idx = 0;
-            idx = (idx + delta % CodeAlphabet.Length + CodeAlphabet.Length) % CodeAlphabet.Length;
-            arr[pos] = CodeAlphabet[idx];
-            return new string(arr);
+            if (string.IsNullOrEmpty(raw)) return "";
+            var sb = new System.Text.StringBuilder();
+            foreach (char chRaw in raw.ToUpperInvariant())
+            {
+                char ch = chRaw;
+                if (ch == 'I') ch = 'J';
+                if (ch == 'O') ch = '0';
+                if (CodeAlphabet.IndexOf(ch) >= 0) sb.Append(ch);
+                if (sb.Length >= 6) break;
+            }
+            return sb.ToString();
         }
 
-        void RefreshCodeRow()
+        // ---------- CONTA / PERFIL (Supabase) ----------
+        void ShowAccount()
         {
-            if (current == null) return;
-            for (int i = 0; i < onlineCode.Length; i++)
+            back = ShowMain;
+            var s = NewScreen(AccountClient.IsLoggedIn ? "MINHA CONTA" : "ENTRAR");
+            ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.86f);
+            var c = new Vector2(0.5f, 0.5f);
+            accountStatus = UIFactory.Label("AccountStatus", s, "", 26, TextAnchor.MiddleCenter, c, c, new Vector2(0f, -430f), new Vector2(1200f, 56f), MenuTheme.Accent);
+            accountBody = UIFactory.Rect("AccountBody", s, c, c, c, new Vector2(0f, 30f), new Vector2(1300f, 780f));
+            if (AccountClient.IsLoggedIn) ShowAccountProfile();
+            else ShowAccountAuth();
+        }
+
+        void SetAccountStatus(string msg)
+        {
+            if (accountStatus != null) accountStatus.text = msg ?? "";
+        }
+
+        InputField AccountField(RectTransform parent, string label, int row, string value, InputField.ContentType type, string placeholder = "")
+        {
+            float y = 170f - row * 104f;
+            var c = new Vector2(0.5f, 0.5f);
+            UIFactory.Label("AccLbl" + label, parent, label, 30, TextAnchor.MiddleRight, c, new Vector2(1f, 0.5f), new Vector2(-670f, y), new Vector2(420f, 76f));
+            var bg = UIFactory.Panel("AccBg" + label, parent, c, c, new Vector2(70f, y), new Vector2(780f, 80f), new Color(1f, 1f, 1f, 0.07f));
+            var ph = UIFactory.Label("AccPh" + label, bg.transform, placeholder, 30, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(740f, 64f), new Color(1f, 1f, 1f, 0.25f));
+            ph.raycastTarget = false;
+            var txt = UIFactory.Label("AccTx" + label, bg.transform, value ?? "", 30, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(740f, 64f), MenuTheme.Text);
+            txt.raycastTarget = false;
+            var input = bg.gameObject.AddComponent<InputField>();
+            input.targetGraphic = bg;
+            input.placeholder = ph;
+            input.textComponent = txt;
+            input.text = value ?? "";
+            input.contentType = type;
+            return input;
+        }
+
+        void ShowAccountAuth()
+        {
+            accountTab = 0;
+            foreach (Transform child in accountBody) Destroy(child.gameObject);
+            accEmailField = AccountField(accountBody, "E-MAIL", 0, AccountClient.Email ?? "", InputField.ContentType.EmailAddress, "voce@exemplo.com");
+            accPassField = AccountField(accountBody, "SENHA", 1, "", InputField.ContentType.Password, "mínimo 6 caracteres");
+            accNameField = AccountField(accountBody, "NOME NO JOGO", 2, AccountClient.Name ?? "", InputField.ContentType.Standard, "como aparecerá no lobby");
+            var c = new Vector2(0.5f, 0.5f);
+            MenuTheme.StyledButton(accountBody, "AccLogin", "ENTRAR", c, c, new Vector2(-310f, -240f), new Vector2(540f, 88f), 32, AccountDoLogin);
+            MenuTheme.StyledButton(accountBody, "AccSignup", "CRIAR CONTA", c, c, new Vector2(310f, -240f), new Vector2(540f, 88f), 32, AccountDoSignup);
+        }
+
+        void AccountDoLogin()
+        {
+            if (accEmailField == null || accPassField == null) return;
+            SetAccountStatus("Entrando...");
+            AccountClient.LogIn(accEmailField.text.Trim(), accPassField.text, (ok, err) =>
             {
-                var cell = current.Find("CodeCell" + i);
-                if (cell == null) continue;
-                var label = cell.Find("CodeCell" + i + "_Label").GetComponent<Text>();
-                label.text = onlineCode[i].ToString();
-                label.color = i == codeCursor ? MenuTheme.Accent : MenuTheme.TextDim;
+                if (ok)
+                {
+                    onlineName = AccountClient.Name;
+                    SetAccountStatus("");
+                    ShowAccountProfile();
+                }
+                else SetAccountStatus(err);
+            });
+        }
+
+        void AccountDoSignup()
+        {
+            if (accEmailField == null || accPassField == null) return;
+            SetAccountStatus("Criando conta...");
+            AccountClient.SignUp(accEmailField.text.Trim(), accPassField.text, string.IsNullOrWhiteSpace(accNameField.text) ? "Jogador" : accNameField.text.Trim(), (ok, err) =>
+            {
+                if (ok)
+                {
+                    onlineName = AccountClient.Name;
+                    SetAccountStatus("Conta criada e conectada!");
+                    ShowAccountProfile();
+                }
+                else SetAccountStatus(err);
+            });
+        }
+
+        void ShowAccountProfile()
+        {
+            accountTab = 1;
+            foreach (Transform child in accountBody) Destroy(child.gameObject);
+            accEmailField = null;
+            accPassField = null;
+            var c = new Vector2(0.5f, 0.5f);
+            var avatar = UIFactory.Panel("Avatar", accountBody, c, c, new Vector2(-560f, 220f), new Vector2(150f, 150f), AvatarColorOf(AccountClient.AvatarColor));
+            var initial = UIFactory.Label("AvatarInitial", avatar.transform, string.IsNullOrEmpty(AccountClient.Name) ? "J" : AccountClient.Name.Substring(0, 1).ToUpperInvariant(), 68, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(130f, 130f), Color.white);
+            initial.raycastTarget = false;
+            if (!string.IsNullOrEmpty(AccountClient.Photo) && AccountClient.Photo.Length > 128)
+            {
+                try
+                {
+                    var tex = new Texture2D(2, 2);
+                    if (tex.LoadImage(Convert.FromBase64String(AccountClient.Photo)))
+                    {
+                        var shot = UIFactory.Rect("AvatarPhoto", avatar.transform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(140f, 140f));
+                        var raw = shot.gameObject.AddComponent<RawImage>();
+                        raw.texture = tex;
+                        raw.raycastTarget = false;
+                        initial.text = "";
+                    }
+                    else Destroy(tex);
+                }
+                catch (Exception) { /* foto corrompida: mantém a inicial */ }
             }
+            UIFactory.Label("AccEmail", accountBody, AccountClient.Email, 30, TextAnchor.MiddleLeft, c, c, new Vector2(-330f, 220f), new Vector2(760f, 70f), MenuTheme.Text);
+            accNameField = AccountField(accountBody, "NOME NO JOGO", 1, AccountClient.Name ?? "Jogador", InputField.ContentType.Standard);
+            accPhotoField = AccountField(accountBody, "FOTO (URL)", 2, "", InputField.ContentType.Standard, "cole o endereço de uma imagem");
+            MenuTheme.StyledButton(accountBody, "AccPhoto", "CARREGAR FOTO", c, c, new Vector2(560f, 170f - 2 * 104f), new Vector2(320f, 80f), 26, AccountDoPhoto);
+            var colorBtn = MenuTheme.StyledButton(accountBody, "AccColor", "COR DO AVATAR: " + (AccountClient.AvatarColor + 1), c, c, new Vector2(-560f, 170f - 3 * 104f), new Vector2(520f, 80f), 28, null);
+            int nextColor = AccountClient.AvatarColor;
+            colorBtn.onClick.AddListener(() =>
+            {
+                nextColor = (nextColor + 1) & 7;
+                colorBtn.transform.Find("AccColor_Label").GetComponent<Text>().text = "COR DO AVATAR: " + (nextColor + 1);
+                colorBtn.transform.Find("AccColor_Label").GetComponent<Text>().color = Color.white;
+                colorBtn.image.color = AvatarColorOf(nextColor);
+            });
+            colorBtn.image.color = AvatarColorOf(AccountClient.AvatarColor);
+            UIFactory.Label("AccStats", accountBody,
+                string.Format("VITÓRIAS {0}    PÓDIOS {1}    TÍTULOS {2}    CORRIDAS {3}", AccountClient.Wins, AccountClient.Podiums, AccountClient.Titles, AccountClient.Races),
+                28, TextAnchor.MiddleCenter, c, c, new Vector2(120f, 170f - 3 * 104f), new Vector2(1000f, 80f), MenuTheme.Accent);
+            MenuTheme.StyledButton(accountBody, "AccSave", "SALVAR PERFIL", c, c, new Vector2(-310f, -300f), new Vector2(540f, 88f), 32, () => AccountDoSave(nextColor));
+            MenuTheme.StyledButton(accountBody, "AccLogout", "SAIR DA CONTA", c, c, new Vector2(310f, -300f), new Vector2(540f, 88f), 32, AccountDoLogout);
+        }
+
+        Color AvatarColorOf(int i) { return Color.HSVToRGB((i & 7) / 8f, 0.62f, 0.95f); }
+
+        void AccountDoPhoto()
+        {
+            if (accPhotoField == null || string.IsNullOrWhiteSpace(accPhotoField.text)) { SetAccountStatus("Cole antes a URL de uma imagem"); return; }
+            SetAccountStatus("Baixando foto...");
+            StartCoroutine(AccountPhotoRoutine(accPhotoField.text.Trim()));
+        }
+
+        IEnumerator AccountPhotoRoutine(string url)
+        {
+            var req = UnityWebRequestTexture.GetTexture(url);
+            yield return req.SendWebRequest();
+            if (req.result != UnityWebRequest.Result.Success)
+            {
+                SetAccountStatus("Não consegui baixar essa imagem");
+                yield break;
+            }
+            var tex = DownloadHandlerTexture.GetContent(req);
+            var bytes = tex.EncodeToPNG();
+            Destroy(tex);
+            if (bytes == null || bytes.Length > 300000)
+            {
+                SetAccountStatus("Imagem grande demais (máx. ~300 KB)");
+                yield break;
+            }
+            AccountClient.SetProfile(accNameField != null ? accNameField.text : null, Convert.ToBase64String(bytes), AccountClient.AvatarColor, (ok, err) => SetAccountStatus(ok ? "Foto salva!" : err));
+        }
+
+        void AccountDoSave(int color)
+        {
+            SetAccountStatus("Salvando...");
+            AccountClient.SetProfile(accNameField != null ? accNameField.text : null, null, color, (ok, err) =>
+            {
+                if (ok)
+                {
+                    onlineName = AccountClient.Name;
+                    SetAccountStatus("Perfil salvo!");
+                }
+                else SetAccountStatus(err);
+            });
+        }
+
+        void AccountDoLogout()
+        {
+            AccountClient.Logout();
+            SetAccountStatus("");
+            ShowAccountAuth();
         }
 
         void CreateOnlineRoom()
@@ -383,14 +652,88 @@ namespace RaceX.UI
             var c = new Vector2(0.5f, 0.5f);
             lobbyStatus = UIFactory.Label("LobbyStatus", s, "Conectando...", 30, TextAnchor.MiddleCenter, c, c, new Vector2(ContentX, 300f), new Vector2(1200f, 46f), MenuTheme.Text);
             UIFactory.Label("LobbyServer", s, "Servidor: " + OnlineClient.ServerUrl, 22, TextAnchor.MiddleCenter, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 150f), new Vector2(1200f, 30f), MenuTheme.TextDim);
-            UIFactory.Panel("LobbyBox", s, c, c, new Vector2(ContentX, 110f), new Vector2(1100f, 360f), new Color(1f, 1f, 1f, 0.05f));
-            lobbyList = UIFactory.Rect("LobbyList", s, c, c, new Vector2(0.5f, 0.5f), new Vector2(ContentX, 110f), new Vector2(1040f, 340f)).transform;
+            UIFactory.Panel("LobbyBox", s, c, c, new Vector2(ContentX, 170f), new Vector2(1100f, 300f), new Color(1f, 1f, 1f, 0.05f));
+            lobbyList = UIFactory.Rect("LobbyList", s, c, c, new Vector2(0.5f, 0.5f), new Vector2(ContentX, 170f), new Vector2(1040f, 280f)).transform;
             var b = new Vector2(0.5f, 0f);
             lobbyReadyBtn = MenuTheme.StyledButton(s, "LobbyReady", "PRONTO", b, b, new Vector2(-400f, 40f), new Vector2(360f, 100f), 36, ToggleReady);
             lobbyStartBtn = MenuTheme.StyledButton(s, "LobbyStart", "COMEÇAR", b, b, new Vector2(0f, 40f), new Vector2(360f, 100f), 36, () => OnlineClient.StartRace());
             lobbyStartBtn.interactable = false;
             MenuTheme.StyledButton(s, "LobbyBack", "VOLTAR", b, b, new Vector2(400f, 40f), new Vector2(360f, 100f), 36, LeaveLobby);
+            // CONFIGURAÇÕES DA SALA (as MESMAS opções do single player): PISTA (24) + VOLTAS/CARROS/DIFICULDADE.
+            // Host navega < >; os demais só veem. O servidor sanitiza, aplica e re-transmite no lobby.
+            lobbyTrackLabel = UIFactory.Label("LobbyTrack", s, "", 30, TextAnchor.MiddleCenter, b, b, new Vector2(0f, 280f), new Vector2(700f, 40f), MenuTheme.Accent);
+            lobbyTrackPrev = MenuTheme.StyledButton(s, "LobbyTrackPrev", "<", b, b, new Vector2(-440f, 280f), new Vector2(110f, 90f), 34, () => CycleRoomTrack(-1));
+            lobbyTrackNext = MenuTheme.StyledButton(s, "LobbyTrackNext", ">", b, b, new Vector2(440f, 280f), new Vector2(110f, 90f), 34, () => CycleRoomTrack(1));
+            lobbyOptButtons = new Button[6];
+            lobbyLapsLabel = UIFactory.Label("LobbyLaps", s, "", 26, TextAnchor.MiddleCenter, b, b, new Vector2(-420f, 185f), new Vector2(300f, 40f), MenuTheme.Text);
+            lobbyCarsLabel = UIFactory.Label("LobbyCars", s, "", 26, TextAnchor.MiddleCenter, b, b, new Vector2(0f, 185f), new Vector2(300f, 40f), MenuTheme.Text);
+            lobbyDiffLabel = UIFactory.Label("LobbyDiff", s, "", 26, TextAnchor.MiddleCenter, b, b, new Vector2(420f, 185f), new Vector2(300f, 40f), MenuTheme.Text);
+            lobbyOptButtons[0] = MenuTheme.StyledButton(s, "LapsPrev", "<", b, b, new Vector2(-590f, 185f), new Vector2(90f, 80f), 30, () => CycleRoomSetting(0, -1));
+            lobbyOptButtons[1] = MenuTheme.StyledButton(s, "LapsNext", ">", b, b, new Vector2(-250f, 185f), new Vector2(90f, 80f), 30, () => CycleRoomSetting(0, 1));
+            lobbyOptButtons[2] = MenuTheme.StyledButton(s, "CarsPrev", "<", b, b, new Vector2(-170f, 185f), new Vector2(90f, 80f), 30, () => CycleRoomSetting(1, -1));
+            lobbyOptButtons[3] = MenuTheme.StyledButton(s, "CarsNext", ">", b, b, new Vector2(170f, 185f), new Vector2(90f, 80f), 30, () => CycleRoomSetting(1, 1));
+            lobbyOptButtons[4] = MenuTheme.StyledButton(s, "DiffPrev", "<", b, b, new Vector2(250f, 185f), new Vector2(90f, 80f), 30, () => CycleRoomSetting(2, -1));
+            lobbyOptButtons[5] = MenuTheme.StyledButton(s, "DiffNext", ">", b, b, new Vector2(590f, 185f), new Vector2(90f, 80f), 30, () => CycleRoomSetting(2, 1));
             RefreshLobby();
+        }
+
+        /// <summary>Ids de pista no SERVIDOR — MESMA ORDEM de TrackNames/TrackLibrary.All (24 pistas).</summary>
+        static readonly string[] ServerTrackIds =
+        {
+            "forest", "desert", "city", "velocita", "principado", "ardenne", "jardim", "golfo",
+            "serra", "sol", "parque", "dragao", "corniche", "porto", "cascatas", "dourado",
+            "colinas", "norte", "danubio", "dunas", "fortaleza", "texas", "estadio", "neon"
+        };
+
+        /// <summary>Total de carros aceito pelo servidor (humanos + IA) — server/utils.js TOTAL_CAR_OPTIONS.</summary>
+        static readonly int[] ServerCarCounts = { 4, 6, 8, 10, 12, 16 };
+        static readonly string[] ServerDiffIds = { "easy", "medium", "hard", "expert" };
+
+        int RoomTrackIndex => Mathf.Clamp(System.Array.IndexOf(ServerTrackIds, OnlineClient.RoomTrackId), 0, TrackNames.Length - 1);
+
+        void CycleRoomTrack(int dir)
+        {
+            if (!OnlineClient.IsHost) return;
+            int next = (int)Mathf.Repeat(RoomTrackIndex + dir, ServerTrackIds.Length);
+            OnlineClient.SetRoomTrack(ServerTrackIds[next]); // servidor aplica e re-transmite no lobby
+        }
+
+        /// <summary>Host altera VOLTAS (0), CARROS (1) ou DIFICULDADE (2) — reenvia o conjunto completo da sala.</summary>
+        void CycleRoomSetting(int which, int dir)
+        {
+            if (!OnlineClient.IsHost) return;
+            string track = ServerTrackIds[RoomTrackIndex];
+            int laps = OnlineClient.RoomLaps;
+            int cars = OnlineClient.RoomTotalCars;
+            string diff = OnlineClient.RoomDifficulty;
+            switch (which)
+            {
+                case 0:
+                {
+                    int i = Mathf.Max(0, System.Array.IndexOf(RaceSettings.LapOptions, laps));
+                    laps = RaceSettings.LapOptions[(int)Mathf.Repeat(i + dir, RaceSettings.LapOptions.Length)];
+                    break;
+                }
+                case 1:
+                {
+                    int i = Mathf.Max(0, System.Array.IndexOf(ServerCarCounts, cars));
+                    cars = ServerCarCounts[(int)Mathf.Repeat(i + dir, ServerCarCounts.Length)];
+                    break;
+                }
+                case 2:
+                {
+                    int i = Mathf.Max(0, System.Array.IndexOf(ServerDiffIds, diff));
+                    diff = ServerDiffIds[(int)Mathf.Repeat(i + dir, ServerDiffIds.Length)];
+                    break;
+                }
+            }
+            OnlineClient.SendRoomSettings(track, laps, cars, diff);
+        }
+
+        string RoomDiffName()
+        {
+            int i = System.Array.IndexOf(ServerDiffIds, OnlineClient.RoomDifficulty);
+            return DifficultyNames[Mathf.Clamp(i, 0, DifficultyNames.Length - 1)];
         }
 
         void RefreshLobby()
@@ -430,6 +773,19 @@ namespace RaceX.UI
             {
                 bool canStart = OnlineClient.IsHost && list.Count > 0 && list.TrueForAll(p => p.ready);
                 lobbyStartBtn.interactable = canStart;
+            }
+            if (lobbyTrackLabel != null)
+            {
+                bool host = OnlineClient.IsHost;
+                lobbyTrackLabel.text = "PISTA  " + TrackNames[RoomTrackIndex] + (host ? "" : "  (só o anfitrião muda)");
+                if (lobbyTrackPrev != null) lobbyTrackPrev.interactable = host;
+                if (lobbyTrackNext != null) lobbyTrackNext.interactable = host;
+                if (lobbyLapsLabel != null) lobbyLapsLabel.text = "VOLTAS  " + OnlineClient.RoomLaps;
+                if (lobbyCarsLabel != null) lobbyCarsLabel.text = "CARROS  " + OnlineClient.RoomTotalCars;
+                if (lobbyDiffLabel != null) lobbyDiffLabel.text = "NÍVEL  " + RoomDiffName();
+                if (lobbyOptButtons != null)
+                    foreach (var ob in lobbyOptButtons)
+                        if (ob != null) ob.interactable = host;
             }
         }
 
@@ -528,8 +884,30 @@ namespace RaceX.UI
 
         static TrackId ServerTrack(string id) => id switch
         {
+            "forest" => TrackId.ForestCircuit,
             "desert" => TrackId.DesertCanyon,
             "city" => TrackId.NightCity,
+            "velocita" => TrackId.Velocita,
+            "principado" => TrackId.Principado,
+            "ardenne" => TrackId.Ardenne,
+            "jardim" => TrackId.JardimDaBaia,
+            "golfo" => TrackId.GolfoReal,
+            "serra" => TrackId.SerraDoCafe,
+            "sol" => TrackId.CircuitoDoSol,
+            "parque" => TrackId.ParqueReal,
+            "dragao" => TrackId.DragaoOriental,
+            "corniche" => TrackId.CornicheDaNoite,
+            "porto" => TrackId.PortoSul,
+            "cascatas" => TrackId.IlhaDasCascatas,
+            "dourado" => TrackId.ValeDourado,
+            "colinas" => TrackId.ColinasVerdes,
+            "norte" => TrackId.CampoDoNorte,
+            "danubio" => TrackId.CurvasDoDanubio,
+            "dunas" => TrackId.DunasDoNorte,
+            "fortaleza" => TrackId.Fortaleza,
+            "texas" => TrackId.ColinasDoTexas,
+            "estadio" => TrackId.EstadioCentral,
+            "neon" => TrackId.NeonStrip,
             _ => TrackId.ForestCircuit
         };
 
@@ -597,17 +975,18 @@ namespace RaceX.UI
             ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.82f);
             int row = 0;
             OptionRow(s, "Pista", row++, () => TrackNames[(int)settings.track], d => settings.track = (TrackId)Step((int)settings.track, d, TrackNames.Length));
-            OptionRow(s, "Voltas", row++, () => settings.laps.ToString(), d => settings.laps = StepIn(RaceSettings.LapOptions, settings.laps, d));
+            OptionRow(s, "Voltas", row++, () => settings.laps <= 0 ? "REAIS (" + TrackLibrary.RealLaps(settings.track) + ")" : settings.laps.ToString(), d => settings.laps = StepIn(RaceSettings.LapOptions, settings.laps, d));
             OptionRow(s, "Adversários", row++, () => settings.totalCars == RaceSettings.ClassicCarCount ? "Clássico (8)" : settings.totalCars.ToString(),
                 d => settings.totalCars = StepIn(RaceSettings.CarCountOptions, settings.totalCars, d));
             OptionRow(s, "Dificuldade", row++, () => DifficultyNames[(int)settings.difficulty], d => settings.difficulty = (Difficulty)Step((int)settings.difficulty, d, 4));
+            OptionRow(s, "Pit Stop", row++, () => settings.pitStops ? "LIGADO (com estratégia)" : "DESLIGADO", d => settings.pitStops = !settings.pitStops);
             OptionRow(s, "Categoria", row++, () => settings.formulaOnly ? "F1" : "GT",
                 d =>
                 {
                     settings.formulaOnly = !settings.formulaOnly;
                     if (settings.formulaOnly) { settings.players[0].car = CarModel.F1; settings.players[1].car = CarModel.F1; }
                     else { settings.players[0].car = CarModel.Titan; settings.players[1].car = CarModel.Titan; }
-                    RefreshShowroomCar();
+                    RefreshShowroomCarAsync();
                 });
 
             if (!split) OptionRow(s, "Câmera", row++, () => CameraNames[(int)settings.players[0].startCamera], d => settings.players[0].startCamera = (CameraView)Step((int)settings.players[0].startCamera, d, 4));
@@ -619,15 +998,15 @@ namespace RaceX.UI
                 string tag = split ? $"J{p + 1} " : "";
                 OptionRow(s, tag + "Carro", row++, () => CarLabel(ps.car), d =>
                 {
-                    if (settings.formulaOnly) { ps.car = CarModel.F1; RefreshShowroomCar(); return; }
+                    if (settings.formulaOnly) { ps.car = CarModel.F1; RefreshShowroomCarAsync(); return; }
                     ps.car = (CarModel)Step((int)ps.car, d, ModelCount(settings));
-                    RefreshShowroomCar();
+                    RefreshShowroomCarAsync();
                 });
                 OptionRow(s, tag + "Cor", row++, () => CarPalette.Names[ps.colorIndex], d =>
                 {
                     ps.colorIndex = Step(ps.colorIndex, d, CarPalette.Colors.Length);
                     if (split && settings.players[0].colorIndex == settings.players[1].colorIndex) ps.colorIndex = Step(ps.colorIndex, d, CarPalette.Colors.Length);
-                    RefreshShowroomCar();
+                    RefreshShowroomCarAsync();
                 });
             }
 
@@ -686,7 +1065,7 @@ namespace RaceX.UI
                 float cx = 215f + (i % 7 - 3) * 126f;
                 float cy = 316f - (i / 7) * 56f;
                 MenuTheme.StyledButton(s, "GarageCar" + i, CarLabel(cm).Split(' ')[0], c, c, new Vector2(cx, cy), new Vector2(118f, 46f), 20,
-                    () => { garageIndex = (int)cm; settings.players[0].car = cm; RefreshShowroomCar(); ShowGarage(); });
+                    () => { garageIndex = (int)cm; settings.players[0].car = cm; RefreshShowroomCarAsync(); ShowGarage(); });
                 if (sel) UIFactory.Panel("GarageSel" + i, s, c, c, new Vector2(cx, cy - 26f), new Vector2(114f, 4f), MenuTheme.Accent);
             }
 
@@ -735,7 +1114,7 @@ namespace RaceX.UI
         {
             garageIndex = Step(garageIndex, delta, AllModels.Length);
             settings.players[0].car = (CarModel)garageIndex;
-            RefreshShowroomCar();
+            RefreshShowroomCarAsync();
             ShowGarage();
         }
 
