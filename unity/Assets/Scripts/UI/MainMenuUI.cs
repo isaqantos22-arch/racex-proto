@@ -546,7 +546,12 @@ namespace RaceX.UI
             accEmailField = null;
             accPassField = null;
             var c = new Vector2(0.5f, 0.5f);
-            var avatar = UIFactory.Panel("Avatar", accountBody, c, c, new Vector2(-560f, 220f), new Vector2(150f, 150f), AvatarColorOf(AccountClient.AvatarColor));
+
+            // Estrutura de perfil (tipo Steam): CABEÇALHO (avatar + nome + e-mail + status)
+            // → FAIXA DE NÚMEROS (4 células) → GRADE 2×2 (nome/e-mail/cor/foto) → AÇÕES em par.
+            // Sem áreas vazias: cada faixa ocupa a largura toda do corpo (1300).
+            // ---- CABEÇALHO ----
+            var avatar = UIFactory.Panel("Avatar", accountBody, c, c, new Vector2(-530f, 300f), new Vector2(150f, 150f), AvatarColorOf(AccountClient.AvatarColor));
             var initial = UIFactory.Label("AvatarInitial", avatar.transform, string.IsNullOrEmpty(AccountClient.Name) ? "J" : AccountClient.Name.Substring(0, 1).ToUpperInvariant(), 68, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(130f, 130f), Color.white);
             initial.raycastTarget = false;
             if (!string.IsNullOrEmpty(AccountClient.Photo) && AccountClient.Photo.Length > 128)
@@ -566,11 +571,24 @@ namespace RaceX.UI
                 }
                 catch (Exception) { /* foto corrompida: mantém a inicial */ }
             }
-            UIFactory.Label("AccEmail", accountBody, AccountClient.Email, 30, TextAnchor.MiddleLeft, c, c, new Vector2(-330f, 220f), new Vector2(760f, 70f), MenuTheme.Text);
-            accNameField = AccountField(accountBody, "NOME NO JOGO", 1, AccountClient.Name ?? "Jogador", InputField.ContentType.Standard);
-            accPhotoField = AccountField(accountBody, "FOTO (URL)", 2, "", InputField.ContentType.Standard, "cole o endereço de uma imagem");
-            MenuTheme.StyledButton(accountBody, "AccPhoto", "CARREGAR FOTO", c, c, new Vector2(560f, 170f - 2 * 104f), new Vector2(320f, 80f), 26, AccountDoPhoto);
-            var colorBtn = MenuTheme.StyledButton(accountBody, "AccColor", "COR DO AVATAR: " + (AccountClient.AvatarColor + 1), c, c, new Vector2(-560f, 170f - 3 * 104f), new Vector2(520f, 80f), 28, null);
+            UIFactory.Label("AccName", accountBody, string.IsNullOrEmpty(AccountClient.Name) ? "Jogador" : AccountClient.Name, 52, TextAnchor.MiddleLeft, c, c, new Vector2(-370f, 330f), new Vector2(800f, 80f), MenuTheme.Text);
+            UIFactory.Label("AccEmail", accountBody, AccountClient.Email, 28, TextAnchor.MiddleLeft, c, c, new Vector2(-370f, 280f), new Vector2(800f, 46f), MenuTheme.TextDim);
+            UIFactory.Label("AccStatus", accountBody, "CONTA CONFIRMADA  •  ONLINE", 24, TextAnchor.MiddleLeft, c, c, new Vector2(-370f, 238f), new Vector2(800f, 40f), new Color(0.35f, 0.9f, 0.45f));
+
+            // ---- FAIXA DE NÚMEROS (4 células, largura toda) ----
+            AccountStatCell(-495f, "VITÓRIAS", AccountClient.Wins.ToString());
+            AccountStatCell(-165f, "PÓDIOS", AccountClient.Podiums.ToString());
+            AccountStatCell(165f, "TÍTULOS", AccountClient.Titles.ToString());
+            AccountStatCell(495f, "CORRIDAS", AccountClient.Races.ToString());
+
+            // ---- GRADE 2×2 (células de 610×116) ----
+            var nameCell = AccountCell(-320f, -30f, "NOME NO JOGO");
+            accNameField = AccountFieldIn(nameCell, AccountClient.Name ?? "Jogador", InputField.ContentType.Standard, "");
+            var emailCell = AccountCell(320f, -30f, "E-MAIL");
+            UIFactory.Label("CellEmailV", emailCell.transform, AccountClient.Email, 30, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, -12f), new Vector2(570f, 60f), MenuTheme.Text);
+
+            var colorCell = AccountCellBg(-320f, -160f);
+            var colorBtn = MenuTheme.StyledButton((RectTransform)colorCell.transform, "AccColor", "COR DO AVATAR: " + (AccountClient.AvatarColor + 1), c, c, Vector2.zero, new Vector2(570f, 76f), 28, null);
             int nextColor = AccountClient.AvatarColor;
             colorBtn.onClick.AddListener(() =>
             {
@@ -580,11 +598,53 @@ namespace RaceX.UI
                 colorBtn.image.color = AvatarColorOf(nextColor);
             });
             colorBtn.image.color = AvatarColorOf(AccountClient.AvatarColor);
-            UIFactory.Label("AccStats", accountBody,
-                string.Format("VITÓRIAS {0}    PÓDIOS {1}    TÍTULOS {2}    CORRIDAS {3}", AccountClient.Wins, AccountClient.Podiums, AccountClient.Titles, AccountClient.Races),
-                28, TextAnchor.MiddleCenter, c, c, new Vector2(120f, 170f - 3 * 104f), new Vector2(1000f, 80f), MenuTheme.Accent);
-            MenuTheme.StyledButton(accountBody, "AccSave", "SALVAR PERFIL", c, c, new Vector2(-310f, -300f), new Vector2(540f, 88f), 32, () => AccountDoSave(nextColor));
-            MenuTheme.StyledButton(accountBody, "AccLogout", "SAIR DA CONTA", c, c, new Vector2(310f, -300f), new Vector2(540f, 88f), 32, AccountDoLogout);
+
+            var photoCell = AccountCellBg(320f, -160f);
+            UIFactory.Label("CellPhotoL", photoCell.transform, "FOTO (URL)", 20, TextAnchor.UpperLeft, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(16f, -6f), new Vector2(300f, 30f), MenuTheme.TextDim);
+            accPhotoField = AccountFieldIn(photoCell, "", InputField.ContentType.Standard, "cole o endereço de uma imagem");
+            var photoBtn = MenuTheme.StyledButton((RectTransform)photoCell.transform, "AccPhoto", "CARREGAR", c, c, new Vector2(212f, 0f), new Vector2(140f, 76f), 22, AccountDoPhoto);
+            photoBtn.transform.SetAsLastSibling();
+
+            // ---- AÇÕES (par de botões, largura toda) ----
+            MenuTheme.StyledButton(accountBody, "AccSave", "SALVAR PERFIL", c, c, new Vector2(-320f, -300f), new Vector2(610f, 92f), 32, () => AccountDoSave(nextColor));
+            MenuTheme.StyledButton(accountBody, "AccLogout", "SAIR DA CONTA", c, c, new Vector2(320f, -300f), new Vector2(610f, 92f), 32, AccountDoLogout);
+        }
+
+        Image AccountCellBg(float x, float y)
+        {
+            var bg = UIFactory.Panel("AccCell" + x + "_" + y, accountBody, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, y), new Vector2(610f, 116f), new Color(1f, 1f, 1f, 0.06f));
+            bg.raycastTarget = true; // campo clicável
+            return bg;
+        }
+
+        Image AccountCell(float x, float y, string label)
+        {
+            var bg = AccountCellBg(x, y);
+            UIFactory.Label("L" + label, bg.transform, label, 20, TextAnchor.UpperLeft, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(16f, -6f), new Vector2(400f, 30f), MenuTheme.TextDim);
+            return bg;
+        }
+
+        void AccountStatCell(float x, string label, string value)
+        {
+            var bg = UIFactory.Panel("Stat" + label, accountBody, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, 110f), new Vector2(300f, 110f), new Color(1f, 1f, 1f, 0.06f));
+            bg.raycastTarget = false;
+            UIFactory.Label("Sl" + label, bg.transform, label, 22, TextAnchor.UpperLeft, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(16f, -10f), new Vector2(270f, 34f), MenuTheme.TextDim);
+            UIFactory.Label("Sv" + label, bg.transform, value, 40, TextAnchor.MiddleLeft, new Vector2(0f, 0f), new Vector2(0f, 0.5f), new Vector2(16f, -14f), new Vector2(270f, 60f), MenuTheme.Accent);
+        }
+
+        InputField AccountFieldIn(Image cell, string value, InputField.ContentType type, string placeholder)
+        {
+            var ph = UIFactory.Label("AccPh" + cell.name, cell.transform, placeholder, 26, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(-40f, -12f), new Vector2(400f, 60f), new Color(1f, 1f, 1f, 0.25f));
+            ph.raycastTarget = false;
+            var txt = UIFactory.Label("AccTx" + cell.name, cell.transform, value ?? "", 30, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(-40f, -12f), new Vector2(430f, 60f), MenuTheme.Text);
+            txt.raycastTarget = false;
+            var input = cell.gameObject.AddComponent<InputField>();
+            input.targetGraphic = cell;
+            input.placeholder = ph;
+            input.textComponent = txt;
+            input.text = value ?? "";
+            input.contentType = type;
+            return input;
         }
 
         Color AvatarColorOf(int i) { return Color.HSVToRGB((i & 7) / 8f, 0.62f, 0.95f); }
