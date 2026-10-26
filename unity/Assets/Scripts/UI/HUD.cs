@@ -40,17 +40,18 @@ namespace RaceX.UI
             Time.fixedDeltaTime = 0.02f;
             Time.maximumDeltaTime = fastForward ? 0.12f : 0.05f; // cabe 6 passos de 0.02 por frame no 5x
             if (fastForward) RaceX.Career.CareerMode.CompressSessionClock(5f); // relógio REAL da sessão também corre 5x
-            // ESTADO VISÍVEL: desligado = "5x" cinza (é um BOTÃO, não o estado); ligado = "1x" verde.
+            // ESTADO VISÍVEL: o rótulo mostra o estado ATUAL do tempo — "1x" no normal, "5x" acelerado.
             if (ffButton != null)
             {
                 var t = ffButton.GetComponentInChildren<UnityEngine.UI.Text>();
-                if (t != null) { t.text = fastForward ? "1x" : "5x"; t.color = fastForward ? new Color(0.3f, 1f, 0.45f) : MenuTheme.TextDim; }
+                if (t != null) { t.text = fastForward ? "5x" : "1x"; t.color = fastForward ? new Color(0.3f, 1f, 0.45f) : MenuTheme.TextDim; }
             }
         }
         Text pitInfoText;
         Image[] rpmBands;
         Color[] rpmBandColors;
         float messageTimer, countdownTimer;
+        float telemTimer; // cadência da linha de telemetria (5 Hz — string por frame engessava o jogo)
         RectTransform resultsPanel;
 
         // Cache de UI (otimização mobile): Text só é tocado quando o valor muda —
@@ -108,7 +109,7 @@ namespace RaceX.UI
             pitButton = MenuTheme.StyledButton(root, "PitBtn", "PIT", tr, tr, new Vector2(-160f * s, -140f), new Vector2(110f * s, 90f * s), (int)(26 * s), () => { if (entry != null) RaceX.Core.PitLaneSystem.RequestPit(entry.car); });
             // Acelerar o TEMPO 5x (pula a minutagem do treino): aperta de novo e volta a 1x.
             // Posição y−250 (abaixo do PIT) para não invadir a coluna CAM/pausa do canto.
-            ffButton = MenuTheme.StyledButton(root, "FFBtn", "5x", tr, tr, new Vector2(-160f * s, -250f), new Vector2(110f * s, 90f * s), (int)(28 * s), ToggleFastForward);
+            ffButton = MenuTheme.StyledButton(root, "FFBtn", "1x", tr, tr, new Vector2(-160f * s, -250f), new Vector2(110f * s, 90f * s), (int)(28 * s), ToggleFastForward);
             tireText = UIFactory.Label("Tire", root, "", (int)(26 * s), TextAnchor.UpperRight, tr, tr, new Vector2(-290f * s, -24f), new Vector2(240f * s, 40f), MenuTheme.TextDim);
             pitInfoText = UIFactory.Label("PitInfo", root, "", (int)(24 * s), TextAnchor.UpperRight, tr, tr, new Vector2(-290f * s, -70f), new Vector2(240f * s, 36f), MenuTheme.Accent);
 
@@ -257,18 +258,27 @@ namespace RaceX.UI
                 dmgFrontImg.color = ZoneColor(car.DmgFront);
                 dmgRearImg.color = ZoneColor(car.DmgRear);
             }
-            // TELEMETRIA ao vivo (dados reais para diagnóstico — substitui o antigo "DANO 87%"):
-            // marcha+rotação/limite, acelerador recebido, piloto automático, dano, escala de tempo e piso.
+            // TELEMETRIA ao vivo (dados reais para diagnóstico — substitui o antigo "DANO 87%").
+            // A 5 Hz (não por frame): montar string toda frame era lixo de GC e engessava o jogo.
             if (danoText != null)
             {
-                float df = car.DamageFactor;
-                string dtx = $"M{car.Gear} {Mathf.RoundToInt(car.Rpm)}/{Mathf.RoundToInt(car.spec.rpmLimit)}" +
-                             $" | ACEL {(car.pitControlled ? car.extThrottle : car.throttleInput):0.00}" +
-                             (car.pitControlled ? " [AUTO]" : "") +
-                             (df < 0.999f ? $" | DANO {Mathf.RoundToInt(df * 100f)}%" : "") +
-                             (car.IsOffTrack ? " | GRAMA" : "") +
-                             (Time.timeScale > 1.5f ? $" | {Time.timeScale:0.#}x" : "");
-                if (danoText.text != dtx) danoText.text = dtx;
+                telemTimer -= Time.unscaledDeltaTime;
+                if (telemTimer <= 0f)
+                {
+                    telemTimer = 0.2f;
+                    float df = car.DamageFactor;
+                    string dtx = $"M{car.Gear}{(car.IsShifting ? "*" : "")} {Mathf.RoundToInt(car.Rpm)}/{Mathf.RoundToInt(car.spec.rpmLimit)}" +
+                                 $" | ACEL {(car.pitControlled ? car.extThrottle : car.throttleInput):0.00}" +
+                                 $" | FRE {(car.inputLocked ? 1f : (car.pitControlled ? Mathf.Max(car.extBrake, car.brakeInput) : car.brakeInput)):0.00}" +
+                                 (car.handbrake && !car.inputLocked ? " | F.MÃO" : "") +
+                                 (car.inputLocked ? " | LOCK" : "") +
+                                 (car.pitControlled ? " [AUTO]" : "") +
+                                 (df < 0.999f ? $" | DANO {Mathf.RoundToInt(df * 100f)}%" : "") +
+                                 (car.MaxWheelSlip > 0.4f ? $" | PAT {car.MaxWheelSlip:0.00}" : "") +
+                                 (car.IsOffTrack ? " | GRAMA" : "") +
+                                 (Time.timeScale > 1.5f ? $" | {Time.timeScale:0.#}x" : "");
+                    if (danoText.text != dtx) danoText.text = dtx;
+                }
             }
             if (car.Gear != lastGear)
             {

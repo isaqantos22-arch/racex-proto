@@ -137,6 +137,17 @@ namespace RaceX.Core
                 if (st == null) continue;
                 if (st.holding) { st.holding = false; instance.Release(st); }   // fila/garagem → rota de saída JÁ
                 else if (st.exiting) { /* rota de saída em andamento: v59 já devolve o controle ao pisar na pista */ }
+                else if (st.inPit)
+                {
+                    // CASO SEM FILA: carro navegando a rota de ENTRADA / aproximando da caixa
+                    // (inPit sem holding nem exiting) — antes ficava preso ao autopilot e ao
+                    // limite de 80 km/h sem nenhuma forma de soltar. Solta JÁ na hora.
+                    st.inPit = false;
+                    st.requested = false;
+                    st.car.PitReleaseReset();
+                    instance.race.Track.Checkpoints.ReSyncAfterPit(st.car);
+                    e.lapStartTime = Time.time;
+                }
             }
         }
 
@@ -673,8 +684,7 @@ namespace RaceX.Core
             {
                 Debug.LogWarning($"[PITWATCH] LIBERADO FORÇADO {e.name}: holding={st.holding} exiting={st.exiting} inPit={st.inPit} lat={latW:0.0} kmh={st.car.SpeedKmh:0} t={Time.time - st.pitCtrlSince:0}s");
                 st.holding = false; st.exiting = false; st.inPit = false;
-                st.car.pitControlled = false;
-                st.car.extThrottle = 0f; st.car.extBrake = 0f; st.car.extSteer = 0f;
+                st.car.PitReleaseReset();
                 st.pitCtrlSince = -1f;
             }
         }
@@ -744,8 +754,7 @@ namespace RaceX.Core
                 {
                     st.exiting = false;
                     st.inPit = false;
-                    st.car.pitControlled = false;
-                    st.car.extThrottle = 0f; st.car.extBrake = 0f; st.car.extSteer = 0f;
+                    st.car.PitReleaseReset(); // zera pitControlled + pedais ext* + marchas residuais
                     // VOLTA CONTA (regra do usuário): realinha os checkpoints com a posição ATUAL —
                     // sem isso o carro saía do pit com nextCheckpoint velho e o próximo cruzamento
                     // da linha não disparava (o cronômetro acumulava 2 voltas antes de zerar).
@@ -764,8 +773,7 @@ namespace RaceX.Core
                     // Chegou NA PISTA pela rota: devolve o controle (a IA/humano segue o traçado).
                     st.exiting = false;
                     st.inPit = false;
-                    st.car.pitControlled = false;
-                    st.car.extThrottle = 0f; st.car.extBrake = 0f; st.car.extSteer = 0f;
+                    st.car.PitReleaseReset(); // zera pitControlled + pedais ext* + marchas residuais
                     race.Track.Checkpoints.ReSyncAfterPit(st.car); // volta zera na próxima linha (ver latOut)
                     e.lapStartTime = Time.time;
                     var ai = st.car != null ? st.car.GetComponent<CarAI>() : null;
@@ -878,6 +886,7 @@ namespace RaceX.Core
                 {
                     st.wear = 0f;
                     for (int wi = 0; wi < 4; wi++) st.wearW[wi] = 0f; // mecânicos trocam AS QUATRO rodas
+                    st.car.Repair(); // PIT CONSERTA: vale para ENTRADA DIRIGINDO também (antes só o pedido de botão chamava)
                     st.stopTimer = 0f;
                     st.car.extThrottle = 0f;
                     if (!st.isHuman)

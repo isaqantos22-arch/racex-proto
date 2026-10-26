@@ -1,3 +1,4 @@
+using System;
 using RaceX.Car;
 using RaceX.Track;
 using UnityEngine;
@@ -19,7 +20,7 @@ namespace RaceX.Core
     [System.Serializable]
     public class RaceSettings
     {
-        public static readonly int[] LapOptions = { 1, 2, 3, 5, 7, 10 };
+        public static readonly int[] LapOptions = { 0, 1, 2, 3, 5, 7, 10 }; // 0 = voltas REAIS (regra F1: 305 km / pista)
         public static readonly int[] CarCountOptions = { 4, 6, 8, 10, 12, 16 };
         public const int ClassicCarCount = 8;
 
@@ -29,6 +30,10 @@ namespace RaceX.Core
         public int totalCars = ClassicCarCount;
         public Difficulty difficulty = Difficulty.Medium;
         public bool formulaOnly;
+        public int careerPhase = -1;   // sessão do fim de semana na carreira (-1 = não é carreira)
+        public int careerGrid = -1;    // slot 0-based do humano definido pela classificação (-1 = sorteio)
+        public float sessionTimeLimit; // limite REAL de tempo da sessão em segundos (0 = por distância)
+        public bool pitStops;          // pit lane + desgaste de pneu + compostos
         public PlayerSetup[] players = { new PlayerSetup(), new PlayerSetup { name = "Jogador 2", colorIndex = 1 } };
 
         public int HumanCount => mode == GameMode.LocalSplitScreen ? 2 : 1;
@@ -68,9 +73,19 @@ namespace RaceX.Core
             }
             instance = this;
             DontDestroyOnLoad(gameObject);
-            Time.fixedDeltaTime = 0.01f;
+            Time.fixedDeltaTime = 0.02f; // 50 Hz — o 0.01 (100 Hz) DOBRAVA o custo da física com 24 carros e travava o celular/emulador (HUD e Pause já usam 0.02)
             AudioListener.volume = SettingsManager.MasterVolume;
             settings.players[0].startCamera = (CameraView)SettingsManager.LastCamera;
+
+            // Modo de calibração de IA ao vivo: -aicallb na linha de comando.
+            foreach (string arg in Environment.GetCommandLineArgs())
+                if (arg == "-aicallb")
+                {
+                    var go = new GameObject("AICalib");
+                    DontDestroyOnLoad(go);
+                    go.AddComponent<AICalibrationLive>();
+                    break;
+                }
         }
     }
 }

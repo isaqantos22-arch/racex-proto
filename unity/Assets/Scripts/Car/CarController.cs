@@ -213,6 +213,17 @@ namespace RaceX.Car
             }
         }
 
+        /// <summary>Zera TODOS os estados residuais do piloto automático do pit no carro — chamado
+        /// nos pontos de devolução de controle. Sem isso qualquer estado esquecido (marcha em ré,
+        /// troca "em andamento" congelada, pedais ext*) limitava o carro depois do pit.</summary>
+        public void PitReleaseReset()
+        {
+            pitControlled = false;
+            extThrottle = 0f; extBrake = 0f; extSteer = 0f;
+            if (Gear < 1) Gear = 1; // ré engatada pelo autopilot não vaza para o piloto
+            shiftTimer = 0f;        // troca congelada não pode cortar o torque
+        }
+
         void ApplySteering()
         {
             float speedFactor = Mathf.Clamp01(SpeedKmh / Mathf.Max(1f, spec.topSpeedKmh));
