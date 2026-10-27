@@ -235,7 +235,7 @@ namespace RaceX.UI
             var side = UIFactory.Rect("SidePanel", current, new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(0f, 0.5f), Vector2.zero, new Vector2(430f, 0f));
             var sideImg = side.gameObject.AddComponent<Image>();
             sideImg.color = new Color(0.028f, 0.032f, 0.05f, 0.97f);
-            UIFactory.Label("SideTitle", side, "RACEX PROTO", 44, TextAnchor.MiddleCenter, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(28f, 60f), new Vector2(480f, 60f), MenuTheme.Accent).rectTransform.localRotation = Quaternion.Euler(0f, 0f, 90f);
+            UIFactory.Label("SideTitle", side, "RACEX PROTO", 28, TextAnchor.MiddleCenter, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(34f, 40f), new Vector2(480f, 34f), MenuTheme.Accent).rectTransform.localRotation = Quaternion.Euler(0f, 0f, 90f);
             UIFactory.Label("SideVersion", side, "PROTO BUILD", 20, TextAnchor.MiddleCenter, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 26f), new Vector2(320f, 30f), MenuTheme.TextDim);
             var sideLine = UIFactory.Panel("SideLine", side, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(0f, 0f), new Vector2(2f, 1080f), MenuTheme.Accent);
             sideLine.raycastTarget = false;
@@ -452,10 +452,11 @@ namespace RaceX.UI
             var s = NewScreen(AccountClient.IsLoggedIn ? "MINHA CONTA" : "ENTRAR");
             ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.86f);
             var c = new Vector2(0.5f, 0.5f);
-            accountStatus = UIFactory.Label("AccountStatus", s, "", 26, TextAnchor.MiddleCenter, c, c, new Vector2(0f, -430f), new Vector2(1200f, 56f), MenuTheme.Accent);
-            accountBody = UIFactory.Rect("AccountBody", s, c, c, c, new Vector2(0f, 30f), new Vector2(1300f, 780f));
+            accountStatus = UIFactory.Label("AccountStatus", s, "", 26, TextAnchor.MiddleCenter, c, c, new Vector2(230f, -430f), new Vector2(1200f, 56f), MenuTheme.Accent);
+            accountBody = UIFactory.Rect("AccountBody", s, c, c, c, new Vector2(230f, 30f), new Vector2(1300f, 780f));
             if (AccountClient.IsLoggedIn) ShowAccountProfile();
             else ShowAccountAuth();
+            MenuTheme.StyledButton(s, "AccBack", "VOLTAR", new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-40f, 20f), new Vector2(260f, 64f), 28, ShowMain);
         }
 
         void SetAccountStatus(string msg)
@@ -571,9 +572,9 @@ namespace RaceX.UI
                 }
                 catch (Exception) { /* foto corrompida: mantém a inicial */ }
             }
-            UIFactory.Label("AccName", accountBody, string.IsNullOrEmpty(AccountClient.Name) ? "Jogador" : AccountClient.Name, 52, TextAnchor.MiddleLeft, c, c, new Vector2(-370f, 330f), new Vector2(800f, 80f), MenuTheme.Text);
-            UIFactory.Label("AccEmail", accountBody, AccountClient.Email, 28, TextAnchor.MiddleLeft, c, c, new Vector2(-370f, 280f), new Vector2(800f, 46f), MenuTheme.TextDim);
-            UIFactory.Label("AccStatus", accountBody, "CONTA CONFIRMADA  •  ONLINE", 24, TextAnchor.MiddleLeft, c, c, new Vector2(-370f, 238f), new Vector2(800f, 40f), new Color(0.35f, 0.9f, 0.45f));
+            UIFactory.Label("AccName", accountBody, string.IsNullOrEmpty(AccountClient.Name) ? "Jogador" : AccountClient.Name, 52, TextAnchor.MiddleLeft, c, c, new Vector2(-30f, 330f), new Vector2(800f, 80f), MenuTheme.Text);
+            UIFactory.Label("AccEmail", accountBody, AccountClient.Email, 28, TextAnchor.MiddleLeft, c, c, new Vector2(-30f, 280f), new Vector2(800f, 46f), MenuTheme.TextDim);
+            UIFactory.Label("AccStatus", accountBody, "CONTA CONFIRMADA  •  ONLINE", 24, TextAnchor.MiddleLeft, c, c, new Vector2(-30f, 238f), new Vector2(800f, 40f), new Color(0.35f, 0.9f, 0.45f));
 
             // ---- FAIXA DE NÚMEROS (4 células, largura toda) ----
             AccountStatCell(-495f, "VITÓRIAS", AccountClient.Wins.ToString());
@@ -629,7 +630,7 @@ namespace RaceX.UI
             var bg = UIFactory.Panel("Stat" + label, accountBody, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, 110f), new Vector2(300f, 110f), new Color(1f, 1f, 1f, 0.06f));
             bg.raycastTarget = false;
             UIFactory.Label("Sl" + label, bg.transform, label, 22, TextAnchor.UpperLeft, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(16f, -10f), new Vector2(270f, 34f), MenuTheme.TextDim);
-            UIFactory.Label("Sv" + label, bg.transform, value, 40, TextAnchor.MiddleLeft, new Vector2(0f, 0f), new Vector2(0f, 0.5f), new Vector2(16f, -14f), new Vector2(270f, 60f), MenuTheme.Accent);
+            UIFactory.Label("Sv" + label, bg.transform, value, 40, TextAnchor.MiddleLeft, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(16f, 8f), new Vector2(270f, 60f), MenuTheme.Accent);
         }
 
         InputField AccountFieldIn(Image cell, string value, InputField.ContentType type, string placeholder)
@@ -933,6 +934,10 @@ namespace RaceX.UI
             UnbindOnline();
             var st = GameManager.Settings;
             st.mode = GameMode.Online;
+            st.careerPhase = -1;
+            st.careerGrid = -1;
+            st.sessionTimeLimit = 0f;
+            RaceX.Career.CareerData.raceActive = false;
             st.track = ServerTrack(info.trackId);
             st.laps = Mathf.Clamp(info.laps, 1, 20);
             st.totalCars = Mathf.Max(1, info.totalCars);
@@ -995,9 +1000,11 @@ namespace RaceX.UI
         // Linha "Rótulo   < valor >"
         const float ContentX = 215f;
 
+        float rowTop = 330f, rowStep = 84f;
+
         void OptionRow(RectTransform parent, string label, int row, Func<string> value, Action<int> change, float x = ContentX)
         {
-            float y = 330f - row * 84f;
+            float y = rowTop - row * rowStep;
             var c = new Vector2(0.5f, 0.5f);
             UIFactory.Label(label, parent, label, 32, TextAnchor.MiddleRight, c, new Vector2(1f, 0.5f), new Vector2(x - 250f, y), new Vector2(380f, 72f));
             var text = UIFactory.Label(label + "_Value", parent, value(), 32, TextAnchor.MiddleCenter, c, c, new Vector2(x + 50f, y), new Vector2(380f, 72f));
@@ -1042,6 +1049,12 @@ namespace RaceX.UI
         internal void ShowRaceSetup()
         {
             back = ShowPlay;
+            settings.careerPhase = -1;
+            settings.careerGrid = -1;
+            settings.sessionTimeLimit = 0f;
+            if (settings.laps >= 900) settings.laps = 3;
+            if (settings.totalCars > 16) settings.totalCars = RaceSettings.ClassicCarCount;
+            RaceX.Career.CareerData.raceActive = false;
             bool split = settings.mode == GameMode.LocalSplitScreen;
             SetShowroomCam(split ? new Vector3(0f, 3.6f, -12.5f) : new Vector3(0f, 3.4f, -10.5f), 26f);
             var s = NewScreen(split ? "CORRIDA — TELA DIVIDIDA" : "CONFIGURAÇÕES DA CORRIDA");
@@ -1087,6 +1100,10 @@ namespace RaceX.UI
             MenuTheme.StyledButton(s, "Back", "VOLTAR", b, new Vector2(1f, 0f), new Vector2(-30f, 40f), new Vector2(380f, 100f), 36, ShowPlay);
             MenuTheme.StyledButton(s, "Start", "INICIAR CORRIDA", b, new Vector2(0f, 0f), new Vector2(30f, 40f), new Vector2(480f, 100f), 36, () =>
             {
+                settings.careerPhase = -1;
+                settings.careerGrid = -1;
+                settings.sessionTimeLimit = 0f;
+                RaceX.Career.CareerData.raceActive = false;
                 if (!split) SettingsManager.LastCamera = (int)settings.players[0].startCamera;
                 SettingsManager.Save();
                 SceneLoader.LoadRace(settings);
@@ -1098,6 +1115,7 @@ namespace RaceX.UI
             back = () => { SettingsManager.Save(); ShowMain(); };
             var s = NewScreen("CONFIGURAÇÕES");
             int row = 0;
+            rowTop = 400f; rowStep = 68f;
             OptionRow(s, "Volume geral", row++, () => Pct(SettingsManager.MasterVolume), d => { SettingsManager.MasterVolume = Clamp10(SettingsManager.MasterVolume, d); AudioListener.volume = SettingsManager.MasterVolume; });
             OptionRow(s, "Volume do motor", row++, () => Pct(SettingsManager.EngineVolume), d => SettingsManager.EngineVolume = Clamp10(SettingsManager.EngineVolume, d));
             OptionRow(s, "Música", row++, () => SettingsManager.MusicOn ? "Ligada" : "Desligada", d => SettingsManager.MusicOn = !SettingsManager.MusicOn);
@@ -1106,10 +1124,13 @@ namespace RaceX.UI
             OptionRow(s, "Mini-mapa", row++, () => SettingsManager.MinimapDynamic ? "Dinâmico (trecho)" : "Pista inteira", d => SettingsManager.MinimapDynamic = !SettingsManager.MinimapDynamic);
             OptionRow(s, "Qualidade", row++, () => QualityNames[(int)SettingsManager.Quality], d => { SettingsManager.Quality = (QualityTier)Step((int)SettingsManager.Quality, d, 4); SettingsManager.ApplyQuality(SettingsManager.Quality); });
             if (Application.isMobilePlatform)
-                OptionRow(s, "Controles", row++, () => ControlNames[(int)SettingsManager.ControlMode], d => SettingsManager.ControlMode = (ControlMode)Step((int)SettingsManager.ControlMode, d, 3));
+                OptionRow(s, "Controles", row++, () => ControlNames[(int)SettingsManager.ControlMode], d => SettingsManager.ControlMode = SettingsManager.ControlMode == ControlMode.Buttons ? ControlMode.Joystick : ControlMode.Buttons);
             else
                 OptionRow(s, "Tela cheia", row++, () => Screen.fullScreen ? "Sim" : "Não", d => Screen.fullScreen = !Screen.fullScreen);
             OptionRow(s, "F1 em corridas GT", row++, () => SettingsManager.AllowF1 ? "Sim" : "Não", d => SettingsManager.AllowF1 = !SettingsManager.AllowF1);
+            OptionRow(s, "Contador de FPS", row++, () => SettingsManager.ShowFps ? "Ligado" : "Desligado", d => SettingsManager.ShowFps = !SettingsManager.ShowFps);
+            OptionRow(s, "Rádio do pit (aviso)", row++, () => SettingsManager.PitRadio == 0 ? "Desligado" : "Pneu abaixo de " + Mathf.RoundToInt((1f - SettingsManager.PitRadioWear[SettingsManager.PitRadio]) * 100f) + "%", d => SettingsManager.PitRadio = Step(SettingsManager.PitRadio, d, SettingsManager.PitRadioWear.Length));
+            rowTop = 330f; rowStep = 84f;
             MenuTheme.StyledButton(s, "Back", "VOLTAR", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 40f), new Vector2(380f, 100f), 36, () => { SettingsManager.Save(); ShowMain(); });
         }
 

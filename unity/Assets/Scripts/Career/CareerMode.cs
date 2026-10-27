@@ -319,7 +319,7 @@ namespace RaceX.Career
         public static void Save()
         {
             if (data == null) return;
-            data.saveVersion = 3;
+            data.saveVersion = 4;
             try
             {
                 File.WriteAllText(SavePath, JsonUtility.ToJson(data, true));
@@ -358,8 +358,9 @@ namespace RaceX.Career
                 importingCloud = true;
                 data = parsed;
                 if (data.standings == null) data.standings = new List<StandingEntry>();
-                if (data.saveVersion < 3)
+                if (data.saveVersion < 4)
                 {
+                    data.round = 0;
                     data.weekendPhase = PH_FP;
                     data.fpDone = false;
                     data.sessionDeadlineUtc = 0;
@@ -373,7 +374,7 @@ namespace RaceX.Career
                     data.pracBest?.Clear();
                 }
                 MigrateStandings();
-                data.saveVersion = 3;
+                data.saveVersion = 4;
                 File.WriteAllText(SavePath, JsonUtility.ToJson(data, true));
                 if (data.titles > CareerStats.Titles) CareerStats.Titles = data.titles;
             }
@@ -399,8 +400,9 @@ namespace RaceX.Career
                 data = JsonUtility.FromJson<CareerData>(File.ReadAllText(SavePath));
                 if (data.standings == null) data.standings = new List<StandingEntry>();
                 bool needSave = false;
-                if (data.saveVersion < 3)
+                if (data.saveVersion < 4)
                 {
+                    data.round = 0;
                     data.weekendPhase = PH_FP;
                     data.fpDone = false;
                     data.sessionDeadlineUtc = 0;
@@ -417,7 +419,7 @@ namespace RaceX.Career
                 MigrateStandings();
                 if (needSave)
                 {
-                    data.saveVersion = 3;
+                    data.saveVersion = 4;
                     Save();
                 }
             }

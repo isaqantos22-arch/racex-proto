@@ -434,7 +434,7 @@ namespace RaceX.UI
 
             var standings = race.FinalStandings();
             int myPos = standings.FindIndex(x => x == entry) + 1;
-            bool careerRace = RaceX.Career.CareerData.raceActive;
+            bool careerRace = RaceX.Career.CareerData.raceActive && race.Settings != null && race.Settings.careerPhase >= 0;
             int careerPhase = careerRace ? RaceX.Career.CareerMode.CurrentPhase : -1;
             if (careerPhase >= 0)
             {

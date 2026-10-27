@@ -250,35 +250,34 @@ namespace RaceX.Car
                 brake = -error > 12f ? 0.35f : 0f;
             }
 
-            if (UpdateRecovery(speed, ref steer, ref throttle, ref brake)) { }
+            bool pastLaunch = (Time.time - unlockTime) > 12f;
+            if (pastLaunch && UpdateRecovery(speed, ref steer, ref throttle, ref brake)) { }
+            else if (!pastLaunch) { reverseTimer = 0f; stuckTimer = 0f; }
 
             // ANTI-EMPURRÃO (regra do usuário): encostou em carro mais lento/parado → para de
             // acelerar e freia; se estiver de frente para um carro parado a curta distância e o nariz
-            // ainda apontar para ele, esterça tudo para o lado livre ou recua em vez de acelerar contra ele.
+            // ainda apontar para ele, esterça para o lado livre em vez de acelerar contra ele.
+            // (Nunca aciona ré durante os primeiros 12s da largada!)
             if (reverseTimer <= 0f && aheadCar != null && !RaceX.Core.PitLaneSystem.IsInPitFlow(aheadCar))
             {
                 Vector3 localBlk = transform.InverseTransformPoint(aheadCar.transform.position);
                 float aheadVel = Mathf.Max(0f, aheadCar.ForwardSpeed);
-                if (aheadVel < 2f && localBlk.z > 0f && localBlk.z < 7.5f && Mathf.Abs(localBlk.x) < 2.2f)
+                if (pastLaunch && aheadVel < 1.2f && localBlk.z > 0f && localBlk.z < 7.5f && Mathf.Abs(localBlk.x) < 2.2f)
                 {
                     float sideFree = Mathf.Abs(aheadOtherLat) > 0.5f ? (aheadOtherLat > 0f ? -1f : 1f) : (localBlk.x >= 0f ? -1f : 1f);
+                    steer = Mathf.Clamp(sideFree * 0.95f, -1f, 1f);
                     if (localBlk.z < 4.2f)
                     {
-                        escapeSide = sideFree;
-                        reverseTimer = 1.6f;
-                        escapeTimer = 4.5f;
-                        steer = -escapeSide * 0.9f;
                         throttle = 0f;
-                        brake = 1f;
+                        brake = speed > 0.5f ? 0.8f : 0f;
                     }
                     else
                     {
-                        steer = Mathf.Clamp(sideFree * 0.95f, -1f, 1f);
                         throttle = Mathf.Min(throttle, 0.35f);
                         brake = speed > 4f ? 0.5f : 0f;
                     }
                 }
-                else if (aheadGap < (launchBlend >= 1f ? 9f : 7f) && speed > aheadVel + 1f)
+                else if (aheadGap < (launchBlend >= 1f ? 8f : 5.5f) && speed > aheadVel + 1f)
                 {
                     throttle = 0f;
                     brake = Mathf.Max(brake, 0.55f);
@@ -421,8 +420,8 @@ namespace RaceX.Car
                 return true;
             }
             if (race != null && race.State != RaceState.Racing) { stuckTimer = 0f; return false; }
-            bool contact = aheadCar != null && aheadGap < 4.5f && speed < 2.5f;
-            stuckTimer = speed < 2.5f && (throttle > 0f || contact) ? stuckTimer + thinkDt * (contact ? 3.5f : 1f) : 0f;
+            bool contact = aheadCar != null && aheadGap < 3.6f && aheadCar.ForwardSpeed < 1.0f && speed < 1.5f;
+            stuckTimer = speed < 2.0f && (throttle > 0f || contact) ? stuckTimer + thinkDt * (contact ? 1.6f : 1f) : 0f;
             if (stuckTimer > StuckSeconds)
             {
                 stuckTimer = 0f;
