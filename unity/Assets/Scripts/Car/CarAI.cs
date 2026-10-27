@@ -7,7 +7,7 @@ namespace RaceX.Car
     [RequireComponent(typeof(CarController))]
     public class CarAI : MonoBehaviour
     {
-        public const float StuckSeconds = 2.5f;
+        public const float StuckSeconds = 1.5f;
         public const float ReverseSeconds = 1f;
         public const float MaxAvoidOffset = 2.2f;
         public const float RubberBandDistance = 260f;
@@ -55,6 +55,7 @@ namespace RaceX.Car
         float noiseSeed;
         float avoidOffset;
         float lane;
+        float overtakeSide; // compromisso lateral de ultrapassagem/desvio (0 = desligado)
         float skill;
         float unlockTime = -999f;
         float lateralAtUnlock;
@@ -98,9 +99,12 @@ namespace RaceX.Car
 
             // OTIMIZAÇÃO (mobile): IA pensa a 10 Hz escalonada por carro (não 50 Hz). Entre pensadas,
             // reutiliza steer/throttle/brake alvo — invisível ao jogador, 5x mais barato com 24 carros.
-            if (thinkTimer <= 0f || thinkTimer > ThinkInterval)
+            if (thinkTimer <= 0f)
             {
-                thinkTimer = ThinkInterval * ((float)noiseSeed % 1f) * 0.5f;
+                float now = Time.time;
+                thinkDt = Mathf.Clamp(now - lastThinkTime, 0.02f, 0.3f);
+                lastThinkTime = now;
+                thinkTimer = ThinkInterval;
                 Think();
             }
             else thinkTimer -= Time.fixedDeltaTime;
@@ -112,6 +116,14 @@ namespace RaceX.Car
 
         const float ThinkInterval = 0.1f;
         float thinkTimer = -1f;
+        float thinkDt = ThinkInterval;
+        float lastThinkTime;
+        CarController passCar;
+        float passSide, passTimer;
+        float escapeTimer;
+        float escapeSide;
+        float committedLateral;
+        float aheadOtherLat;
         float cachedSteer, cachedThrottle, cachedBrake;
 
         // Ciclo do treino: conta voltas desde a última saída e pede recolida após 3.
@@ -141,6 +153,7 @@ namespace RaceX.Car
                 unlockTime = Time.time;
                 var p0 = waypoints.Spline.PoseAtDistance(along);
                 lateralAtUnlock = Vector3.Dot(transform.position - p0.position, p0.rotation * Vector3.right);
+                committedLateral = lateralAtUnlock;
             }
             wasLocked = car.inputLocked;
             float deviation = LineDeviation[d] * (Mathf.PerlinNoise(noiseSeed, Time.time * 0.15f) * 2f - 1f);
@@ -148,25 +161,80 @@ namespace RaceX.Car
             UpdateAvoidance(speed, waypoints.Spline, along);
             float baseLateral = Mathf.Clamp(deviation + lane + avoidOffset, -MaxAvoidOffset, MaxAvoidOffset);
             float launchBlend = Mathf.Clamp01((Time.time - unlockTime) / 6f);
-            float lateral = Mathf.Lerp(Mathf.Clamp(lateralAtUnlock, -MaxAvoidOffset, MaxAvoidOffset), baseLateral, launchBlend);
-
-            float lookAhead = 4f + 0.3f * speed;
-            Vector3 target = waypoints.Spline.PoseAtDistance(along + lookAhead, lateral).position;
-            Vector3 local = transform.InverseTransformPoint(target);
-            float angle = Mathf.Atan2(local.x, local.z) * Mathf.Rad2Deg;
-            float steer = Mathf.Clamp(angle / Mathf.Max(1f, car.spec.maxSteerAngle), -1f, 1f);
+            float desiredLateral = Mathf.Lerp(Mathf.Clamp(lateralAtUnlock, -MaxAvoidOffset, MaxAvoidOffset), baseLateral, launchBlend);
 
             float maxSpeed = car.spec.topSpeedKmh / 3.6f * SpeedPercent[d] * skill * RubberBand();
             float targetSpeed = Mathf.Min(maxSpeed, CornerSpeedAhead(along, speed, d) * skill);
-            if (aheadCar != null && Mathf.Abs(avoidOffset) < 1.2f && launchBlend >= 1f &&
-                !RaceX.Core.PitLaneSystem.IsInPitFlow(aheadCar))
+
+            // INTELIGÊNCIA DE CORRIDA (regra do usuário): percebe obstáculo a 20+ m → ESCOLHE
+            // O LADO COM ESPAÇO NA PISTA e contorna com folga real; carro PARADO na pista → desvio
+            // OBRIGATÓRIO inclusive na largada; carro no fluxo do pit não conta.
+            overtakeSide = 0f;
+            bool AvoidingObstacle = false;
+            if (aheadCar != null && !RaceX.Core.PitLaneSystem.IsInPitFlow(aheadCar))
             {
-                // Cola não existe: alinhado atrás acompanha; ao desviar para ultrapassar, mantém ritmo.
-                // EXCEÇÃO: carro NO FLUXO DO PIT (entrada/saída a 80 km/h) não é "carro da pista" —
-                // segui-lo derrubava o trenzão da reta inteira depois da 1ª parada (todos a ~100).
-                float follow = Mathf.Abs(avoidOffset) > 0.5f ? 8f : 1.5f;
-                targetSpeed = Mathf.Min(targetSpeed, Mathf.Max(0f, aheadCar.ForwardSpeed) + follow);
+                float aheadVel = Mathf.Max(0f, aheadCar.ForwardSpeed);
+                float side = transform.InverseTransformPoint(aheadCar.transform.position).x;
+                bool slowOrStoppedAhead = aheadGap < 25f && aheadVel < Mathf.Max(4f, maxSpeed * 0.45f);
+                if (slowOrStoppedAhead)
+                {
+                    if (passCar != aheadCar || passTimer <= 0f)
+                    {
+                        passCar = aheadCar;
+                        passSide = Mathf.Abs(aheadOtherLat) > 0.5f ? (aheadOtherLat > 0f ? -1f : 1f) : (side >= 0f ? -1f : 1f);
+                    }
+                    passTimer = 3.0f;
+                    overtakeSide = Mathf.Clamp(aheadOtherLat + passSide * 3.8f, -4.4f, 4.4f);
+                    AvoidingObstacle = true;
+                    float brakeLimited = aheadVel + Mathf.Sqrt(2f * 6.5f * Mathf.Max(0f, aheadGap - 3.5f)) + 3f;
+                    targetSpeed = Mathf.Min(targetSpeed, brakeLimited);
+                }
+                else if (launchBlend >= 0.4f && aheadGap < 22f && speed > aheadVel + 1.2f)
+                {
+                    float sideChoice = Mathf.Abs(aheadOtherLat) > 0.5f ? (aheadOtherLat > 0f ? -1f : 1f) : (side >= 0f ? -1f : 1f);
+                    overtakeSide = Mathf.Clamp(aheadOtherLat + sideChoice * 3.4f, -4.2f, 4.2f);
+                    AvoidingObstacle = true;
+                    targetSpeed = maxSpeed;
+                }
+                else if (Mathf.Abs(avoidOffset) < 1.2f)
+                {
+                    targetSpeed = Mathf.Min(targetSpeed, aheadVel + (aheadGap < 6f ? 0.5f : 1.5f));
+                }
             }
+            else if (passTimer > 0f && passCar != null)
+            {
+                passTimer -= thinkDt;
+                Vector3 lp = transform.InverseTransformPoint(passCar.transform.position);
+                if (lp.z > -3.5f)
+                {
+                    overtakeSide = Mathf.Clamp(aheadOtherLat + passSide * 3.8f, -4.4f, 4.4f);
+                    AvoidingObstacle = true;
+                    float vPass = Mathf.Max(0f, passCar.ForwardSpeed);
+                    targetSpeed = Mathf.Min(targetSpeed, vPass + Mathf.Sqrt(2f * 6.5f * Mathf.Max(0f, lp.z - 3f)) + 3f);
+                }
+                else passTimer = 0f;
+            }
+
+            if (escapeTimer > 0f)
+            {
+                escapeTimer -= thinkDt;
+                if (reverseTimer <= 0f)
+                {
+                    overtakeSide = Mathf.Clamp(aheadOtherLat + escapeSide * 4.0f, -4.5f, 4.5f);
+                    AvoidingObstacle = true;
+                }
+            }
+
+            if (AvoidingObstacle || Mathf.Abs(overtakeSide) > 0.1f)
+                committedLateral = Mathf.MoveTowards(committedLateral, overtakeSide, thinkDt * 10f);
+            else
+                committedLateral = Mathf.MoveTowards(committedLateral, desiredLateral, thinkDt * 4f);
+
+            float lookAhead = AvoidingObstacle ? Mathf.Clamp(5f + 0.18f * speed, 5.5f, 11f) : (4f + 0.3f * speed);
+            Vector3 target = waypoints.Spline.PoseAtDistance(along + lookAhead, committedLateral).position;
+            Vector3 local = transform.InverseTransformPoint(target);
+            float angle = Mathf.Atan2(local.x, local.z) * Mathf.Rad2Deg;
+            float steer = Mathf.Clamp(angle / Mathf.Max(1f, car.spec.maxSteerAngle), -1f, 1f);
 
             float throttle, brake;
             float error = targetSpeed - speed;
@@ -183,6 +251,39 @@ namespace RaceX.Car
             }
 
             if (UpdateRecovery(speed, ref steer, ref throttle, ref brake)) { }
+
+            // ANTI-EMPURRÃO (regra do usuário): encostou em carro mais lento/parado → para de
+            // acelerar e freia; se estiver de frente para um carro parado a curta distância e o nariz
+            // ainda apontar para ele, esterça tudo para o lado livre ou recua em vez de acelerar contra ele.
+            if (reverseTimer <= 0f && aheadCar != null && !RaceX.Core.PitLaneSystem.IsInPitFlow(aheadCar))
+            {
+                Vector3 localBlk = transform.InverseTransformPoint(aheadCar.transform.position);
+                float aheadVel = Mathf.Max(0f, aheadCar.ForwardSpeed);
+                if (aheadVel < 2f && localBlk.z > 0f && localBlk.z < 7.5f && Mathf.Abs(localBlk.x) < 2.2f)
+                {
+                    float sideFree = Mathf.Abs(aheadOtherLat) > 0.5f ? (aheadOtherLat > 0f ? -1f : 1f) : (localBlk.x >= 0f ? -1f : 1f);
+                    if (localBlk.z < 4.2f)
+                    {
+                        escapeSide = sideFree;
+                        reverseTimer = 1.6f;
+                        escapeTimer = 4.5f;
+                        steer = -escapeSide * 0.9f;
+                        throttle = 0f;
+                        brake = 1f;
+                    }
+                    else
+                    {
+                        steer = Mathf.Clamp(sideFree * 0.95f, -1f, 1f);
+                        throttle = Mathf.Min(throttle, 0.35f);
+                        brake = speed > 4f ? 0.5f : 0f;
+                    }
+                }
+                else if (aheadGap < (launchBlend >= 1f ? 9f : 7f) && speed > aheadVel + 1f)
+                {
+                    throttle = 0f;
+                    brake = Mathf.Max(brake, 0.55f);
+                }
+            }
 
             #if UNITY_EDITOR
             // Diagnóstico só no Editor: no device essa string era lixo de GC 240x/s (24 carros × 10 Hz)
@@ -228,12 +329,47 @@ namespace RaceX.Car
 
         void UpdateAvoidance(float speed, TrackSpline spline, float along)
         {
-            float range = 8f + 0.5f * speed;
+            float range = Mathf.Max(22f, 12f + 0.65f * speed);
             Vector3 origin = transform.position + transform.up * 0.6f + transform.forward * (car.spec.bodySize.z * 0.5f + 0.2f);
             float push = 0f;
-            float[] angles = { 0f, -20f, 20f };
+            float[] angles = { 0f, -15f, 15f, -28f, 28f };
             aheadCar = null;
             aheadGap = float.MaxValue;
+            aheadOtherLat = 0f;
+            var myPose = spline.PoseAtDistance(along);
+            float myLat = Vector3.Dot(transform.position - myPose.position, myPose.rotation * Vector3.right);
+
+            if (race != null && race.entries != null)
+            {
+                for (int i = 0; i < race.entries.Count; i++)
+                {
+                    var e = race.entries[i];
+                    if (e == null || e.car == null || e.car == car) continue;
+                    if (RaceX.Core.PitLaneSystem.IsInPitFlow(e.car)) continue;
+                    Vector3 toOther = e.car.transform.position - transform.position;
+                    if (toOther.sqrMagnitude > (range + 5f) * (range + 5f)) continue;
+                    Vector3 localO = transform.InverseTransformPoint(e.car.transform.position);
+                    if (localO.z <= -0.5f || localO.z > range + 3.5f) continue;
+                    var pO = spline.PoseAtDistance(Mathf.Repeat(along + Mathf.Max(0f, localO.z), spline.Length));
+                    float oLat = Vector3.Dot(e.car.transform.position - pO.position, pO.rotation * Vector3.right);
+                    if (Mathf.Abs(oLat) > 7.5f) continue; // fora da pista/no box
+                    float latDiff = oLat - myLat;
+                    if (Mathf.Abs(latDiff) < 3.0f || Mathf.Abs(localO.x) < 2.8f)
+                    {
+                        float gap = Mathf.Max(0.1f, localO.z - 3.8f);
+                        float w = Mathf.Clamp01(1f - gap / range);
+                        float dirPush = Mathf.Abs(oLat) > 0.5f ? (oLat > 0f ? -1f : 1f) : (localO.x >= 0f ? -1f : 1f);
+                        push += dirPush * w * 1.4f;
+                        if (gap < aheadGap)
+                        {
+                            aheadGap = gap;
+                            aheadCar = e.car;
+                            aheadOtherLat = oLat;
+                        }
+                    }
+                }
+            }
+
             foreach (float a in angles)
             {
                 Vector3 dir = Quaternion.AngleAxis(a, transform.up) * transform.forward;
@@ -241,7 +377,7 @@ namespace RaceX.Car
                 var other = hit.collider.GetComponentInParent<CarController>();
                 if (other == null || other == car) continue;
                 float weight = 1f - hit.distance / range;
-                if (a == 0f)
+                if (Mathf.Abs(a) <= 15f)
                 {
                     float side = transform.InverseTransformPoint(other.transform.position).x;
                     push += (side >= 0f ? -1f : 1f) * weight;
@@ -249,38 +385,55 @@ namespace RaceX.Car
                     {
                         aheadGap = hit.distance;
                         aheadCar = other;
+                        var pHit = spline.PoseAtDistance(Mathf.Repeat(along + hit.distance, spline.Length));
+                        aheadOtherLat = Vector3.Dot(other.transform.position - pHit.position, pHit.rotation * Vector3.right);
                     }
                 }
                 else push += (a < 0f ? 1f : -1f) * weight;
             }
-            // Agressividade por ZONA (setor): avalia a curvatura à frente — reta = disputa total,
-            // curvão = equilibrada, curva lenta = ousadia na freada mas cautela no lado.
             float kAhead = Curvature(spline, along + speed * 1.2f);
             float zone;
-            if (kAhead < 0.002f) zone = 1.35f;          // reta: vai por fora, dispute
-            else if (kAhead < 0.012f) zone = 1.0f;      // curvão rápido
-            else zone = 0.75f;                          // curva lenta/chicane: sem empurrão lateral
+            if (kAhead < 0.002f) zone = 1.35f;
+            else if (kAhead < 0.012f) zone = 1.0f;
+            else zone = 0.75f;
             float aggression = (0.5f + 0.15f * (int)difficulty) * zone;
             float desired = Mathf.Clamp(push * MaxAvoidOffset * aggression, -MaxAvoidOffset, MaxAvoidOffset);
-            avoidOffset = Mathf.MoveTowards(avoidOffset, desired, Time.fixedDeltaTime * (Mathf.Abs(push) > 0f ? 2.5f : 0.8f));
+            avoidOffset = Mathf.MoveTowards(avoidOffset, desired, thinkDt * (Mathf.Abs(push) > 0f ? 3.5f : 0.8f));
         }
 
         bool UpdateRecovery(float speed, ref float steer, ref float throttle, ref float brake)
         {
             if (reverseTimer > 0f)
             {
-                reverseTimer -= Time.fixedDeltaTime;
-                steer = -steer;
+                // Se já abriu distância suficiente e o nariz já aponta para fora do carro parado, sai da ré.
+                if (aheadCar != null)
+                {
+                    Vector3 lb = transform.InverseTransformPoint(aheadCar.transform.position);
+                    if (lb.z > 6.0f && Mathf.Abs(lb.x) > 2.3f) { reverseTimer = 0f; return false; }
+                }
+                // Só desconta o tempo de ré quando o carro já parou de avançar e está dando ré de verdade.
+                if (car.ForwardSpeed <= 0.35f) reverseTimer -= thinkDt;
+                // Virar as rodas para -escapeSide durante a ré faz a FRENTE girar para +escapeSide (lado livre).
+                steer = car.ForwardSpeed <= 0.35f ? -escapeSide * 0.9f : 0f;
                 throttle = 0f;
                 brake = 1f;
+                committedLateral = Mathf.Clamp(aheadOtherLat + escapeSide * 4.0f, -4.5f, 4.5f);
                 return true;
             }
             if (race != null && race.State != RaceState.Racing) { stuckTimer = 0f; return false; }
-            stuckTimer = speed < 1f && throttle > 0f ? stuckTimer + Time.fixedDeltaTime : 0f;
+            bool contact = aheadCar != null && aheadGap < 4.5f && speed < 2.5f;
+            stuckTimer = speed < 2.5f && (throttle > 0f || contact) ? stuckTimer + thinkDt * (contact ? 3.5f : 1f) : 0f;
             if (stuckTimer > StuckSeconds)
             {
                 stuckTimer = 0f;
-                reverseTimer = ReverseSeconds;
+                reverseTimer = 2.0f;
+                escapeTimer = 5.0f;
+                if (aheadCar != null)
+                {
+                    float localX = transform.InverseTransformPoint(aheadCar.transform.position).x;
+                    escapeSide = Mathf.Abs(aheadOtherLat) > 0.5f ? (aheadOtherLat > 0f ? -1f : 1f) : (localX >= 0f ? -1f : 1f);
+                }
+                else escapeSide = committedLateral >= 0f ? -1f : 1f;
             }
             return false;
         }

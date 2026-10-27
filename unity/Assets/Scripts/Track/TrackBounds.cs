@@ -6,7 +6,7 @@ namespace RaceX.Track
     [RequireComponent(typeof(CarController))]
     public class TrackBounds : MonoBehaviour
     {
-        public const float ResetDelay = 3f;
+        public const float ResetDelay = 1.8f;
 
         public CheckpointManager checkpoints;
         float stuckTimer;
@@ -23,7 +23,9 @@ namespace RaceX.Track
             if (!car.IsOffTrack && car.SpeedKmh > 15f) checkpoints.MarkOnTrack(car);
             bool flipped = Vector3.Dot(transform.up, Vector3.up) < 0.3f && car.SpeedKmh < 15f;
             bool stalledOffTrack = (car.IsOffTrack || car.GroundedWheels == 0) && car.SpeedKmh < 5f && !car.inputLocked;
-            stuckTimer = flipped || stalledOffTrack ? stuckTimer + Time.deltaTime : 0f;
+            bool pinnedWithInput = !car.inputLocked && !car.pitControlled
+                && (car.throttleInput > 0.25f || car.brakeInput > 0.25f) && car.SpeedKmh < 1.2f;
+            stuckTimer = (flipped || stalledOffTrack || pinnedWithInput) ? stuckTimer + Time.deltaTime : 0f;
 
             if (stuckTimer >= ResetDelay || transform.position.y < -30f) ResetToCheckpoint();
         }

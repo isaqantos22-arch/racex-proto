@@ -84,10 +84,14 @@ namespace RaceX.Career
 
         static readonly string[] F2Teams =
         {
-            "Prema", "Carlin", "Hitech", "ART Grand Prix", "Virtuosi", "Trident",
-            "DAMS", "Campos", "MP Motorsport", "Rodin", "Invicta", "Independente"
+            "Invicta", "Hitech", "Campos", "DAMS", "MP Motorsport", "Prema",
+            "Rodin", "ART Grand Prix", "Virtuosi", "Carlin", "Trident", "Independente"
         };
 
+        // F2: ordem do campeonato de equipes 2025 (Invicta 316, Hitech 278, Campos 258, DAMS 207, MP 207, Prema 163, Rodin 155, ART 127, Trident 2);
+        // Virtuosi e Carlin nao constam na tabela 2025 pesquisada: posicao estimada. Independente e ficticia (fundo).
+        // F1: ordem pela hierarquia 2025 (McLaren, Red Bull/Mercedes/Ferrari, Williams, Racing Bulls, Aston Martin, Haas, Sauber, Alpine):
+        // Adler=McLaren, Nova=Mercedes, Vortex=Red Bull, Meridian=Ferrari, Apex=Williams, Horizonte=Racing Bulls, Falcao=Aston Martin, Vector=Haas, Northline=Sauber, Solaris=Alpine; Cobalt e Duna ficticias (fundo).
         static readonly string[] F1Teams =
         {
             "Scuderia Adler", "Racing Nova", "Vortex GP", "Team Meridian", "Apex Racing", "Equipe Horizonte",
@@ -147,7 +151,40 @@ namespace RaceX.Career
         {
             var teams = TeamsFor(data != null ? data.category : "F2");
             int i = Array.IndexOf(teams, team);
-            return i >= 0 ? i : 0;
+            if (i < 0) return 0;
+            bool gt = data != null && data.category == "GT";
+            return gt ? i : teams.Length - 1 - i;
+        }
+
+        /// <summary>Fator de desempenho do carro por equipe. F2: 1,00 (fundo) a 1,06 (Prema) — nunca abaixo do F2 atual.
+        /// F1: 1,12 (fundo) a 1,20 (ponta; grid real 2025 estava a 1,36% de tempo entre o mais rapido e o mais lento) — todo F1 acima de qualquer F2. GT já difere pelo modelo do carro.</summary>
+        public static float TeamPerformanceFor(string team)
+        {
+            if (data == null || string.IsNullOrEmpty(team)) return 1f;
+            int t = TeamTier(team);
+            if (data.category == "F1") return 1.12f + t / 11f * 0.08f;
+            if (data.category == "F2") return 1.00f + t / 11f * 0.06f;
+            return 1f;
+        }
+
+        public static string TeamOfDriver(string driverName)
+        {
+            if (data == null) return "";
+            if (driverName == data.pilotName) return data.f2Team;
+            var e = data.standings.Find(s => s.driverName == driverName);
+            return e != null ? e.team : "";
+        }
+
+        /// <summary>Aplica a diferença real entre equipes: torque (aceleração), apoio aerodinâmico e aderência lateral.</summary>
+        public static void ApplyTeamPerformance(CarSpec spec, string team)
+        {
+            if (spec == null) return;
+            float f = TeamPerformanceFor(team);
+            if (f <= 1.0001f) return;
+            float d = f - 1f;
+            spec.maxTorqueNm *= f;
+            spec.downforceCoefficient *= 1f + d * 0.6f;
+            spec.sidewaysStiffness *= 1f + d * 0.25f;
         }
 
         /// <summary>Carro do JOGADOR: o da sua equipe atual (GT/F1) ou o da categoria F2.</summary>
@@ -176,7 +213,7 @@ namespace RaceX.Career
         {
             if (data == null) return "";
             if (data.category == "GT") return GTTeamCarKmh(team) + " KM/H";
-            if (data.category == "F2") return "F2 — MONOPOSTO 620 CV";
+            if (data.category == "F2") return "F2 — CARRO DE FÓRMULA";
             var m = F1CarsByTier[TeamTier(team)];
             return m == CarModel.F1 ? "F1 2022 — PONTEIRA" : m == CarModel.F1Studio ? "F1 — MEIO DE GRADE" : "F1 2008 — FUNDO DE GRADE";
         }
@@ -202,9 +239,7 @@ namespace RaceX.Career
         public static float SkillBiasFor(string driverName)
         {
             if (data == null) return 0f;
-            string team;
-            if (driverName == data.pilotName) team = data.f2Team;
-            else { var e = data.standings.Find(s => s.driverName == driverName); team = e != null ? e.team : ""; }
+            string team = TeamOfDriver(driverName);
             if (string.IsNullOrEmpty(team)) return 0f;
             return (TeamTier(team) / 11f) * 0.10f - 0.02f;
         }
@@ -279,17 +314,76 @@ namespace RaceX.Career
         /// garante que a classificação da corrida bata com a tabela da temporada.</summary>
         public static List<string> RaceRoster;
 
+        static bool importingCloud;
+
         public static void Save()
         {
             if (data == null) return;
-            data.saveVersion = 2;
+            data.saveVersion = 3;
             try
             {
                 File.WriteAllText(SavePath, JsonUtility.ToJson(data, true));
+                if (!importingCloud)
+                {
+                    if (data.titles > CareerStats.Titles) CareerStats.Titles = data.titles;
+                    CareerStats.TouchUpdated();
+                    if (AccountClient.IsLoggedIn)
+                        AccountClient.PushFullState();
+                }
             }
             catch (Exception ex)
             {
                 Debug.LogWarning("[Carreira] falha ao salvar: " + ex.Message);
+            }
+        }
+
+        public static string ExportRawJson()
+        {
+            try
+            {
+                if (data != null) return JsonUtility.ToJson(data);
+                if (HasSave) return File.ReadAllText(SavePath);
+            }
+            catch { }
+            return "";
+        }
+
+        public static void ImportRawJson(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return;
+            try
+            {
+                var parsed = JsonUtility.FromJson<CareerData>(json);
+                if (parsed == null || string.IsNullOrEmpty(parsed.pilotName)) return;
+                importingCloud = true;
+                data = parsed;
+                if (data.standings == null) data.standings = new List<StandingEntry>();
+                if (data.saveVersion < 3)
+                {
+                    data.weekendPhase = PH_FP;
+                    data.fpDone = false;
+                    data.sessionDeadlineUtc = 0;
+                    data.gpGrid = 0;
+                    data.sqGrid = 0;
+                    data.qChain?.Clear();
+                    data.qLocked?.Clear();
+                    data.sqChain?.Clear();
+                    data.sqLocked?.Clear();
+                    data.pracNames?.Clear();
+                    data.pracBest?.Clear();
+                }
+                MigrateStandings();
+                data.saveVersion = 3;
+                File.WriteAllText(SavePath, JsonUtility.ToJson(data, true));
+                if (data.titles > CareerStats.Titles) CareerStats.Titles = data.titles;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[Carreira] falha ao importar nuvem: " + ex.Message);
+            }
+            finally
+            {
+                importingCloud = false;
             }
         }
 
@@ -304,25 +398,26 @@ namespace RaceX.Career
             {
                 data = JsonUtility.FromJson<CareerData>(File.ReadAllText(SavePath));
                 if (data.standings == null) data.standings = new List<StandingEntry>();
-                // ORDEM IMPORTA: migrar a FASE antes do MigrateStandings (que pode salvar e marcar a versão).
-                bool legacy = data.saveVersion < 2;
-                if (legacy)
+                bool needSave = false;
+                if (data.saveVersion < 3)
                 {
-                    // Mapa: 0 FP→FP · 1 SQ→SQ1 · 2 SPRINT · 3 Q→Q1 · 4 RACE · 5 FP2→FP3
-                    data.weekendPhase = data.weekendPhase switch
-                    {
-                        1 => PH_SQ1,
-                        2 => PH_SPRINT,
-                        3 => PH_Q1,
-                        4 => PH_RACE,
-                        5 => PH_FP3,
-                        _ => PH_FP,
-                    };
+                    data.weekendPhase = PH_FP;
+                    data.fpDone = false;
+                    data.sessionDeadlineUtc = 0;
+                    data.gpGrid = 0;
+                    data.sqGrid = 0;
+                    data.qChain?.Clear();
+                    data.qLocked?.Clear();
+                    data.sqChain?.Clear();
+                    data.sqLocked?.Clear();
+                    data.pracNames?.Clear();
+                    data.pracBest?.Clear();
+                    needSave = true;
                 }
                 MigrateStandings();
-                if (legacy)
+                if (needSave)
                 {
-                    data.saveVersion = 2;
+                    data.saveVersion = 3;
                     Save();
                 }
             }
@@ -401,7 +496,20 @@ namespace RaceX.Career
             data.promotedThisSeason = false;
             int teamIdx = Math.Max(0, Array.IndexOf(TeamsFor(data.category), data.f2Team));
             BuildGrid(TeamsFor(data.category), RivalNames, teamIdx);
+            OfferEntryTeams();
             Save();
+        }
+
+        /// <summary>Mesa de propostas de entrada: as 3 equipes mais fracas da categoria (estreante não traz valor).</summary>
+        static void OfferEntryTeams()
+        {
+            var teams = TeamsFor(data.category);
+            bool gt = data.category == "GT";
+            data.awaitingTeamChoice = true;
+            data.teamOffers = gt
+                ? new[] { teams[0], teams[1], teams[2] }
+                : new[] { teams[teams.Length - 3], teams[teams.Length - 2], teams[teams.Length - 1] };
+            data.f2Team = data.teamOffers[0];
         }
 
         /// <summary>Monta a tabela: 12 pilotos, 6 equipes × 2, jogador na equipe da academia no lugar de um fictício.</summary>
@@ -952,11 +1060,7 @@ namespace RaceX.Career
             data.qChain.Clear(); data.qLocked.Clear();
             CareerData.raceActive = false;
             JustFinishedSeason = false;
-            data.awaitingTeamChoice = true;
-            // Propostas de entrada na F2: as 3 ÚLTIMAS da escada (mais fracas — estreante não traz valor).
-            var teams = TeamsFor(data.category);
-            data.teamOffers = new[] { teams[teams.Length - 3], teams[teams.Length - 2], teams[teams.Length - 1] };
-            data.f2Team = data.teamOffers[0];
+            OfferEntryTeams();
             data.standings = new List<StandingEntry>();
             Save();
         }

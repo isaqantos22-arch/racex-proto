@@ -75,7 +75,29 @@ namespace RaceX.Core
             Post("/auth/v1/token?grant_type=password", body, done);
         }
 
-        /// <summary>Salva perfil (nome/foto/cor) e estatísticas na nuvem.</summary>
+        [Serializable]
+        class CloudBundle
+        {
+            public long updatedTicks;
+            public int credits;
+            public int[] upgrades;
+            public string careerJson;
+        }
+
+        static string BuildCloudCareerField()
+        {
+            var bundle = new CloudBundle
+            {
+                updatedTicks = CareerStats.LastUpdatedTicks > 0 ? CareerStats.LastUpdatedTicks : DateTime.UtcNow.Ticks,
+                credits = CareerStats.Credits,
+                upgrades = CareerStats.ExportUpgradesArray(),
+                careerJson = RaceX.Career.CareerMode.ExportRawJson()
+            };
+            string raw = JsonUtility.ToJson(bundle);
+            return "B64:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(raw));
+        }
+
+        /// <summary>Salva perfil (nome/foto/cor), estatísticas, créditos, melhorias dos carros e carreira na nuvem.</summary>
         public static void SaveProfile(Action<bool, string> done)
         {
             if (!IsLoggedIn || string.IsNullOrEmpty(UserId))
@@ -83,12 +105,25 @@ namespace RaceX.Core
                 if (done != null) done(false, "Não autenticado");
                 return;
             }
+            Wins = Mathf.Max(Wins, CareerStats.Wins);
+            Podiums = Mathf.Max(Podiums, CareerStats.Podiums);
+            Titles = Mathf.Max(Titles, CareerStats.Titles);
+            Races = Mathf.Max(Races, CareerStats.Races);
+            string careerField = BuildCloudCareerField();
             var body = "{\"name\":" + Json(Name) + ",\"photo\":" + Json(Photo) +
                        ",\"avatar_color\":" + AvatarColor +
                        ",\"email\":" + Json(Email) +
+                       ",\"career\":" + Json(careerField) +
                        ",\"wins\":" + Wins + ",\"podiums\":" + Podiums +
                        ",\"titles\":" + Titles + ",\"races\":" + Races + "}";
             Runner.Run(PatchProfile(body, done));
+        }
+
+        /// <summary>Sincroniza imediatamente todo o estado da conta (carreira + créditos + upgrades + stats) na nuvem.</summary>
+        public static void PushFullState()
+        {
+            if (IsLoggedIn && !string.IsNullOrEmpty(UserId))
+                SaveProfile(null);
         }
 
         /// <summary>Edita perfil localmente e empurra para a nuvem.</summary>
@@ -125,6 +160,7 @@ namespace RaceX.Core
                     var user = JsonUser(req.downloadHandler.text);
                     ApplyUser(user);
                     req.Dispose();
+                    yield return LoadProfileCoroutine(null);
                     if (done != null) done(true);
                     yield break;
                 }
@@ -235,14 +271,50 @@ namespace RaceX.Core
                 var color = JsonIntField(json, "avatar_color");
                 if (color >= 0) AvatarColor = color;
                 var w = JsonIntField(json, "wins");
-                if (w >= 0) Wins = w;
+                if (w >= 0) Wins = Mathf.Max(w, CareerStats.Wins);
                 var p = JsonIntField(json, "podiums");
-                if (p >= 0) Podiums = p;
+                if (p >= 0) Podiums = Mathf.Max(p, CareerStats.Podiums);
                 var t = JsonIntField(json, "titles");
-                if (t >= 0) Titles = t;
+                if (t >= 0) Titles = Mathf.Max(t, CareerStats.Titles);
                 var r = JsonIntField(json, "races");
-                if (r >= 0) Races = r;
+                if (r >= 0) Races = Mathf.Max(r, CareerStats.Races);
+                string careerField = JsonStringField(json, "career");
+                bool pushedBack = false;
+                if (!string.IsNullOrEmpty(careerField) && careerField.StartsWith("B64:", StringComparison.Ordinal))
+                {
+                    try
+                    {
+                        string raw = Encoding.UTF8.GetString(Convert.FromBase64String(careerField.Substring(4)));
+                        var bundle = JsonUtility.FromJson<CloudBundle>(raw);
+                        if (bundle != null)
+                        {
+                            long localTicks = CareerStats.LastUpdatedTicks;
+                            bool cloudNewer = bundle.updatedTicks >= localTicks || !RaceX.Career.CareerMode.HasSave;
+                            int creditsToApply = cloudNewer ? bundle.credits : CareerStats.Credits;
+                            CareerStats.SyncFromCloud(creditsToApply, Wins, Podiums, Titles, Races, bundle.upgrades, bundle.updatedTicks);
+                            if (!string.IsNullOrEmpty(bundle.careerJson) && (cloudNewer || !RaceX.Career.CareerMode.HasSave))
+                            {
+                                RaceX.Career.CareerMode.ImportRawJson(bundle.careerJson);
+                            }
+                            else if (localTicks > bundle.updatedTicks)
+                            {
+                                pushedBack = true;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning("[Conta] falha ao ler dados da nuvem: " + ex.Message);
+                    }
+                }
+                else
+                {
+                    CareerStats.SyncFromCloud(-1, Wins, Podiums, Titles, Races, null, 0L);
+                    if (RaceX.Career.CareerMode.HasSave || CareerStats.TotalUpgradePoints() > 0 || CareerStats.Races > 0)
+                        pushedBack = true;
+                }
                 PersistProfile();
+                if (pushedBack) SaveProfile(null);
             }
             req.Dispose();
             if (done != null) done(true);

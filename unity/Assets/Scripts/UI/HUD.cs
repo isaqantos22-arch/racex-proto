@@ -21,11 +21,18 @@ namespace RaceX.UI
         Text lapText, timeText, positionText, speedText, gearText, countdownText, wrongWayText, messageText;
         Text tireText;
         Text danoText;
+        Text fpsText;
+        float fpsAcc;
+        int fpsFrames, fpsLast = -1;
+        float fpsMin = float.MaxValue;
+        int radioLap = -1;
+        bool radioWarned;
         Image[] wheelImgs;      // painel CARRO: 4 rodas (desgaste verde/amarelo/vermelho)
         Image dmgFrontImg, dmgRearImg; // barras de dano frente/trás
         float lastPanelT;
         static Color ZoneColor(float d) => d < 0.05f ? new Color(0.25f, 0.85f, 0.35f) : d < 0.35f ? new Color(1f, 0.75f, 0.1f) : new Color(1f, 0.22f, 0.15f);
         UnityEngine.UI.Button pitButton;
+        bool lastPitHighlighted;
         UnityEngine.UI.Button ffButton;
         bool fastForward;
 
@@ -109,29 +116,32 @@ namespace RaceX.UI
             pitButton = MenuTheme.StyledButton(root, "PitBtn", "PIT", tr, tr, new Vector2(-160f * s, -140f), new Vector2(110f * s, 90f * s), (int)(26 * s), () => { if (entry != null) RaceX.Core.PitLaneSystem.RequestPit(entry.car); });
             // Acelerar o TEMPO 5x (pula a minutagem do treino): aperta de novo e volta a 1x.
             // Posição y−250 (abaixo do PIT) para não invadir a coluna CAM/pausa do canto.
-            ffButton = MenuTheme.StyledButton(root, "FFBtn", "1x", tr, tr, new Vector2(-160f * s, -250f), new Vector2(110f * s, 90f * s), (int)(28 * s), ToggleFastForward);
+            ffButton = MenuTheme.StyledButton(root, "FFBtn", "1x", tr, tr, new Vector2(-34f * s, -140f), new Vector2(100f * s, 90f * s), (int)(28 * s), ToggleFastForward);
             tireText = UIFactory.Label("Tire", root, "", (int)(26 * s), TextAnchor.UpperRight, tr, tr, new Vector2(-290f * s, -24f), new Vector2(240f * s, 40f), MenuTheme.TextDim);
             pitInfoText = UIFactory.Label("PitInfo", root, "", (int)(24 * s), TextAnchor.UpperRight, tr, tr, new Vector2(-290f * s, -70f), new Vector2(240f * s, 36f), MenuTheme.Accent);
 
             // PAINEL CARRO (regra do usuário): silhueta com 4 rodas coloridas por DESGASTE
             // (verde/amarelo/vermelho) + barras de DANO da frente e da traseira.
+            // Pivot (0.5, 0.5) em todos os elementos internos para o corpo nunca vazar para fora do painel.
             if (!compact)
             {
-                var carPanel = UIFactory.Panel("CarPanel", root, tr, tr, new Vector2(-160f * s, -390f * s), new Vector2(150f * s, 225f * s), new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.88f));
+                var carPanel = UIFactory.Panel("CarPanel", root, tr, tr, new Vector2(-160f * s, -250f * s), new Vector2(150f * s, 225f * s), new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.88f));
                 carPanel.sprite = MenuTheme.RoundedSprite(75, 112, 20);
-                UIFactory.Label("CarTitle", carPanel.transform, "CARRO", (int)(17 * s), TextAnchor.MiddleCenter, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -17f * s), new Vector2(140f * s, 22f * s), MenuTheme.TextDim);
-                dmgFrontImg = UIFactory.Panel("DmgF", carPanel.transform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -38f * s), new Vector2(42f * s, 9f * s), Color.green);
-                dmgFrontImg.sprite = MenuTheme.RoundedSprite(21, 5, 4);
-                dmgRearImg = UIFactory.Panel("DmgR", carPanel.transform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -192f * s), new Vector2(42f * s, 9f * s), Color.green);
-                dmgRearImg.sprite = MenuTheme.RoundedSprite(21, 5, 4);
-                var body = UIFactory.Panel("Body", carPanel.transform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -116f * s), new Vector2(52f * s, 128f * s), new Color(1f, 1f, 1f, 0.14f));
-                body.sprite = MenuTheme.RoundedSprite(26, 64, 10);
-                var wPos = new[] { new Vector2(-33f, -62f), new Vector2(33f, -62f), new Vector2(-33f, -170f), new Vector2(33f, -170f) };
+                var topAnchor = new Vector2(0.5f, 1f);
+                var centerPivot = new Vector2(0.5f, 0.5f);
+                UIFactory.Label("CarTitle", carPanel.transform, "CARRO", (int)(17 * s), TextAnchor.MiddleCenter, topAnchor, topAnchor, new Vector2(0f, -10f * s), new Vector2(140f * s, 22f * s), MenuTheme.TextDim);
+                dmgFrontImg = UIFactory.Panel("DmgF", carPanel.transform, topAnchor, centerPivot, new Vector2(0f, -44f * s), new Vector2(44f * s, 9f * s), Color.green);
+                dmgFrontImg.sprite = MenuTheme.RoundedSprite(22, 5, 4);
+                var body = UIFactory.Panel("Body", carPanel.transform, topAnchor, centerPivot, new Vector2(0f, -122f * s), new Vector2(48f * s, 122f * s), new Color(1f, 1f, 1f, 0.16f));
+                body.sprite = MenuTheme.RoundedSprite(24, 61, 10);
+                dmgRearImg = UIFactory.Panel("DmgR", carPanel.transform, topAnchor, centerPivot, new Vector2(0f, -200f * s), new Vector2(44f * s, 9f * s), Color.green);
+                dmgRearImg.sprite = MenuTheme.RoundedSprite(22, 5, 4);
+                var wPos = new[] { new Vector2(-34f, -80f), new Vector2(34f, -80f), new Vector2(-34f, -164f), new Vector2(34f, -164f) };
                 wheelImgs = new Image[4];
                 for (int i = 0; i < 4; i++)
                 {
-                    var w = UIFactory.Panel("Wheel" + i, carPanel.transform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), wPos[i] * s, new Vector2(20f * s, 28f * s), Color.green);
-                    w.sprite = MenuTheme.RoundedSprite(10, 14, 5);
+                    var w = UIFactory.Panel("Wheel" + i, carPanel.transform, topAnchor, centerPivot, wPos[i] * s, new Vector2(18f * s, 28f * s), Color.green);
+                    w.sprite = MenuTheme.RoundedSprite(9, 14, 5);
                     wheelImgs[i] = w;
                 }
             }
@@ -145,7 +155,9 @@ namespace RaceX.UI
             UIFactory.Label("Unit", gauge.transform, "km/h", (int)(26 * s), TextAnchor.LowerLeft, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-30f * s, -78f * s), new Vector2(80f * s, 30f * s), MenuTheme.TextDim);
             gearText = UIFactory.Label("Gear", gauge.transform, "1", (int)(60 * s), TextAnchor.MiddleCenter, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f * s, -10f * s), new Vector2(80f * s, 100f * s), new Color(1f, 0.85f, 0.2f));
             // DANO (regra do usuário: dano existe → aparece na tela). Vermelho quando o carro está batido.
+#if UNITY_EDITOR
             danoText = UIFactory.Label("Dano", gauge.transform, "", (int)(24 * s), TextAnchor.MiddleCenter, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(-160f * s, -8f * s), new Vector2(140f * s, 30f * s), new Color(1f, 0.3f, 0.2f));
+#endif
             var rpmBg = UIFactory.Panel("RpmBg", gauge.transform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 18f * s), new Vector2(320f * s, 22f * s), new Color(1f, 1f, 1f, 0.12f));
             rpmBands = new Image[3];
             rpmBandColors = new[] { new Color(0.2f, 0.85f, 0.4f), new Color(1f, 0.75f, 0.1f), new Color(1f, 0.2f, 0.15f) };
@@ -157,6 +169,7 @@ namespace RaceX.UI
                 rpmBands[i] = seg;
             }
 
+            fpsText = UIFactory.Label("Fps", root, "", (int)(22 * s), TextAnchor.UpperCenter, tc, tc, new Vector2(0f, -96f * s), new Vector2(360f, 30f), MenuTheme.TextDim);
             var c = new Vector2(0.5f, 0.5f);
             countdownText = UIFactory.Label("Countdown", root, "", (int)(200 * s), TextAnchor.MiddleCenter, c, c, Vector2.zero, new Vector2(800f, 300f), new Color(1f, 0.9f, 0.2f));
             wrongWayText = UIFactory.Label("WrongWay", root, "CONTRAMÃO", (int)(90 * s), TextAnchor.MiddleCenter, c, c, new Vector2(0f, 160f * s), new Vector2(900f, 120f), new Color(1f, 0.15f, 0.1f));
@@ -209,6 +222,7 @@ namespace RaceX.UI
                 resultsPanel.gameObject.SetActive(true);
                 return;
             }
+            UpdateFps();
             if (entry == null || entry.car == null) return;
             var car = entry.car;
             var progress = race.GetProgress(entry);
@@ -299,10 +313,24 @@ namespace RaceX.UI
             {
                 bool pitOn = RaceX.Core.PitLaneSystem.Instance != null && RaceX.Core.PitLaneSystem.PitEnabled;
                 pitButton.gameObject.SetActive(pitOn);
+                bool pitHighlighted = pitOn && entry != null && RaceX.Core.PitLaneSystem.IsPitActiveOrRequested(entry.car);
+                if (pitHighlighted || pitHighlighted != lastPitHighlighted)
+                {
+                    lastPitHighlighted = pitHighlighted;
+                    if (pitButton.image != null)
+                        pitButton.image.color = pitHighlighted ? MenuTheme.Accent : MenuTheme.Panel;
+                    var pitLbl = pitButton.GetComponentInChildren<Text>();
+                    if (pitLbl != null)
+                    {
+                        pitLbl.text = pitHighlighted ? "PIT \u2713" : "PIT";
+                        pitLbl.color = pitHighlighted ? new Color(0.06f, 0.06f, 0.08f, 1f) : MenuTheme.Text;
+                    }
+                }
                 if (pitInfoText != null)
                 {
                     // token: -3 sem pit, -2 no pit (autopilot), -1 sem janela, >=0 distância em m.
                     float d = pitOn ? RaceX.Core.PitLaneSystem.DistanceToPitEntry(car) : 0f;
+                    if (pitOn) UpdatePitRadio(car, d, lapNo);
                     int token = !pitOn ? -3
                         : entry != null && entry.car != null && entry.car.pitControlled ? -2
                         : d < 0f ? -1 : Mathf.RoundToInt(d);
@@ -332,6 +360,51 @@ namespace RaceX.UI
             {
                 messageTimer -= Time.deltaTime;
                 if (messageTimer <= 0f) messageText.text = "";
+            }
+        }
+
+        void UpdateFps()
+        {
+            if (fpsText == null) return;
+            if (!SettingsManager.ShowFps)
+            {
+                if (fpsLast != -2) { fpsLast = -2; fpsText.text = ""; }
+                return;
+            }
+            float dt = Time.unscaledDeltaTime;
+            fpsAcc += dt;
+            fpsFrames++;
+            if (dt > 0f) fpsMin = Mathf.Min(fpsMin, 1f / dt);
+            if (fpsAcc < 0.5f) return;
+            int fps = Mathf.RoundToInt(fpsFrames / fpsAcc);
+            int mn = Mathf.RoundToInt(fpsMin);
+            int token = fps * 1000 + mn;
+            if (token != fpsLast)
+            {
+                fpsLast = token;
+                fpsText.text = fps + " FPS (min " + mn + ")";
+            }
+            fpsAcc = 0f; fpsFrames = 0; fpsMin = float.MaxValue;
+        }
+
+        void UpdatePitRadio(RaceX.Car.CarController car, float distToEntry, int lapNo)
+        {
+            int lvl = SettingsManager.PitRadio;
+            if (lvl <= 0 || car.pitControlled) return;
+            float limit = SettingsManager.PitRadioWear[lvl];
+            float wear = RaceX.Core.PitLaneSystem.Wear(car);
+            if (wear < limit) { radioWarned = false; return; }
+            if (!radioWarned)
+            {
+                radioWarned = true;
+                messageText.text = "RÁDIO: PNEUS EM " + Mathf.RoundToInt((1f - wear) * 100f) + "% — BOX NA PRÓXIMA ENTRADA";
+                messageTimer = 4f;
+            }
+            else if (distToEntry >= 0f && distToEntry < 400f && radioLap != lapNo)
+            {
+                radioLap = lapNo;
+                messageText.text = "RÁDIO: BOX, BOX — ENTRADA A " + Mathf.RoundToInt(distToEntry) + " m (TOQUE EM PIT)";
+                messageTimer = 4f;
             }
         }
 

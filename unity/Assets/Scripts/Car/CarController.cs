@@ -229,8 +229,16 @@ namespace RaceX.Car
             float speedFactor = Mathf.Clamp01(SpeedKmh / Mathf.Max(1f, spec.topSpeedKmh));
             float maxAngle = spec.maxSteerAngle * Mathf.Lerp(1f, spec.steerAtTopSpeed, speedFactor);
             float steerIn = pitControlled ? extSteer : Mathf.Clamp(steerInput, -1f, 1f);
+            float steerRate = 120f;
+            if (spec.rectangularSteeringWheel && !pitControlled)
+            {
+                float sf = Mathf.Clamp01(SpeedKmh / 180f);
+                maxAngle = spec.maxSteerAngle * Mathf.Lerp(1f, 0.32f, Mathf.Pow(sf, 0.8f));
+                steerIn = Mathf.Sign(steerIn) * Mathf.Pow(Mathf.Abs(steerIn), 1.15f);
+                steerRate = Mathf.Lerp(120f, 85f, sf);
+            }
             float target = (inputLocked ? 0f : steerIn) * maxAngle;
-            currentSteerAngle = Mathf.MoveTowards(currentSteerAngle, target, 120f * Time.fixedDeltaTime);
+            currentSteerAngle = Mathf.MoveTowards(currentSteerAngle, target, steerRate * Time.fixedDeltaTime);
             wheels[FL].steerAngle = currentSteerAngle;
             wheels[FR].steerAngle = currentSteerAngle;
         }
@@ -269,14 +277,21 @@ namespace RaceX.Car
             float brake = inputLocked ? 0f : brakeInput;
             float fwd = ForwardSpeed;
 
-            if (Gear > 0 && brake > 0.1f && throttle < 0.1f && fwd < 0.5f)
+            if (Gear > 0 && brake > 0.1f && throttle < 0.1f && fwd < 0.8f)
             {
                 Gear = -1;
+                shiftTimer = 0f;
             }
             else if (Gear < 0)
             {
                 // Sai da ré quando o acelerador é pressionado (pedal real, qualquer mapeamento de input).
-                if (throttleInput > 0.1f) Gear = 1;
+                if (throttleInput > 0.1f) { Gear = 1; shiftTimer = 0f; }
+            }
+            else if (Gear > 1 && Mathf.Abs(fwd) < 2f && SpeedKmh < 8f)
+            {
+                // Parada brusca (colisão): cai direto para 1ª sem esperar reduzir 6 marchas sem torque.
+                Gear = 1;
+                shiftTimer = 0f;
             }
 
             float groundRpm = Mathf.Abs(fwd) / (2f * Mathf.PI * spec.wheelRadius) * 60f;
@@ -353,6 +368,14 @@ namespace RaceX.Car
         {
             float brake = inputLocked ? 1f : (Gear < 0 ? 0f : brakeInput);
             if (pitControlled) brake = Mathf.Max(brake, extBrake);
+            // SAÍDA DE RÉ (regra do usuário): de ré a 50 km/h, ao acelerar a 1ª engata na hora
+            // e o carro PARA quase que instantaneamente (freio 100% enquanto anda para trás com
+            // pedal acionado) — nada de arrastar de ré por 10-15 s antes de lançar.
+            if (Gear >= 1 && ForwardSpeed < -0.5f)
+            {
+                bool wantsForward = pitControlled ? extThrottle > 0.1f : throttleInput > 0.1f;
+                if (wantsForward) brake = 1f;
+            }
             float front = spec.brakeTorque * brake * spec.frontBrakeBias * 2f;
             float rear = spec.brakeTorque * brake * (1f - spec.frontBrakeBias) * 2f;
 
@@ -375,6 +398,14 @@ namespace RaceX.Car
 
         void ApplyStability()
         {
+            // ANTI-GIRO DO PIT (regra do usuário): o piloto automático não pode rodar o carro —
+            // na grama/baixa velocidade o steer cheio fazia 2 giros antes de achar o box.
+            // Teto físico de yaw (~80°/s) para o carro do pit, em qualquer piso.
+            if (pitControlled && GroundedWheels > 0)
+            {
+                Vector3 avP = rb.angularVelocity;
+                if (Mathf.Abs(avP.y) > 1.4f) rb.angularVelocity = new Vector3(avP.x, Mathf.Sign(avP.y) * 1.4f, avP.z);
+            }
             float speed = Mathf.Abs(ForwardSpeed);
             if (speed < 5f || GroundedWheels == 0) return;
             if (assistLevel <= 0.01f) return;
