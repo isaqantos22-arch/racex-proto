@@ -16,6 +16,17 @@ namespace RaceX.Track
         public WaypointSystem Waypoints { get; private set; }
         public CheckpointManager Checkpoints { get; private set; }
 
+        /// <summary>Início (m ao longo do spline) da reta escolhida para o pit; -1 = não planejado.</summary>
+        public float PitStart { get; private set; } = -1f;
+        /// <summary>Comprimento da reta de baixa curvatura que começa em PitStart (m).</summary>
+        public float PitRun { get; private set; }
+        /// <summary>Comprimento máximo reservado ao pit (corredor + garagens) no planejamento.</summary>
+        public const float PitPlanLength = 300f;
+        readonly List<Vector3> pitZoneC = new List<Vector3>();
+        readonly List<Vector3> pitZoneR = new List<Vector3>();
+        readonly List<Vector3> pitZoneF = new List<Vector3>();
+        readonly List<float> pitZoneRel = new List<float>();
+
         public static TrackBuilder Build(TrackDefinition def)
         {
             var go = new GameObject("Track_" + def.id);
@@ -58,6 +69,7 @@ namespace RaceX.Track
             Waypoints.Initialize(Spline, WaypointSpacing);
             Checkpoints = gameObject.AddComponent<CheckpointManager>();
             Checkpoints.Initialize(this, BuildCheckpoints(wallOffset));
+            PlanPit(wallOffset);
 
             switch (def.id)
             {
@@ -74,6 +86,8 @@ namespace RaceX.Track
                 case TrackId.NeonStrip: CityDecoration.Build(this, wallOffset); break;
                 default: ForestDecoration.Build(this, wallOffset); break;
             }
+            try { ClearPitZoneDecoration(); }
+            catch (System.Exception ex) { Debug.LogWarning("[Track] limpeza da area do pit ignorada: " + ex.Message); }
             try { CombineDecoration(); }
             catch (System.Exception ex) { Debug.LogWarning("[Track] combinar decoracao ignorado: " + ex.Message); }
         }
@@ -286,6 +300,165 @@ namespace RaceX.Track
                 if (rel <= span) kill.Add(child.gameObject);
             }
             foreach (var g in kill) Destroy(g);
+        }
+
+        /// <summary>Escolhe a reta do pit ANTES da decoração: mesma busca de retas do PitLaneSystem
+        /// (maior trecho de baixa curvatura), mas só aceita a reta se o corredor + garagens (lado
+        /// esquerdo, 6,5–40 m) não invadirem outro trecho da pista nem a própria pista numa curva.
+        /// Preferência: pit inteiro antes do grid (sem cruzar a linha de largada).</summary>
+        void PlanPit(float wallOffset)
+        {
+            float L = Spline.Length;
+            var cands = new List<(float run, float s)>();
+            for (float s = 0f; s < L; s += 10f)
+            {
+                float run = 0f;
+                for (float t = s; t < s + 240f; t += 10f)
+                {
+                    if (Curvature(Spline, Mathf.Repeat(t, L)) > 0.0015f) break;
+                    run += 10f;
+                }
+                cands.Add((run, s));
+            }
+            if (cands.Count == 0) return;
+            cands.Sort((a, b) => a.run != b.run ? b.run.CompareTo(a.run) : a.s.CompareTo(b.s));
+            float chosen = cands[0].s, chosenRun = cands[0].run;
+            bool found = false;
+            var clearCache = new Dictionary<float, bool>();
+            for (int pass = 0; pass < 2 && !found; pass++)
+            {
+                for (int c = 0; c < cands.Count && c < 60; c++)
+                {
+                    var (run, s) = cands[c];
+                    if (run < 40f) break;
+                    if (pass == 0 && !(s - 25f >= 10f && s + 315f <= L - 105f)) continue;
+                    if (!clearCache.TryGetValue(s, out bool clear)) clearCache[s] = clear = PitClear(s, wallOffset);
+                    if (!clear) continue;
+                    chosen = s; chosenRun = run; found = true;
+                    break;
+                }
+            }
+            // Sem reta livre: varre a pista toda e pega o trecho livre menos curvo.
+            for (int pass = 0; pass < 2 && !found; pass++)
+            {
+                float bestK = float.MaxValue;
+                for (float s = 0f; s < L; s += 10f)
+                {
+                    if (pass == 0 && !(s - 25f >= 10f && s + 315f <= L - 105f)) continue;
+                    float k = 0f;
+                    for (float t = 0f; t < 300f; t += 10f) k += Curvature(Spline, Mathf.Repeat(s + t, L));
+                    if (k >= bestK || !PitClear(s, wallOffset)) continue;
+                    bestK = k; chosen = s; chosenRun = 40f; found = true;
+                }
+            }
+            PitStart = chosen;
+            PitRun = chosenRun;
+            Debug.Log($"[PitLane] plano pista={Definition.id} inicio={chosen:F0} reta={chosenRun:F0} livre={found} L={L:F0}");
+
+            pitZoneC.Clear(); pitZoneR.Clear(); pitZoneF.Clear(); pitZoneRel.Clear();
+            for (float rel = -30f; rel <= PitPlanLength + 20f; rel += 2f)
+            {
+                Pose p = Spline.PoseAtDistance(Mathf.Repeat(PitStart + rel, L));
+                pitZoneC.Add(p.position);
+                pitZoneR.Add(p.rotation * Vector3.right);
+                pitZoneF.Add(p.rotation * Vector3.forward);
+                pitZoneRel.Add(rel);
+            }
+        }
+
+        void ClearPitZoneDecoration()
+        {
+            if (pitZoneC.Count == 0) return;
+            var kill = new List<GameObject>();
+            foreach (Transform root in transform)
+            {
+                if (root.name != "Decoration") continue;
+                foreach (Transform t in root)
+                {
+                    Vector3 sc = t.lossyScale;
+                    float half = Mathf.Max(Mathf.Abs(sc.x), Mathf.Abs(sc.z)) * 0.5f;
+                    if (half > 60f) continue;
+                    if (InPitZone(t.position, half + 1f)) kill.Add(t.gameObject);
+                }
+            }
+            foreach (var g in kill) DestroyImmediate(g);
+            if (kill.Count > 0) Debug.Log($"[PitLane] decoracao removida da area do pit: {kill.Count}");
+        }
+
+        bool PitClear(float start, float wall)
+        {
+            float L = Spline.Length;
+            float sp = Spline.spacing;
+            float lo = start - 45f, hi = start + PitPlanLength + 30f;
+            float[] lats = { 6.5f, 10f, 14f, 20f, 28f, 36f, 40f };
+            if (pitGrid == null) BuildPitGrid();
+            float otherMin = wall + 4f;
+            for (float s = lo; s < hi; s += 4f)
+            {
+                int ci = Spline.Wrap(Mathf.FloorToInt(Mathf.Repeat(s, L) / sp));
+                Vector3 c = Spline.points[ci], r = Spline.rights[ci];
+                for (int k = 0; k < lats.Length; k++)
+                {
+                    float ownMin = 0.9f * lats[k];
+                    float ownSq = ownMin * ownMin, otherSq = otherMin * otherMin;
+                    float qx = c.x - r.x * lats[k], qz = c.z - r.z * lats[k];
+                    int gx = Mathf.FloorToInt(qx / PitCell), gz = Mathf.FloorToInt(qz / PitCell);
+                    for (int ox = -1; ox <= 1; ox++)
+                    for (int oz = -1; oz <= 1; oz++)
+                    {
+                        if (!pitGrid.TryGetValue(CellKey(gx + ox, gz + oz), out var cell)) continue;
+                        foreach (int i in cell)
+                        {
+                            float dx = Spline.points[i].x - qx, dz = Spline.points[i].z - qz;
+                            float d2 = dx * dx + dz * dz;
+                            bool inside = Mathf.Repeat(i * sp - (lo - 60f), L) <= (hi - lo) + 120f;
+                            if (d2 < (inside ? ownSq : otherSq)) return false;
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+
+        // Grade espacial dos pontos do traçado (célula >= maior raio consultado) para o PitClear.
+        const float PitCell = 40f;
+        Dictionary<long, List<int>> pitGrid;
+        static long CellKey(int x, int z) => ((long)x << 32) ^ (uint)z;
+
+        void BuildPitGrid()
+        {
+            pitGrid = new Dictionary<long, List<int>>();
+            for (int i = 0; i < Spline.Count; i++)
+            {
+                Vector3 p = Spline.points[i];
+                long key = CellKey(Mathf.FloorToInt(p.x / PitCell), Mathf.FloorToInt(p.z / PitCell));
+                if (!pitGrid.TryGetValue(key, out var list)) pitGrid[key] = list = new List<int>();
+                list.Add(i);
+            }
+        }
+
+        /// <summary>Ponto (com folga) dentro da área reservada ao pit: corredor/rampas (6–21 m à esquerda)
+        /// ou garagens (até 38 m). A decoração consulta isso para nunca nascer dentro do box.</summary>
+        public bool InPitZone(Vector3 pos, float margin = 0f)
+        {
+            int best = -1;
+            float bestSq = 60f * 60f;
+            for (int i = 0; i < pitZoneC.Count; i++)
+            {
+                float dx = pos.x - pitZoneC[i].x, dz = pos.z - pitZoneC[i].z;
+                float d2 = dx * dx + dz * dz;
+                if (d2 < bestSq) { bestSq = d2; best = i; }
+            }
+            if (best < 0) return false;
+            Vector3 d = pos - pitZoneC[best];
+            d.y = 0f;
+            float lat = -Vector3.Dot(d, pitZoneR[best]);
+            float lon = Vector3.Dot(d, pitZoneF[best]);
+            if (Mathf.Abs(lon) > 2f + margin) return false;
+            float rel = pitZoneRel[best];
+            if (lat < 6f - margin) return false;
+            if (lat <= 21f + margin) return true;
+            return lat <= 38f + margin && rel >= 12f - margin && rel <= PitPlanLength + margin;
         }
 
         void AddWall(string name, float offset, Material mat)

@@ -1165,7 +1165,7 @@ namespace RaceX.UI
                 OptionRow(s, "Tela cheia", row++, () => Screen.fullScreen ? "Sim" : "Não", d => Screen.fullScreen = !Screen.fullScreen);
             OptionRow(s, "F1 em corridas GT", row++, () => SettingsManager.AllowF1 ? "Sim" : "Não", d => SettingsManager.AllowF1 = !SettingsManager.AllowF1);
             OptionRow(s, "Contador de FPS", row++, () => SettingsManager.ShowFps ? "Ligado" : "Desligado", d => SettingsManager.ShowFps = !SettingsManager.ShowFps);
-            OptionRow(s, "Rádio do pit (aviso)", row++, () => SettingsManager.PitRadio == 0 ? "Desligado" : "Pneu abaixo de " + Mathf.RoundToInt((1f - SettingsManager.PitRadioWear[SettingsManager.PitRadio]) * 100f) + "%", d => SettingsManager.PitRadio = Step(SettingsManager.PitRadio, d, SettingsManager.PitRadioWear.Length));
+            OptionRow(s, "Rádio do pit", row++, () => SettingsManager.PitRadio == 0 ? "Desligado" : "Ligado", d => SettingsManager.PitRadio = SettingsManager.PitRadio == 0 ? 1 : 0);
             rowTop = 330f; rowStep = 84f;
             MenuTheme.StyledButton(s, "Back", "VOLTAR", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 40f), new Vector2(380f, 100f), 36, () => { SettingsManager.Save(); ShowMain(); });
         }

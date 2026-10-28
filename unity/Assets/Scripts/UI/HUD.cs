@@ -25,8 +25,6 @@ namespace RaceX.UI
         float fpsAcc;
         int fpsFrames, fpsLast = -1;
         float fpsMin = float.MaxValue;
-        int radioLap = -1;
-        bool radioWarned;
         Image[] wheelImgs;      // painel CARRO: 4 rodas (desgaste verde/amarelo/vermelho)
         Image dmgFrontImg, dmgRearImg; // barras de dano frente/trás
         float lastPanelT;
@@ -55,6 +53,7 @@ namespace RaceX.UI
             }
         }
         Text pitInfoText;
+        Text pitPlanText;
         Image[] rpmBands;
         Color[] rpmBandColors;
         float messageTimer, countdownTimer;
@@ -66,6 +65,13 @@ namespace RaceX.UI
         int lastLap = int.MinValue, lastPos = int.MinValue, lastSpeed = int.MinValue, lastGear = int.MinValue;
         int lastTimeBucket = int.MinValue, lastPitToken = int.MinValue;
         string lastTire;
+        string lastPitPlan;
+        bool radioStarted;
+        int radioWindowStop = -1;  // parada cujo aviso "janela em 2 voltas" já foi dado
+        int radioBoxLap = -1;      // volta em que o "BOX, BOX" já foi anunciado
+        int radioWearStint = -1;   // stint em que "pneus no limite" já foi anunciado
+        int lastStopsDone = -1;    // paradas do jogador no frame anterior (detecta pós-pit)
+        float radioGapTimer;       // atrasa a diferença de posição para não cobrir a mensagem de volta
 
         public Image FadeImage { get; private set; }
 
@@ -119,6 +125,8 @@ namespace RaceX.UI
             ffButton = MenuTheme.StyledButton(root, "FFBtn", "1x", tr, tr, new Vector2(-34f * s, -140f), new Vector2(100f * s, 90f * s), (int)(28 * s), ToggleFastForward);
             tireText = UIFactory.Label("Tire", root, "", (int)(26 * s), TextAnchor.UpperRight, tr, tr, new Vector2(-290f * s, -24f), new Vector2(240f * s, 40f), MenuTheme.TextDim);
             pitInfoText = UIFactory.Label("PitInfo", root, "", (int)(24 * s), TextAnchor.UpperRight, tr, tr, new Vector2(-290f * s, -70f), new Vector2(240f * s, 36f), MenuTheme.Accent);
+            // Estratégia sob o pneu: "PARADAS 0/1 · BOX V12" (quantas paradas já feitas e a próxima).
+            pitPlanText = UIFactory.Label("PitPlan", root, "", (int)(22 * s), TextAnchor.UpperRight, tr, tr, new Vector2(-290f * s, -112f), new Vector2(240f * s, 30f), MenuTheme.TextDim);
 
             // PAINEL CARRO (regra do usuário): silhueta com 4 rodas coloridas por DESGASTE
             // (verde/amarelo/vermelho) + barras de DANO da frente e da traseira.
@@ -194,6 +202,7 @@ namespace RaceX.UI
             race.CountdownTick += OnCountdown;
             race.LapCompleted += OnLap;
             race.RaceFinished += ShowResults;
+            race.RaceStarted += OnRaceStartedRadio;
             MiniMap.Create(root, race, entry, compact);
             if (!compact)
             {
@@ -209,7 +218,10 @@ namespace RaceX.UI
         Image[] secBg;
         Text[] secText;
         Text deltaText;
+        Text[] secDelta;
         float secTimer;
+        readonly Dictionary<RaceEntry, Vector3Int> towerGapKey = new Dictionary<RaceEntry, Vector3Int>();
+        readonly Dictionary<RaceEntry, string> towerGapText = new Dictionary<RaceEntry, string>();
         RectTransform towerRoot;
         Image[] towerBg;
         Text[] towerPos, towerName, towerTyre, towerGap;
@@ -221,6 +233,7 @@ namespace RaceX.UI
             var tl = new Vector2(0f, 1f);
             secBg = new Image[3];
             secText = new Text[3];
+            secDelta = new Text[3];
             for (int i = 0; i < 3; i++)
             {
                 var bg = UIFactory.Panel("Sector" + (i + 1), root, tl, tl, new Vector2(270f + i * 172f, -128f), new Vector2(166f, 36f), SecNone);
@@ -230,8 +243,11 @@ namespace RaceX.UI
                 var t = UIFactory.Label("SectorTxt", bg.transform, "S" + (i + 1), 22, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(160f, 34f), Color.white);
                 t.raycastTarget = false;
                 secText[i] = t;
+                var dl = UIFactory.Label("SectorDelta", bg.transform, "", 20, TextAnchor.MiddleCenter, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, -15f), new Vector2(166f, 26f), Color.white);
+                dl.raycastTarget = false;
+                secDelta[i] = dl;
             }
-            deltaText = UIFactory.Label("Delta", root, "", 26, TextAnchor.UpperLeft, tl, tl, new Vector2(270f, -170f), new Vector2(500f, 34f), Color.white);
+            deltaText = UIFactory.Label("Delta", root, "", 26, TextAnchor.UpperLeft, tl, tl, new Vector2(270f, -200f), new Vector2(500f, 34f), Color.white);
             deltaText.raycastTarget = false;
         }
 
@@ -250,18 +266,27 @@ namespace RaceX.UI
                 string txt;
                 Color col;
                 float done = st.LapSectorTime(entry, k);
+                string dTxt = "";
+                Color dCol = Color.white;
                 if (k == cur && done <= 0f)
                 {
-                    txt = "S" + (k + 1) + "  " + st.CurrentSectorElapsed(entry).ToString("0.0");
+                    txt = "S" + (k + 1) + "  " + st.CurrentSectorElapsed(entry).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
                     col = SecNone;
                 }
                 else
                 {
                     float shown = done > 0f ? done : st.LastSectorTime(entry, k);
-                    txt = shown > 0f ? "S" + (k + 1) + "  " + shown.ToString("0.000") : "S" + (k + 1) + "  --.---";
+                    txt = shown > 0f ? "S" + (k + 1) + "  " + shown.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) : "S" + (k + 1) + "  --.---";
                     var c = st.ColorOf(entry, k);
                     col = c == SectorTimer.SectorColor.Purple ? SecPurple : c == SectorTimer.SectorColor.Green ? SecGreen : c == SectorTimer.SectorColor.Yellow ? SecYellow : SecNone;
+                    if (shown > 0f && st.SectorDelta(entry, k, out float sd))
+                    {
+                        dTxt = (sd >= 0f ? "+" : "-") + Mathf.Abs(sd).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture);
+                        dCol = sd < 0f ? new Color(0.3f, 1f, 0.45f) : sd > 0.0005f ? new Color(1f, 0.82f, 0.2f) : Color.white;
+                    }
                 }
+                if (secDelta[k].text != dTxt) secDelta[k].text = dTxt;
+                secDelta[k].color = dCol;
                 if (secText[k].text != txt) secText[k].text = txt;
                 if (secBg[k].color != col) secBg[k].color = col;
                 secText[k].color = col == SecYellow ? new Color(0.08f, 0.08f, 0.1f) : Color.white;
@@ -272,7 +297,7 @@ namespace RaceX.UI
             if (anyDelta)
             {
                 float d = acc - pbAcc;
-                dtx = "DELTA " + (d >= 0f ? "+" : "-") + Mathf.Abs(d).ToString("0.000");
+                dtx = "DELTA " + (d >= 0f ? "+" : "-") + Mathf.Abs(d).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture);
                 deltaText.color = d > 0.0005f ? new Color(1f, 0.3f, 0.25f) : new Color(0.3f, 1f, 0.45f);
             }
             if (deltaText.text != dtx) deltaText.text = dtx;
@@ -332,7 +357,7 @@ namespace RaceX.UI
                 SetText(towerPos[r], "P" + (idx + 1));
                 string nm = string.IsNullOrEmpty(e.name) ? "-" : e.name.ToUpperInvariant();
                 SetText(towerName[r], nm.Length > 12 ? nm.Substring(0, 12) : nm);
-                int cp = e.car != null ? RaceX.Core.PitLaneSystem.CompoundOf(e.car) : -1;
+                int cp = e.car != null && race.Settings.pitStops ? RaceX.Core.PitLaneSystem.CompoundOf(e.car) : -1;
                 SetText(towerTyre[r], cp == 0 ? "S" : cp == 1 ? "M" : cp == 2 ? "H" : "");
                 towerTyre[r].color = cp == 0 ? new Color(1f, 0.25f, 0.2f) : cp == 1 ? new Color(1f, 0.85f, 0.15f) : Color.white;
                 string gap;
@@ -342,7 +367,7 @@ namespace RaceX.UI
                     else if (e.bestLap > 0f && entry.bestLap > 0f)
                     {
                         float d = e.bestLap - entry.bestLap;
-                        gap = (d >= 0f ? "+" : "-") + Mathf.Abs(d).ToString("0.000");
+                        gap = (d >= 0f ? "+" : "-") + Mathf.Abs(d).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture);
                     }
                     else gap = e.bestLap > 0f ? FormatTime(e.bestLap) : "--:--.---";
                 }
@@ -358,8 +383,15 @@ namespace RaceX.UI
                     }
                     else
                     {
-                        float g = st != null ? (ahead ? st.GapSeconds(e, entry) : st.GapSeconds(entry, e)) : 0f;
-                        gap = (ahead ? "-" : "+") + g.ToString("0.000");
+                        // Gap só muda quando ele ou eu cruzamos um ponto de setor.
+                        var key = new Vector3Int(st != null ? st.CurrentSector(e) : -1, st != null ? st.CurrentSector(entry) : -1, ahead ? 1 : 0);
+                        if (!towerGapKey.TryGetValue(e, out var oldKey) || oldKey != key || !towerGapText.TryGetValue(e, out gap))
+                        {
+                            float g = st != null ? (ahead ? st.GapSeconds(e, entry) : st.GapSeconds(entry, e)) : 0f;
+                            gap = (ahead ? "-" : "+") + g.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture);
+                            towerGapKey[e] = key;
+                            towerGapText[e] = gap;
+                        }
                     }
                 }
                 SetText(towerGap[r], gap);
@@ -372,6 +404,16 @@ namespace RaceX.UI
             race.CountdownTick -= OnCountdown;
             race.LapCompleted -= OnLap;
             race.RaceFinished -= ShowResults;
+            race.RaceStarted -= OnRaceStartedRadio;
+        }
+
+        void OnRaceStartedRadio()
+        {
+            radioStarted = false;
+            radioWindowStop = -1;
+            radioBoxLap = -1;
+            radioWearStint = -1;
+            lastStopsDone = -1;
         }
 
         void OnCountdown(int value)
@@ -389,6 +431,18 @@ namespace RaceX.UI
         }
 
         bool resultsHidden;
+
+        /// <summary>Painel de resultados está OCULTO (pausa pode abrir mesmo com a corrida encerrada).</summary>
+        public bool ResultsHidden => resultsHidden;
+
+        /// <summary>Algum HUD da cena está com o painel de resultados oculto (pós-CONTINUAR)?
+        /// Com resultados ocultos a PAUSA volta a funcionar mesmo com RaceState.Finished.</summary>
+        public static bool AnyResultsHidden()
+        {
+            foreach (var h in UnityEngine.Object.FindObjectsOfType<HUD>())
+                if (h != null && h.resultsHidden) return true;
+            return false;
+        }
 
         /// <summary>Reabre o painel de resultados (hub da carreira fechou como overlay).</summary>
         void ReopenResults()
@@ -417,6 +471,16 @@ namespace RaceX.UI
             {
                 lastLap = lapNo;
                 lapText.text = laps >= 900 ? $"Volta {lapNo}" : $"Volta {lapNo} / {laps}";
+                // Rádio: diferença para o carro da frente no fim da volta (atrasa p/ não cobrir a volta).
+                if (lapNo > 1 && SettingsManager.PitRadio > 0) radioGapTimer = 1.5f;
+            }
+
+            // Rádio: mensagem de estratégia uma vez na largada (somente corridas com pit ativo).
+            if (!radioStarted && race.State == RaceState.Racing)
+            {
+                radioStarted = true;
+                if (SettingsManager.PitRadio > 0 && race.Settings.laps < 900 && RaceX.Core.PitLaneSystem.PitEnabled)
+                    ShowRadio("Estratégia: " + RaceX.Core.PitLaneSystem.StrategyText(car));
             }
             if (timeText != null)
             {
@@ -530,6 +594,11 @@ namespace RaceX.UI
                             : $"PIT A {token} m — LINHA LARANJA";
                     }
                 }
+                if (pitPlanText != null)
+                {
+                    string plan = pitOn ? RaceX.Core.PitLaneSystem.PitPlanText(car) : "";
+                    if (plan != lastPitPlan) { lastPitPlan = plan; pitPlanText.text = plan; }
+                }
             }
             float rpm01 = car.spec != null ? Mathf.InverseLerp(0f, car.spec.rpmLimit, car.Rpm) : 0f;
             SetBand(0, rpm01 > 0.12f);
@@ -547,6 +616,19 @@ namespace RaceX.UI
             {
                 messageTimer -= Time.deltaTime;
                 if (messageTimer <= 0f) messageText.text = "";
+            }
+            // Rádio: diferença para o carro da frente (uma vez por volta, depois da mensagem de volta).
+            if (radioGapTimer > 0f)
+            {
+                radioGapTimer -= Time.deltaTime;
+                if (radioGapTimer <= 0f && SettingsManager.PitRadio > 0 && race.Settings.laps < 900
+                    && RaceX.Core.PitLaneSystem.PitEnabled && entry.position > 1 && SectorTimer.Instance != null)
+                {
+                    var ahead = race.entries[Mathf.Max(0, entry.position - 2)];
+                    float gap = SectorTimer.Instance.GapSeconds(ahead, entry);
+                    if (gap > 0f)
+                        ShowRadio("P" + entry.position + ", +" + gap.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s para o P" + (entry.position - 1));
+                }
             }
         }
 
@@ -574,24 +656,51 @@ namespace RaceX.UI
             fpsAcc = 0f; fpsFrames = 0; fpsMin = float.MaxValue;
         }
 
+        void ShowRadio(string msg)
+        {
+            messageText.text = "RÁDIO: " + msg;
+            messageTimer = 4f;
+        }
+
         void UpdatePitRadio(RaceX.Car.CarController car, float distToEntry, int lapNo)
         {
-            int lvl = SettingsManager.PitRadio;
-            if (lvl <= 0 || car.pitControlled) return;
-            float limit = SettingsManager.PitRadioWear[lvl];
-            float wear = RaceX.Core.PitLaneSystem.Wear(car);
-            if (wear < limit) { radioWarned = false; return; }
-            if (!radioWarned)
+            if (car == null || SettingsManager.PitRadio == 0 || race == null || race.Settings.laps >= 900)
             {
-                radioWarned = true;
-                messageText.text = "RÁDIO: PNEUS EM " + Mathf.RoundToInt((1f - wear) * 100f) + "% — BOX NA PRÓXIMA ENTRADA";
-                messageTimer = 4f;
+                lastStopsDone = -1;
+                return;
             }
-            else if (distToEntry >= 0f && distToEntry < 400f && radioLap != lapNo)
+            // Pós-pit: anuncia o composto novo e o que vem pela frente (ou o fim das paradas).
+            int stopsDone = RaceX.Core.PitLaneSystem.StopsDone(car);
+            if (lastStopsDone >= 0 && stopsDone > lastStopsDone)
             {
-                radioLap = lapNo;
-                messageText.text = "RÁDIO: BOX, BOX — ENTRADA A " + Mathf.RoundToInt(distToEntry) + " m (TOQUE EM PIT)";
-                messageTimer = 4f;
+                int next = RaceX.Core.PitLaneSystem.NextStopLap(car);
+                int c = RaceX.Core.PitLaneSystem.Compound(car);
+                if (next > 0) ShowRadio("Pneus " + RaceX.Core.PitLaneSystem.CompoundLetter(c) + ", próxima parada na volta " + next);
+                else ShowRadio("Pneus " + RaceX.Core.PitLaneSystem.CompoundLetter(c) + ", sem mais paradas");
+                radioWearStint = stopsDone;
+            }
+            lastStopsDone = stopsDone;
+            int plannedLap = RaceX.Core.PitLaneSystem.NextStopLap(car);
+            if (plannedLap <= 0) return;
+            // Janela de box: avisa 2 voltas antes da parada planejada.
+            if (lapNo == plannedLap - 2 && radioWindowStop != plannedLap)
+            {
+                radioWindowStop = plannedLap;
+                ShowRadio("Janela de box em 2 voltas");
+                return;
+            }
+            // Na volta da parada, a ~600 m da entrada do pit: chama o piloto.
+            if (lapNo == plannedLap && distToEntry >= 0f && distToEntry < 600f && radioBoxLap != lapNo)
+            {
+                radioBoxLap = lapNo;
+                ShowRadio("Box, box! Entre nesta volta");
+                return;
+            }
+            // Pneus abaixo de 25% de borracha restante: aviso de limite do composto.
+            if (RaceX.Core.PitLaneSystem.Wear(car) > 0.75f && radioWearStint != stopsDone)
+            {
+                radioWearStint = stopsDone;
+                ShowRadio("Pneus no limite");
             }
         }
 
@@ -658,12 +767,16 @@ namespace RaceX.UI
                 MenuTheme.StyledButton(innerRt, "Again", "JOGAR NOVAMENTE", b, new Vector2(1f, 0f), new Vector2(-390f, 30f), new Vector2(380f, 86f), 30, () => SceneLoader.ReloadCurrent());
             if (careerRace)
             {
-                // Carreira: CONTINUAR volta ao HUB DA CARREIRA (de lá, correr a próxima sessão).
+                // Carreira: CONTINUAR esconde a tabela e abre o HUB DA CARREIRA como OVERLAY
+                // (timeScale 0 enquanto aberto — sessão acabou, congelar é seguro). Ao fechar o hub a
+                // tabela CONTINUA oculta: ESC reabre os resultados e o II (pausa) volta a funcionar
+                // (bug v77: o hub não aparecia e a pausa morria depois que a sessão terminava).
                 MenuTheme.StyledButton(innerRt, "Continue", "CONTINUAR", b, new Vector2(0f, 0f), new Vector2(0f, 30f), new Vector2(380f, 86f), 30, () =>
                 {
                     if (resultsPanel != null) resultsPanel.gameObject.SetActive(false);
                     resultsHidden = true;
-                    RaceX.UI.CareerFlow.Open();
+                    Time.timeScale = 0f;
+                    RaceX.UI.CareerFlow.Open(() => Time.timeScale = 1f);
                 });
                 MenuTheme.StyledButton(innerRt, "ToHub", "CLASSIFICAÇÃO/HUB", b, new Vector2(1f, 0f), new Vector2(-390f, 30f), new Vector2(380f, 86f), 30, () =>
                 {
@@ -690,7 +803,7 @@ namespace RaceX.UI
             if (seconds < 0f) seconds = 0f;
             int m = (int)(seconds / 60f);
             float s = seconds - m * 60f;
-            return $"{m}:{s:00.000}";
+            return m + ":" + s.ToString("00.000", System.Globalization.CultureInfo.InvariantCulture);
         }
     }
 }

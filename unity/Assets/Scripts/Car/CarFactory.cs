@@ -227,7 +227,7 @@ namespace RaceX.Car
                 hood.localPosition = closed
                     ? new Vector3(0f, imported.localBounds.min.y + imported.localBounds.size.y * 0.72f, size.z * 0.25f)
                     // Fórmulas: T-cam — acima/atrás da cabeça do piloto, halo à frente (referência de tela do jogo oficial).
-                    : eyePos + new Vector3(0f, 0.42f, -0.55f);
+                    : new Vector3(0f, eyePos.y + 0.42f, eyePos.z - 0.55f);
             else
                 hood.localPosition = new Vector3(0f, bodyBottom + size.y * 0.75f, size.z * 0.3f);
             visuals.hoodAnchor = hood;

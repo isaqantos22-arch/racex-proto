@@ -93,7 +93,7 @@ namespace RaceX.Car
             if (visuals != null && visuals.steeringWheel != null)
                 visuals.steeringWheel.gameObject.SetActive(view == CameraView.SteeringWheel || view == CameraView.FirstPerson);
             if (visuals != null && visuals.driverHead != null)
-                visuals.driverHead.SetActive(view != CameraView.SteeringWheel && view != CameraView.FirstPerson);
+                visuals.driverHead.SetActive(view == CameraView.ThirdPerson);
             Snap();
         }
 

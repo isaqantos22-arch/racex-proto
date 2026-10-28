@@ -19,6 +19,8 @@ namespace RaceX.Core
             public readonly float[] last = new float[3];
             public readonly float[] pb = new float[3];
             public readonly SectorColor[] color = new SectorColor[3];
+            public readonly float[] delta = new float[3];
+            public readonly bool[] hasDelta = new bool[3];
             public readonly int[] bucket = new int[Ring];
             public readonly float[] time = new float[Ring];
             public int lastBucket = int.MinValue;
@@ -78,6 +80,7 @@ namespace RaceX.Core
                 if (next && s.valid) Close(s, s.sector, now - s.start);
                 if (s.sector == 2 && k == 0) for (int i = 0; i < 3; i++) s.lap[i] = 0f;
                 s.valid = next || (s.sector == -1 && k == 0 && p.distanceInLap < 15f);
+                if (e.outLap) s.valid = false; // volta de saída do box não cronometra
                 s.sector = k;
                 s.start = now;
             }
@@ -101,6 +104,8 @@ namespace RaceX.Core
             if (t < 1f) return;
             s.lap[k] = t;
             s.last[k] = t;
+            s.hasDelta[k] = s.pb[k] > 0f;
+            s.delta[k] = s.hasDelta[k] ? t - s.pb[k] : 0f;
             if (sessionBest[k] <= 0f || t <= sessionBest[k]) { sessionBest[k] = t; s.color[k] = SectorColor.Purple; }
             else if (s.pb[k] <= 0f || t <= s.pb[k]) s.color[k] = SectorColor.Green;
             else s.color[k] = SectorColor.Yellow;
@@ -117,6 +122,25 @@ namespace RaceX.Core
             }
             else { s.bucket[b & (Ring - 1)] = b; s.time[b & (Ring - 1)] = now; }
             s.lastBucket = b;
+        }
+
+        /// <summary>Início da 1ª volta cronometrada após a volta de saída do box.</summary>
+        public void BeginTimedLap(RaceEntry e)
+        {
+            if (e == null) return;
+            var s = Get(e);
+            for (int i = 0; i < 3; i++) s.lap[i] = 0f;
+            s.sector = 0;
+            s.start = Time.time;
+            s.valid = e.car != null && !e.car.pitControlled;
+        }
+
+        public bool SectorDelta(RaceEntry e, int k, out float d)
+        {
+            d = 0f;
+            if (e == null || !states.TryGetValue(e, out var s) || !s.hasDelta[k]) return false;
+            d = s.delta[k];
+            return true;
         }
 
         public int CurrentSector(RaceEntry e) => e != null && states.TryGetValue(e, out var s) ? s.sector : -1;

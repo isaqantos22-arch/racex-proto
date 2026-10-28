@@ -1,3 +1,4 @@
+using RaceX.Car;
 using RaceX.Core;
 using RaceX.Input;
 using UnityEngine;
@@ -13,10 +14,12 @@ namespace RaceX.UI
 
         GameObject panel;
         GameObject settingsPanel;
+        GameObject strategyPanel;
         UnityEngine.UI.Text volumeLabel;
         UnityEngine.UI.Text controlsLabel;
         UnityEngine.UI.Text minimapLabel;
         UnityEngine.UI.Text autoThrottleLabel;
+        UnityEngine.UI.Text strategyStopsLabel, strategyStartLabel, strategyStopsCpdLabel;
 
         public bool IsOpen => panel != null && panel.activeSelf;
 
@@ -39,7 +42,7 @@ namespace RaceX.UI
 
             var c = new Vector2(0.5f, 0.5f);
             UIFactory.Label("Title", panel.transform, "PAUSA", 80, TextAnchor.MiddleCenter, c, c, new Vector2(0f, 300f), new Vector2(800f, 120f));
-            // Carreira: volta ao HUB com o relógio REAL correndo (a sessão NÃO pausa — como na F1).
+            // Carreira: MENU DA CARREIRA volta ao hub com o relógio REAL retomado (a sessão segue viva lá).
             bool careerBtn = race != null && race.Settings.careerPhase >= 0;
             // 5 botões sem sobreposição: linha própria para cada um.
             UIFactory.Button("Continue", panel.transform, "CONTINUAR", c, c, new Vector2(0f, careerBtn ? 210f : 150f), new Vector2(520f, 100f), Toggle);
@@ -48,11 +51,23 @@ namespace RaceX.UI
                 {
                     panel.SetActive(false);
                     Time.timeScale = 1f; // corrida segue com a IA pilotando seu carro (treino real)
+                    RaceX.Career.CareerMode.ResumeSessionClock(); // sessão corre viva dentro do hub
                     RaceX.UI.CareerFlow.Open();
                 });
             UIFactory.Button("Restart", panel.transform, "REINICIAR", c, c, new Vector2(0f, careerBtn ? -30f : 30f), new Vector2(520f, 100f), SceneLoader.ReloadCurrent);
-            UIFactory.Button("Settings", panel.transform, "CONFIGURAÇÕES", c, c, new Vector2(0f, careerBtn ? -150f : -90f), new Vector2(520f, 100f), () => settingsPanel.SetActive(!settingsPanel.activeSelf));
-            UIFactory.Button("Quit", panel.transform, "SAIR PARA O MENU", c, c, new Vector2(0f, careerBtn ? -270f : -210f), new Vector2(520f, 100f), SceneLoader.LoadMainMenu);
+            // ESTRATÉGIA: paradas + compostos da corrida (só com pit ativo e corrida por distância).
+            bool stratVisible = StrategyVisible;
+            if (stratVisible)
+            {
+                UIFactory.Button("Strategy", panel.transform, "ESTRATÉGIA", c, c, new Vector2(0f, careerBtn ? -150f : -90f), new Vector2(520f, 100f), () =>
+                {
+                    if (strategyPanel != null) strategyPanel.SetActive(!strategyPanel.activeSelf);
+                    settingsPanel.SetActive(false);
+                });
+                BuildStrategyPanel(panel.transform, c, new Vector2(-560f, -30f));
+            }
+            UIFactory.Button("Settings", panel.transform, "CONFIGURAÇÕES", c, c, new Vector2(0f, careerBtn ? -270f : -210f), new Vector2(520f, 100f), () => settingsPanel.SetActive(!settingsPanel.activeSelf));
+            UIFactory.Button("Quit", panel.transform, "SAIR PARA O MENU", c, c, new Vector2(0f, careerBtn ? -390f : -330f), new Vector2(520f, 100f), SceneLoader.LoadMainMenu);
 
             bool mobile = Application.isMobilePlatform;
             float panelH = mobile ? 400f : 320f;
@@ -85,6 +100,65 @@ namespace RaceX.UI
 
             settingsPanel.SetActive(false);
             panel.SetActive(false);
+        }
+
+        // ---- ESTRATÉGIA DE PIT (paradas + compostos) ----
+
+        CarController HumanCar()
+        {
+            if (race == null) return null;
+            foreach (var e in race.entries)
+                if (e.isHuman && e.car != null) return e.car;
+            return null;
+        }
+
+        /// <summary>Estratégia só faz sentido em corrida por distância com pit ativo e jogador humano.</summary>
+        bool StrategyVisible
+        {
+            get
+            {
+                if (race == null || race.Settings.laps >= 900) return false;
+                if (RaceX.Core.PitLaneSystem.Instance == null || !RaceX.Core.PitLaneSystem.PitEnabled) return false;
+                return HumanCar() != null;
+            }
+        }
+
+        void BuildStrategyPanel(Transform parent, Vector2 anchor, Vector2 pos)
+        {
+            var c = new Vector2(0.5f, 0.5f);
+            var sp = UIFactory.Panel("StrategyPanel", parent, c, c, pos, new Vector2(440f, 300f), new Color(0.1f, 0.12f, 0.16f, 0.95f));
+            strategyPanel = sp.gameObject;
+            strategyStopsLabel = UIFactory.Label("StratStops", sp.transform, "", 32, TextAnchor.MiddleCenter, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -24f), new Vector2(400f, 50f));
+            strategyStartLabel = UIFactory.Label("StratStart", sp.transform, "", 32, TextAnchor.MiddleCenter, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -104f), new Vector2(400f, 50f));
+            strategyStopsCpdLabel = UIFactory.Label("StratStopCpd", sp.transform, "", 32, TextAnchor.MiddleCenter, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -184f), new Vector2(400f, 50f));
+            UIFactory.Button("StopsPrev", sp.transform, "<", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(-140f, -44f), new Vector2(80f, 60f), () => ChangeStrategy(-1, 0, 0), 34);
+            UIFactory.Button("StopsNext", sp.transform, ">", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(140f, -44f), new Vector2(80f, 60f), () => ChangeStrategy(1, 0, 0), 34);
+            UIFactory.Button("StartPrev", sp.transform, "<", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(-140f, -124f), new Vector2(80f, 60f), () => ChangeStrategy(0, -1, 0), 34);
+            UIFactory.Button("StartNext", sp.transform, ">", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(140f, -124f), new Vector2(80f, 60f), () => ChangeStrategy(0, 1, 0), 34);
+            UIFactory.Button("StopPrev", sp.transform, "<", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(-140f, -204f), new Vector2(80f, 60f), () => ChangeStrategy(0, 0, -1), 34);
+            UIFactory.Button("StopNext", sp.transform, ">", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(140f, -204f), new Vector2(80f, 60f), () => ChangeStrategy(0, 0, 1), 34);
+            RefreshStrategyLabels();
+            strategyPanel.SetActive(false);
+        }
+
+        void ChangeStrategy(int stopsDelta, int startDelta, int stopDelta)
+        {
+            var car = HumanCar();
+            if (car == null) return;
+            int s = Mathf.Clamp(RaceX.Core.PitLaneSystem.PlannedStops(car) + stopsDelta, 0, 3);
+            int sc = Mathf.Clamp(RaceX.Core.PitLaneSystem.StrategyStartCompound(car) + startDelta, 0, 2);
+            int cc = Mathf.Clamp(RaceX.Core.PitLaneSystem.StrategyStopCompound(car) + stopDelta, 0, 2);
+            RaceX.Core.PitLaneSystem.SetPlayerStrategy(car, s, sc, cc);
+            RefreshStrategyLabels();
+        }
+
+        void RefreshStrategyLabels()
+        {
+            var car = HumanCar();
+            if (car == null) return;
+            strategyStopsLabel.text = "Paradas: < " + RaceX.Core.PitLaneSystem.PlannedStops(car) + " >";
+            strategyStartLabel.text = "Pneu de largada: < " + RaceX.Core.PitLaneSystem.CompoundLetter(RaceX.Core.PitLaneSystem.StrategyStartCompound(car)) + " >";
+            strategyStopsCpdLabel.text = "Pneus das paradas: < " + RaceX.Core.PitLaneSystem.CompoundLetter(RaceX.Core.PitLaneSystem.StrategyStopCompound(car)) + " >";
         }
 
         void ChangeVolume(float delta)
@@ -133,17 +207,22 @@ namespace RaceX.UI
 
         public void Toggle()
         {
-            if (race != null && race.State == RaceState.Finished) return;
+            // Após o fim da sessão a pausa só continua valendo quando a tabela de resultados está
+            // OCULTA (botão CONTINUAR) — com resultados na tela, o Toggle fica bloqueado como antes.
+            if (race != null && race.State == RaceState.Finished && !HUD.AnyResultsHidden()) return;
             if (lastToggleFrame == Time.frameCount) return;
             lastToggleFrame = Time.frameCount;
             bool open = !panel.activeSelf;
             panel.SetActive(open);
             settingsPanel.SetActive(false);
+            if (strategyPanel != null) strategyPanel.SetActive(false);
             transform.SetAsLastSibling();
             if (!online)
             {
                 Time.timeScale = open ? 0f : 1f;
                 Time.fixedDeltaTime = 0.01f; // 100 Hz ORIGINAL (0.02 degradava a fricção das rodas e limitava todos os carros)
+                if (open) RaceX.Career.CareerMode.PauseSessionClock();
+                else RaceX.Career.CareerMode.ResumeSessionClock();
             }
             AudioListener.pause = open && !online;
             if (!open) SettingsManager.Save();
@@ -154,6 +233,7 @@ namespace RaceX.UI
             if (!online) Time.timeScale = 1f;
             Time.fixedDeltaTime = 0.01f;
             AudioListener.pause = false;
+            RaceX.Career.CareerMode.ResumeSessionClock();
         }
     }
 }

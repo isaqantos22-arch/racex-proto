@@ -409,6 +409,31 @@ namespace RaceX.Car
             new Color(1f, 0.8f, 0.05f), new Color(0.0f, 0.38f, 0.18f), new Color(1f, 0.42f, 0.0f), new Color(0.72f, 0.74f, 0.76f)
         };
 
-        public static Color Get(int index) => Colors[((index % Colors.Length) + Colors.Length) % Colors.Length];
+        /// <summary>Cores de EQUIPE: 12 cores distintas — os 2 carros da MESMA equipe compartilham a
+        /// cor e nenhuma cor se repete entre equipes (carreira e pares virtuais do Single Player).</summary>
+        public static readonly Color[] TeamColors =
+        {
+            new Color(0.85f, 0.08f, 0.08f),  // vermelho
+            new Color(0.08f, 0.25f, 0.9f),   // azul
+            new Color(0.06f, 0.62f, 0.2f),   // verde
+            new Color(0.97f, 0.78f, 0.08f),  // amarelo
+            new Color(1f, 0.45f, 0.04f),     // laranja
+            new Color(0.56f, 0.08f, 0.8f),   // roxo
+            new Color(0.04f, 0.68f, 0.85f),  // ciano
+            new Color(0.95f, 0.14f, 0.55f),  // rosa
+            new Color(0.55f, 0.88f, 0.12f),  // lima
+            new Color(0.94f, 0.92f, 0.86f),  // branco
+            new Color(0.6f, 0.64f, 0.7f),    // prata
+            new Color(0.05f, 0.33f, 0.42f)   // azul-petróleo
+        };
+
+        // Índices >= TeamBase apontam para TeamColors (cor de equipe).
+        public const int TeamBase = 100;
+
+        public static Color Get(int index) => index >= TeamBase
+            ? TeamColors[(index - TeamBase) % TeamColors.Length]
+            : Colors[((index % Colors.Length) + Colors.Length) % Colors.Length];
+
+        public static int TeamColorOf(int teamIndex) => TeamBase + ((teamIndex % TeamColors.Length) + TeamColors.Length) % TeamColors.Length;
     }
 }

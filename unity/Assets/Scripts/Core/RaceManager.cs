@@ -16,11 +16,14 @@ namespace RaceX.Core
         public bool isHuman;
         public int playerIndex = -1;
         public int gridSlot;
+        /// <summary>Box da garagem no pit (fim de semana da carreira: fixo por equipe, -1 = usa gridSlot).</summary>
+        public int pitBox = -1;
         public CarModel model;
         public int colorIndex;
         public readonly List<float> lapTimes = new List<float>();
         public float lapStartTime;
         public float bestLap;
+        public bool outLap;
         public bool finished;
         public float totalTime;
         public int position;
@@ -165,6 +168,8 @@ namespace RaceX.Core
             float now = Time.time;
             float lapTime = now - e.lapStartTime;
             e.lapStartTime = now;
+            // Out-lap (saída do pit → primeira linha): nunca conta como volta/melhor volta.
+            if (e.outLap) { e.outLap = false; SectorTimer.Instance?.BeginTimedLap(e); return; }
             // Cruzamento ESPEÇURJO pós-pit (saída deposita o carro perto da linha): conta a volta
             // (legítima — foi completada antes do pit), zera o cronômetro, mas NÃO registra tempo
             // de 2-9 s como volta/melhor volta.

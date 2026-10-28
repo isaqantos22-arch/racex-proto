@@ -195,8 +195,11 @@ namespace RaceX.Car
 
                 bool rear = i >= RL;
                 float sideFactor = rear && handbrake ? spec.handbrakeRearStiffness : 1f;
-                var f = baseForward; f.stiffness = spec.forwardStiffness * surfaceGrip[i];
-                var s = baseSideways; s.stiffness = spec.sidewaysStiffness * surfaceGrip[i] * sideFactor;
+                // Pneu desgastado perde aderência progressivamente (até ~12% a 100% de desgaste;
+                // TireGrip devolve 1f quando o pit está desligado — nenhum efeito fora dele).
+                float tireGrip = Mathf.Clamp(RaceX.Core.PitLaneSystem.TireGrip(this), 0.85f, 1.08f);
+                var f = baseForward; f.stiffness = spec.forwardStiffness * surfaceGrip[i] * tireGrip;
+                var s = baseSideways; s.stiffness = spec.sidewaysStiffness * surfaceGrip[i] * sideFactor * tireGrip;
                 w.forwardFriction = f;
                 w.sidewaysFriction = s;
             }
@@ -233,7 +236,7 @@ namespace RaceX.Car
             if (spec.rectangularSteeringWheel && !pitControlled)
             {
                 float sf = Mathf.Clamp01(SpeedKmh / 180f);
-                maxAngle = spec.maxSteerAngle * Mathf.Lerp(1f, 0.32f, Mathf.Pow(sf, 0.8f));
+                maxAngle = spec.maxSteerAngle * Mathf.Lerp(1f, 0.23f, Mathf.Pow(sf, 0.8f));
                 steerIn = Mathf.Sign(steerIn) * Mathf.Pow(Mathf.Abs(steerIn), 1.15f);
                 steerRate = Mathf.Lerp(120f, 85f, sf);
             }

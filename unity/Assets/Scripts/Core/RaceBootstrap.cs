@@ -41,19 +41,31 @@ namespace RaceX.Core
             var race = new GameObject("RaceManager").AddComponent<RaceManager>();
             race.Initialize(track, settings);
             RaceX.Core.PitLaneSystem pit = null;
-            if (settings.pitStops)
             {
                 var pitGo = new GameObject("PitLaneSystem");
                 pit = pitGo.AddComponent<RaceX.Core.PitLaneSystem>();
                 // Um box POR CARRO (sem teto): com 24 carros em 16 boxes, os slots 16–23 nasciam
                 // SOBRE os boxes 0–7 (pares de carros colados). Tem que vir ANTES do Setup:
                 // o lane se dimensiona pelo nº de boxes.
-                pit.boxCount = Mathf.Max(settings.totalCars, 4);
+                // Carreira: SEMPRE 24 boxes (uma garagem por piloto) — o box de CADA piloto é fixo
+                // por equipe no fim de semana inteiro; numa quali reduzida não pode encolher o lane.
+                pit.boxCount = (RaceX.Career.CareerData.raceActive && RaceX.Career.CareerMode.data != null)
+                    ? Mathf.Max(TrackBuilder.GridSlots, settings.totalCars)
+                    : Mathf.Max(settings.totalCars, 4);
                 pit.Setup(race);
             }
             // Treino livre da carreira (sex/sáb): todos NASEM no pit, saída em fila.
-            bool pitStart = pit != null && settings.laps >= 900;
+            bool pitStart = pit != null && settings.pitStops && settings.laps >= 900;
             Pose? PitPose(int slot) => pitStart ? pit.PitSpawnPose(slot) : (Pose?)null;
+            // Box da garagem: na carreira é FIXO por equipe no fim de semana (BoxForDriver), NUNCA
+            // pela posição de grid/qualificação; fora da carreira segue o grid slot (antigo).
+            int BoxOf(string driverName)
+            {
+                if (!RaceX.Career.CareerData.raceActive || RaceX.Career.CareerMode.data == null) return -1;
+                int maxBox = pit != null ? Mathf.Max(0, pit.boxCount - 1) : TrackBuilder.GridSlots - 1;
+                return Mathf.Clamp(RaceX.Career.CareerMode.BoxForDriver(driverName), 0, maxBox);
+            }
+            Pose? SpawnPose(int slot, int box) => box >= 0 ? PitPose(box) : PitPose(slot);
             RaceX.Core.ReplaySystem.StartRecording(race);
             GameAudio.EnterRace(settings.track);
 
@@ -100,7 +112,10 @@ namespace RaceX.Core
                 for (int p = 0; p < settings.HumanCount; p++)
                 {
                     var ps = settings.players[p];
-                    usedColors.Add(ps.colorIndex);
+                    // Carreira: o carro usa a cor da EQUIPE; Single Player mantém a cor escolhida.
+                    int hColor = RaceX.Career.CareerData.raceActive
+                        ? CarPalette.TeamColorOf(RaceX.Career.CareerMode.TeamIndexOf(RaceX.Career.CareerMode.TeamOfDriver(ps.name)))
+                        : ps.colorIndex;
                     var humanModel = RaceX.Career.CareerData.raceActive
                         ? RaceX.Career.CareerMode.PlayerCar()
                         : (settings.formulaOnly ? CarModel.F1 : (!SettingsManager.AllowF1 && ps.car == CarModel.F1 ? CarModel.Titan : ps.car));
@@ -108,29 +123,37 @@ namespace RaceX.Core
                     CareerStats.ApplyUpgrades(hspec);
                     if (RaceX.Career.CareerData.raceActive && RaceX.Career.CareerMode.data != null)
                         RaceX.Career.CareerMode.ApplyTeamPerformance(hspec, RaceX.Career.CareerMode.data.f2Team);
-                    humans.Add(race.SpawnCar(hspec, ps.colorIndex, ps.name, slots[p], true, p, PitPose(slots[p])));
+                    int hBox = BoxOf(ps.name);
+                    var hEntry = race.SpawnCar(hspec, hColor, ps.name, slots[p], true, p, SpawnPose(slots[p], hBox));
+                    if (hBox >= 0) hEntry.pitBox = hBox;
+                    humans.Add(hEntry);
                 }
 
-                int npc = 0, color = 0;
+                int npc = 0;
                 for (int slot = 0; slot < total; slot++)
                 {
                     if (slots.Contains(slot)) continue;
-                    while (usedColors.Contains(color % CarPalette.Colors.Length) && usedColors.Count < CarPalette.Colors.Length) color++;
-                    int c = color % CarPalette.Colors.Length;
-                    usedColors.Add(c);
-                    color++;
+                    string drvName = names[npc % names.Count];
+                    // CORES POR EQUIPE: na carreira, os 2 carros da MESMA equipe compartilham a cor da
+                    // equipe (12 cores únicas); no Single Player, pares de grid viram equipes virtuais
+                    // (cada par tem cor própria — nunca 4 carros com a mesma cor).
+                    int c = RaceX.Career.CareerData.raceActive
+                        ? CarPalette.TeamColorOf(RaceX.Career.CareerMode.TeamIndexOf(RaceX.Career.CareerMode.TeamOfDriver(drvName)))
+                        : CarPalette.TeamColorOf(slot / 2);
                     var carModel = RaceX.Career.CareerData.raceActive
-                        ? RaceX.Career.CareerMode.CarForDriver(names[npc % names.Count])
+                        ? RaceX.Career.CareerMode.CarForDriver(drvName)
                         : models[npc];
                     var nspec = CarSpec.CreateDefault(carModel);
                     if (RaceX.Career.CareerData.raceActive)
-                        RaceX.Career.CareerMode.ApplyTeamPerformance(nspec, RaceX.Career.CareerMode.TeamOfDriver(names[npc % names.Count]));
-                    var entry = race.SpawnCar(nspec, c, names[npc % names.Count], slot, false, -1, PitPose(slot));
+                        RaceX.Career.CareerMode.ApplyTeamPerformance(nspec, RaceX.Career.CareerMode.TeamOfDriver(drvName));
+                    int nBox = BoxOf(drvName);
+                    var entry = race.SpawnCar(nspec, c, drvName, slot, false, -1, SpawnPose(slot, nBox));
+                    if (nBox >= 0) entry.pitBox = nBox;
                     var ai = entry.car.gameObject.AddComponent<CarAI>();
                     ai.Initialize(track.Waypoints, race, settings.difficulty,
-                        RaceX.Career.CareerData.raceActive ? RaceX.Career.CareerMode.SkillBiasFor(names[npc % names.Count]) : 0f);
+                        RaceX.Career.CareerData.raceActive ? RaceX.Career.CareerMode.SkillBiasFor(drvName) : 0f);
                     ai.SetLane(((npc * 37) % 9 - 4) * 0.42f);
-                    RaceX.UI.Nametag.Attach(entry.car, names[npc % names.Count]);
+                    RaceX.UI.Nametag.Attach(entry.car, drvName);
                     npc++;
                 }
             }
@@ -138,8 +161,9 @@ namespace RaceX.Core
             foreach (var e in race.entries) EngineAudio.Attach(e.car, e.isHuman);
             foreach (var e in race.entries) VisualEffects.Attach(e.car);
             Debug.Log("[BOOT] pista=" + msTrack + "ms total_ate_efeitos=" + swBoot.ElapsedMilliseconds + "ms carros=" + race.entries.Count);
-            // SkidMarks desativado: Shader do material chega null no player (1673x ArgumentNullException quebra som/pause no deserto). Reativar apos fix do material.
-            // foreach (var e in race.entries) RaceX.Track.SkidMarks.Attach(e.car);
+            // Marcas de pneu por TODA a cena (freio/travada + grama/terra). Material com FALLBACK de
+            // shader e try/catch: sem shader válido o Attach falha em silêncio e nunca trava o loading.
+            foreach (var e in race.entries) RaceX.Track.SkidMarks.Attach(e.car);
 
             UIFactory.EnsureEventSystem();
             var canvas = UIFactory.CreateCanvas("RaceCanvas");

@@ -285,6 +285,7 @@ namespace RaceX.Car
                         var role = shared[i] == null ? ModelMaterialRole.Black : RoleFor(shared[i].name);
                         if (role == ModelMaterialRole.Metal && NearWheel(anchors, parent, pivot, r.bounds.center)) { modelWheel = true; break; }
                     }
+                if (!modelWheel && WheelPartNearAnchor(r, anchors, parent, pivot)) modelWheel = true;
                 if (modelWheel)
                 {
                     r.enabled = false;
@@ -381,6 +382,26 @@ namespace RaceX.Car
                 var d = p - a;
                 d.y = 0f;
                 if (d.magnitude < 0.6f) return true;
+            }
+            return false;
+        }
+
+        /// <summary>Roda do modelo que o teste por CENTRO não pega: rim único que atravessa o EIXO inteiro
+        /// (F1/F1Studio têm rim_front/rim_rear — malha de 1,8 m com o centro a x=0, longe dos 4 pinos,
+        /// mas o BOUNDS cobre as rodas; sem isso fica com "8 rodas" na tela). Restrito por nome para
+        /// nunca esconder asa/para-lama (fender/arch/wing) que também orbita o eixo.</summary>
+        static bool WheelPartNearAnchor(Renderer r, Vector3[] anchors, Transform root, Transform pivot)
+        {
+            string n = r.name.ToLowerInvariant();
+            if (!n.Contains("wheel") && !n.Contains("tire") && !n.Contains("tyre") && !n.Contains("rim")
+                && !n.Contains("hub") && !n.Contains("brake") && !n.Contains("rotor") && !n.Contains("disc")
+                && !n.Contains("calip") && !n.Contains("callip") && !n.Contains("duct")) return false;
+            var b = r.bounds;
+            var c = ToRootLocal(root, pivot, b.center);
+            var e = b.extents;
+            foreach (var a in anchors)
+            {
+                if (Mathf.Abs(c.x - a.x) <= e.x + 0.4f && Mathf.Abs(c.y - a.y) <= e.y + 0.4f && Mathf.Abs(c.z - a.z) <= e.z + 0.4f) return true;
             }
             return false;
         }

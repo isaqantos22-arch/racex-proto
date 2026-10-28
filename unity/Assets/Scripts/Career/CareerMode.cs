@@ -138,6 +138,16 @@ namespace RaceX.Career
         static string[] TeamsFor(string category) =>
             category == "GT" ? GTTeams : category == "F1" ? F1Teams : F2Teams;
 
+        /// <summary>Índice da equipe na escada da categoria atual (0 = mais fraca) — usado pela cor
+        /// da equipe (2 pilotos da mesma equipe compartilham a cor; cada equipe tem uma única cor).</summary>
+        public static int TeamIndexOf(string team)
+        {
+            if (string.IsNullOrEmpty(team)) return 0;
+            var teams = TeamsFor(data != null ? data.category : "F2");
+            int i = Array.IndexOf(teams, team);
+            return Mathf.Max(0, i);
+        }
+
         /// <summary>Carro por força da equipe F1 — fundo de grade usa F2008, meio F1Studio, ponta F1 2022.</summary>
         public static readonly CarModel[] F1CarsByTier =
         {
@@ -173,6 +183,31 @@ namespace RaceX.Career
             if (driverName == data.pilotName) return data.f2Team;
             var e = data.standings.Find(s => s.driverName == driverName);
             return e != null ? e.team : "";
+        }
+
+        /// <summary>Box da garagem no fim de semana: FIXO por equipe (os 2 pilotos da mesma equipe
+        /// ocupam boxes ADJACENTES) com ordem estável POR RODADA (equipe rotaciona entre rounds) —
+        /// nunca pela posição de grid/qualificação. Treino de sexta, quali e corrida usam o MESMO box.</summary>
+        public static int BoxForDriver(string driverName)
+        {
+            if (data == null || string.IsNullOrEmpty(driverName)) return 0;
+            string team = TeamOfDriver(driverName);
+            if (string.IsNullOrEmpty(team)) return 0;
+            var teams = TeamsFor(data.category);
+            int ti = Mathf.Max(0, Array.IndexOf(teams, team));
+            int rotated = (ti + data.round) % Mathf.Max(1, teams.Length);
+            int mate = 0;
+            if (data.standings != null)
+            {
+                bool seen = false;
+                foreach (var e in data.standings)
+                {
+                    if (e == null || e.team != team) continue;
+                    if (e.driverName == driverName) { mate = seen ? 1 : 0; break; }
+                    seen = true;
+                }
+            }
+            return rotated * 2 + mate;
         }
 
         /// <summary>Aplica a diferença real entre equipes: torque (aceleração), apoio aerodinâmico e aderência lateral.</summary>
@@ -319,12 +354,14 @@ namespace RaceX.Career
         public static void Save()
         {
             if (data == null) return;
+            RaceX.UI.SaveToast.EnsureInstance();
             data.saveVersion = 4;
             try
             {
                 File.WriteAllText(SavePath, JsonUtility.ToJson(data, true));
                 if (!importingCloud)
                 {
+                    RaceX.UI.SaveToast.Show(true);
                     if (data.titles > CareerStats.Titles) CareerStats.Titles = data.titles;
                     CareerStats.TouchUpdated();
                     if (AccountClient.IsLoggedIn)
@@ -333,6 +370,7 @@ namespace RaceX.Career
             }
             catch (Exception ex)
             {
+                RaceX.UI.SaveToast.Show(false);
                 Debug.LogWarning("[Carreira] falha ao salvar: " + ex.Message);
             }
         }
@@ -348,8 +386,31 @@ namespace RaceX.Career
             return "";
         }
 
+        /// <summary>Nuvem está ATRÁS do progresso local? Compara (season, round, weekendPhase).</summary>
+        public static bool LocalCareerAheadOf(string cloudJson)
+        {
+            if (string.IsNullOrEmpty(cloudJson)) return true;
+            try
+            {
+                var cloud = JsonUtility.FromJson<CareerData>(cloudJson);
+                if (cloud == null || string.IsNullOrEmpty(cloud.pilotName)) return true;
+                CareerData local = data;
+                if (local == null && HasSave)
+                    local = JsonUtility.FromJson<CareerData>(File.ReadAllText(SavePath));
+                if (local == null) return false;
+                if (local.season != cloud.season) return local.season > cloud.season;
+                if (local.round != cloud.round) return local.round > cloud.round;
+                return local.weekendPhase > cloud.weekendPhase;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
         public static void ImportRawJson(string json)
         {
+            RaceX.UI.SaveToast.EnsureInstance();
             if (string.IsNullOrEmpty(json)) return;
             try
             {
@@ -390,6 +451,7 @@ namespace RaceX.Career
 
         public static void Load()
         {
+            RaceX.UI.SaveToast.EnsureInstance();
             if (!HasSave)
             {
                 data = null;
@@ -1078,10 +1140,32 @@ namespace RaceX.Career
         }
 
         // ---------- RELÓGIO REAL DE SESSÃO (corre também no menu/hub) ----------
+        static long pausedRemainTicks = -1; // pausado: ticks restantes congelados (-1 = rodando)
+
+        public static bool SessionClockPaused => pausedRemainTicks >= 0;
+
+        public static void PauseSessionClock()
+        {
+            if (data == null || data.sessionDeadlineUtc <= 0 || SessionClockPaused) return;
+            pausedRemainTicks = Math.Max(0, data.sessionDeadlineUtc - DateTime.UtcNow.Ticks);
+        }
+
+        public static void ResumeSessionClock()
+        {
+            if (!SessionClockPaused) return;
+            if (data != null && data.sessionDeadlineUtc > 0)
+            {
+                data.sessionDeadlineUtc = DateTime.UtcNow.Ticks + pausedRemainTicks;
+                Save();
+            }
+            pausedRemainTicks = -1;
+        }
+
         /// <summary>Inicia (uma vez) o relógio REAL da sessão atual: deadline em UTC, sobrevive a cena/menus.</summary>
         public static void StartSessionClock(float seconds)
         {
             if (data == null) return;
+            pausedRemainTicks = -1;
             long now = DateTime.UtcNow.Ticks;
             if (data.sessionDeadlineUtc > now) return; // já correndo (reabrir sessão não recomeça o tempo)
             data.sessionDeadlineUtc = now + (long)seconds * TimeSpan.TicksPerSecond;
@@ -1093,6 +1177,7 @@ namespace RaceX.Career
 
         public static int SessionSecondsLeft()
         {
+            if (SessionClockPaused) return (int)(pausedRemainTicks / TimeSpan.TicksPerSecond);
             if (data == null || data.sessionDeadlineUtc <= 0) return 0;
             long t = (long)((data.sessionDeadlineUtc - DateTime.UtcNow.Ticks) / TimeSpan.TicksPerSecond);
             return t > 0 ? (int)t : 0;
@@ -1102,6 +1187,7 @@ namespace RaceX.Career
         public static void ClearSessionClock()
         {
             if (data == null) return;
+            pausedRemainTicks = -1;
             bool changed = false;
             if (data.sessionDeadlineUtc != 0) { data.sessionDeadlineUtc = 0; changed = true; }
             if (data.pracNames.Count > 0) { data.pracNames.Clear(); data.pracBest.Clear(); changed = true; }
@@ -1112,6 +1198,12 @@ namespace RaceX.Career
         public static void CompressSessionClock(float factor)
         {
             if (data == null || data.sessionDeadlineUtc <= 0) return;
+            if (SessionClockPaused)
+            {
+                pausedRemainTicks = (long)(pausedRemainTicks / Mathf.Max(1.01f, factor));
+                Save();
+                return;
+            }
             long now = DateTime.UtcNow.Ticks;
             if (data.sessionDeadlineUtc <= now) return;
             data.sessionDeadlineUtc = now + (long)((data.sessionDeadlineUtc - now) / Mathf.Max(1.01f, factor));

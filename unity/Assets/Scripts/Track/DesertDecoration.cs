@@ -19,7 +19,7 @@ namespace RaceX.Track
             var wood = MaterialLibrary.Get("Wood", new Color(0.5f, 0.38f, 0.22f), 0.2f);
             var stand = MaterialLibrary.Get("D_Stand", new Color(0.55f, 0.55f, 0.6f), 0.3f);
             var seats = MaterialLibrary.Get("D_Seats", new Color(0.1f, 0.3f, 0.7f), 0.3f);
-            var board = MaterialLibrary.Get("D_Board", new Color(0.95f, 0.75f, 0.1f), 0.4f, 0f, new Color(0.3f, 0.22f, 0f));
+            var board = MaterialLibrary.Get("D_Board", new Color(0.24f, 0.22f, 0.2f), 0.3f, 0f, Color.black);
             var flag = MaterialLibrary.Get("D_Flag", new Color(0.85f, 0.1f, 0.1f), 0.2f);
 
             var spline = track.Spline;

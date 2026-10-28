@@ -19,13 +19,19 @@ namespace RaceX.UI
         RectTransform[] dots;
         Vector2 center;
         float worldScale;
+        bool forceFull;   // pista inteira (sem zoom dinâmico)
+        float mapSize = 230f;
 
         public static void Create(Transform parent, RaceManager race, RaceEntry self, bool compact)
         {
             float size = compact ? 150f : 230f;
             float s = compact ? 0.7f : 1f;
-            var bg = UIFactory.Panel("MiniMap", parent, new Vector2(0f, 1f), new Vector2(0f, 1f),
-                new Vector2(24f, -24f - 120f * s), new Vector2(size, size), new Color(0f, 0f, 0f, 0.45f));
+            CreateAt(parent, race, self, new Vector2(0f, 1f), new Vector2(24f, -24f - 120f * s), size, false);
+        }
+
+        public static MiniMap CreateAt(Transform parent, RaceManager race, RaceEntry self, Vector2 anchor, Vector2 anchoredPos, float size, bool forceFull)
+        {
+            var bg = UIFactory.Panel("MiniMap", parent, anchor, anchor, anchoredPos, new Vector2(size, size), new Color(0f, 0f, 0f, 0.45f));
             bg.raycastTarget = false;
             bg.gameObject.AddComponent<UnityEngine.UI.RectMask2D>();
             var image = UIFactory.Panel("MiniMapTrack", bg.transform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(size, size), Color.white);
@@ -33,9 +39,12 @@ namespace RaceX.UI
             var mm = bg.gameObject.AddComponent<MiniMap>();
             mm.race = race;
             mm.self = self;
+            mm.forceFull = forceFull;
             mm.mapImage = image;
             mm.mapRect = image.rectTransform;
+            mm.mapSize = size;
             mm.Build(race.Track.Waypoints.Spline, self);
+            return mm;
         }
 
         void Build(TrackSpline spline, RaceEntry self)
@@ -83,7 +92,7 @@ namespace RaceX.UI
                 dots[i] = (RectTransform)dot.transform;
             }
 
-            var sr = Sprite.Create(tex, new Rect(0, 0, TexSize, TexSize), new Vector2(0.5f, 0.5f), TexSize / (mapRect.rect.width > 1f ? mapRect.rect.width : 230f), 0, SpriteMeshType.FullRect);
+            var sr = Sprite.Create(tex, new Rect(0, 0, TexSize, TexSize), new Vector2(0.5f, 0.5f), TexSize / mapSize, 0, SpriteMeshType.FullRect);
             mapImage.sprite = sr;
             mapImage.type = Image.Type.Simple;
         }
@@ -113,7 +122,7 @@ namespace RaceX.UI
             float factor = mapRect.rect.width / TexSize;
 
             // Modo dinamico (padrao): mostra apenas um trecho da pista centrado no SEU carro.
-            if (SettingsManager.MinimapDynamic && self != null && self.car != null)
+            if (!forceFull && SettingsManager.MinimapDynamic && self != null && self.car != null)
             {
                 Vector3 sp = self.car.transform.position;
                 if (!zoomInit) { zoomCenter = new Vector2(sp.x, sp.z); zoomInit = true; }

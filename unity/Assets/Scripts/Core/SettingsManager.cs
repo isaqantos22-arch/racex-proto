@@ -63,12 +63,12 @@ namespace RaceX.Core
             set => PlayerPrefs.SetInt(Prefix + "ShowFps", value ? 1 : 0);
         }
 
-        public static readonly float[] PitRadioWear = { 0f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f };
-
+        /// <summary>Rádio do pit: 0 = Desligado, 1 = Ligado. A chave do PlayerPrefs é a MESMA de antes
+        /// (valores antigos 1..5 de limiar viram "Ligado" automaticamente — cliente compatível).</summary>
         public static int PitRadio
         {
-            get => Mathf.Clamp(PlayerPrefs.GetInt(Prefix + "PitRadio", 3), 0, PitRadioWear.Length - 1);
-            set => PlayerPrefs.SetInt(Prefix + "PitRadio", Mathf.Clamp(value, 0, PitRadioWear.Length - 1));
+            get => PlayerPrefs.GetInt(Prefix + "PitRadio", 3) == 0 ? 0 : 1;
+            set => PlayerPrefs.SetInt(Prefix + "PitRadio", value <= 0 ? 0 : 1);
         }
 
         public static bool SfxOn
@@ -152,7 +152,7 @@ namespace RaceX.Core
             }
         }
 
-        public static string BestLapKey(int trackId, int carModel) => $"{Prefix}BestLap.{trackId}.{carModel}";
+        public static string BestLapKey(int trackId, int carModel) => trackId >= 3 ? $"{Prefix}BestLap2.{trackId}.{carModel}" : $"{Prefix}BestLap.{trackId}.{carModel}";
 
         public static float GetBestLap(int trackId, int carModel) => PlayerPrefs.GetFloat(BestLapKey(trackId, carModel), 0f);
 

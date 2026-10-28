@@ -17,5 +17,68 @@ EditorBuildSettings:
   - enabled: 1
     path: Assets/Scenes/Track_NightCity.unity
     guid: baf0ca29c5b20364cbad169dfb95ab4a
+  - enabled: 1
+    path: Assets/Scenes/Track_Velocita.unity
+    guid: 14912ecde05699043814a7693c1be8ab
+  - enabled: 1
+    path: Assets/Scenes/Track_Principado.unity
+    guid: 8b29c6d342fe8d14ba2c668cb7a26ff9
+  - enabled: 1
+    path: Assets/Scenes/Track_Ardenne.unity
+    guid: e850686dd64609f47a0c27b9597d7648
+  - enabled: 1
+    path: Assets/Scenes/Track_JardimDaBaia.unity
+    guid: ce64a9501bfc57749b4368148d039896
+  - enabled: 1
+    path: Assets/Scenes/Track_GolfoReal.unity
+    guid: 7ec46457b10194a4d9bc89f4654f466f
+  - enabled: 1
+    path: Assets/Scenes/Track_SerraDoCafe.unity
+    guid: 926820721b9bb4b4a9faf1dc085f58dc
+  - enabled: 1
+    path: Assets/Scenes/Track_CircuitoDoSol.unity
+    guid: 23b689d595a6c224c9e0d1d733939b66
+  - enabled: 1
+    path: Assets/Scenes/Track_ParqueReal.unity
+    guid: c0c7d35b0d2e50f4091d9529c23def2a
+  - enabled: 1
+    path: Assets/Scenes/Track_DragaoOriental.unity
+    guid: b6e7aac5ad1f3584ba474e7008f8a200
+  - enabled: 1
+    path: Assets/Scenes/Track_CornicheDaNoite.unity
+    guid: bdd10c58f8c7a1c428690c8a1c9afb2a
+  - enabled: 1
+    path: Assets/Scenes/Track_PortoSul.unity
+    guid: 66cbe31b04c1add41858124ab394a138
+  - enabled: 1
+    path: Assets/Scenes/Track_IlhaDasCascatas.unity
+    guid: 804143957ed56db48abf674fd0bda0fa
+  - enabled: 1
+    path: Assets/Scenes/Track_ValeDourado.unity
+    guid: 5dc922804ebee194e95005e9a8c474bc
+  - enabled: 1
+    path: Assets/Scenes/Track_ColinasVerdes.unity
+    guid: 95852f3320e3d1f4c8f464aec6044141
+  - enabled: 1
+    path: Assets/Scenes/Track_CampoDoNorte.unity
+    guid: 9abfc07a5f80056439e7273e7cd3f00f
+  - enabled: 1
+    path: Assets/Scenes/Track_CurvasDoDanubio.unity
+    guid: ec7d06ef9d21c964982b2952ed70b82a
+  - enabled: 1
+    path: Assets/Scenes/Track_DunasDoNorte.unity
+    guid: ae3f55063aa88594590c6a0440b82364
+  - enabled: 1
+    path: Assets/Scenes/Track_Fortaleza.unity
+    guid: 589e8b08ff841464a847d1959dca4f3d
+  - enabled: 1
+    path: Assets/Scenes/Track_ColinasDoTexas.unity
+    guid: a7651b488daecf44598b12154054fad4
+  - enabled: 1
+    path: Assets/Scenes/Track_EstadioCentral.unity
+    guid: 91c5ff40b79bf54459c4d4c1025c2ca9
+  - enabled: 1
+    path: Assets/Scenes/Track_NeonStrip.unity
+    guid: a96263cb9ead022429f39b3a8e9d4473
   m_configObjects: {}
   m_UseUCBPForAssetBundles: 0

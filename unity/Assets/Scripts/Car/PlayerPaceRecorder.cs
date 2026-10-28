@@ -13,6 +13,8 @@ namespace RaceX.Car
     {
         public const int Segments = 128;
         const string Key = "RaceX.PlayerPace.";
+        // Pistas 3+ foram redesenhadas: amostras antigas não valem mais.
+        static string KeyFor(int trackId) => trackId >= 3 ? "RaceX.PlayerPace2." + trackId : Key + trackId;
         static readonly System.Collections.Generic.Dictionary<int, float[]> cache = new System.Collections.Generic.Dictionary<int, float[]>();
         static readonly System.Collections.Generic.HashSet<int> dirty = new System.Collections.Generic.HashSet<int>();
 
@@ -20,7 +22,7 @@ namespace RaceX.Car
         {
             if (cache.TryGetValue(trackId, out var arr)) return arr;
             arr = new float[Segments];
-            string raw = PlayerPrefs.GetString(Key + trackId, "");
+            string raw = PlayerPrefs.GetString(KeyFor(trackId), "");
             if (!string.IsNullOrEmpty(raw))
             {
                 var parts = raw.Split(';');
@@ -63,7 +65,7 @@ namespace RaceX.Car
                     if (i > 0) sb.Append(';');
                     sb.Append(arr[i].ToString("0.0", System.Globalization.CultureInfo.InvariantCulture));
                 }
-                PlayerPrefs.SetString(Key + id, sb.ToString());
+                PlayerPrefs.SetString(KeyFor(id), sb.ToString());
             }
             dirty.Clear();
             PlayerPrefs.Save();
@@ -73,15 +75,15 @@ namespace RaceX.Car
         public static string ExportAll()
         {
             Flush();
-            var sb = new System.Text.StringBuilder();
+            var sb = new System.Text.StringBuilder("v2");
             foreach (int id in System.Enum.GetValues(typeof(TrackId)))
             {
-                string raw = PlayerPrefs.GetString(Key + id, "");
+                string raw = PlayerPrefs.GetString(KeyFor(id), "");
                 if (string.IsNullOrEmpty(raw)) continue;
-                if (sb.Length > 0) sb.Append('|');
+                sb.Append('|');
                 sb.Append(id).Append('=').Append(raw);
             }
-            return sb.ToString();
+            return sb.Length > 2 ? sb.ToString() : "";
         }
 
         /// <summary>Mescla dados da nuvem: por trecho fica a MAIOR velocidade limpa (local ou nuvem).</summary>
@@ -89,10 +91,12 @@ namespace RaceX.Car
         {
             if (string.IsNullOrEmpty(data)) return;
             var ic = System.Globalization.CultureInfo.InvariantCulture;
+            bool v2 = data.StartsWith("v2|");
             foreach (var block in data.Split('|'))
             {
                 int eq = block.IndexOf('=');
                 if (eq <= 0 || !int.TryParse(block.Substring(0, eq), out int id)) continue;
+                if (!v2 && id >= 3) continue; // dado de traçado antigo
                 var arr = Get(id);
                 var parts = block.Substring(eq + 1).Split(';');
                 bool changed = false;

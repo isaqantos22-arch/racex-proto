@@ -378,13 +378,36 @@ namespace RaceX.UI
         }
 
         // ---------- Hub (tela principal do modo carreira) ----------
+        /// <summary>Corrida da carreira viva na cena (hub aberto por cima dela), senão null.</summary>
+        internal static RaceX.Core.RaceManager LiveCareerRace()
+        {
+            var rm = UnityEngine.Object.FindFirstObjectByType<RaceX.Core.RaceManager>();
+            if (rm == null || rm.Settings == null || rm.Settings.careerPhase < 0 || rm.State == RaceX.Core.RaceState.Finished) return null;
+            return rm;
+        }
+
+        internal static int LiveSessionSeconds()
+        {
+            return LiveSessionSeconds(LiveCareerRace());
+        }
+
+        /// <summary>Segundos exibidos no hub: relógio REAL ou o timer AO VIVO da cena (0 = nenhum).</summary>
+        internal static int LiveSessionSeconds(RaceX.Core.RaceManager live)
+        {
+            int s = CareerMode.SessionSecondsLeft();
+            if (s > 0) return s;
+            if (live != null && live.SessionTimeLeft > 0f) return Mathf.CeilToInt(live.SessionTimeLeft);
+            return 0;
+        }
+
         static void ShowHub()
         {
             CareerData d = CareerMode.data;
             if (d == null) { ShowCreate(); return; }
             // Aguardando escolha de equipe (novo save reiniciado ou promoção à F1)? Mesa de propostas primeiro.
             if (d.awaitingTeamChoice) { ShowTeamChoice(); return; }
-            CareerData.raceActive = false; // limpa flag de corrida abandonada no meio
+            var liveRm = LiveCareerRace();
+            if (liveRm == null) CareerData.raceActive = false; // sem corrida viva: limpa flag de sessão abandonada
             var c = new Vector2(0.5f, 0.5f);
             var s = Screen();
             MenuTheme.Header(s, "MODO CARREIRA");
@@ -397,11 +420,16 @@ namespace RaceX.UI
             if (champPos >= 0)
                 UIFactory.Label("ChampPos", s, "VOCÊ É " + (champPos + 1) + "º NO CAMPEONATO (tabela da temporada) — a posição da SESSÃO atual aparece no resultado dela", 17, TextAnchor.MiddleCenter, top, top, new Vector2(0f, -218f), new Vector2(1700f, 26f), new Color(0.8f, 0.8f, 0.8f));
 
-            // Relógio REAL da sessão correndo (treino/quali): conta ao vivo mesmo dentro do menu.
-            int sessLeft = CareerMode.SessionSecondsLeft();
-            if (sessLeft > 0)
+            // Relógio REAL/ao vivo da sessão: conta mesmo dentro do menu (pausável pelo menu de pausa).
+            string pauseSuffix = CareerMode.SessionClockPaused ? "  (PAUSADO)" : "";
+            int sessLeft = LiveSessionSeconds(liveRm);
+            bool timedLive = liveRm != null && liveRm.Settings.laps >= 900;
+            if (sessLeft > 0 || timedLive)
             {
-                var clockLbl = UIFactory.Label("SessionClock", s, "SESSÃO TERMINA EM  " + sessLeft / 60 + ":" + (sessLeft % 60).ToString("00"), 22, TextAnchor.MiddleCenter, top, top, new Vector2(0f, -244f), new Vector2(1400f, 34f), new Color(1f, 0.55f, 0.1f));
+                string clockText = sessLeft > 0
+                    ? "SESSÃO TERMINA EM  " + sessLeft / 60 + ":" + (sessLeft % 60).ToString("00") + pauseSuffix
+                    : "SESSÃO ENCERRADA" + pauseSuffix;
+                var clockLbl = UIFactory.Label("SessionClock", s, clockText, 22, TextAnchor.MiddleCenter, top, top, new Vector2(0f, -244f), new Vector2(1400f, 34f), new Color(1f, 0.55f, 0.1f));
                 clockLbl.gameObject.AddComponent<SessionClockTicker>().label = clockLbl;
             }
 
@@ -435,6 +463,23 @@ namespace RaceX.UI
                     for (int i = col * 12; i < Mathf.Min(col * 12 + 12, d.standings.Count); i++)
                         RenderStandRow(box, d.standings[i], i, i == playerIdx, i - col * 12, colW, rowH);
                 }
+            }
+
+            // Pista AO VIVO (hub aberto por cima da sessão): mapa grande entre as colunas, sem zoom.
+            // Widgets AO VIVO são OPCIONAIS: falha aqui (minimapa etc.) NUNCA pode impedir o hub de
+            // renderizar — o CONTINUAR sempre abre o hub, mesmo que o mapa ao vivo não esteja lá.
+            if (liveRm != null)
+            {
+                try
+                {
+                    RaceX.Core.RaceEntry selfE = null;
+                    for (int i = 0; i < liveRm.entries.Count; i++)
+                        if (liveRm.entries[i].isHuman) { selfE = liveRm.entries[i]; break; }
+                    var mapLbl = UIFactory.Label("LiveMapLabel", s, "PISTA AO VIVO — 0 NA PISTA", 18, TextAnchor.MiddleCenter, c, c, new Vector2(0f, 176f), new Vector2(360f, 30f), MenuTheme.Accent);
+                    mapLbl.gameObject.AddComponent<LiveMapCounter>().label = mapLbl;
+                    MiniMap.CreateAt(s, liveRm, selfE, new Vector2(0.5f, 0.5f), new Vector2(0f, -20f), 340f, true);
+                }
+                catch (System.Exception ex) { Debug.LogException(ex); }
             }
 
             // Alterna PILOTOS / EQUIPES — 3 botões de gestão EM LINHA no topo direito (não empilhados).
@@ -506,13 +551,19 @@ namespace RaceX.UI
                 case CareerMode.PH_Q3: btnLabel = "CLASSIFICAÇÃO — FINAL"; break;
                 default: btnLabel = "CORRIDA — DOMINGO"; break;
             }
-            MenuTheme.StyledButton(s, "SessionBtn", btnLabel, b, b, new Vector2(-200f, 140f), new Vector2(430f, 64f), 22, CareerMode.LaunchNextRace);
+            var liveWk = LiveCareerRace();
+            if (liveWk != null && liveWk.Settings.careerPhase == d.weekendPhase)
+                MenuTheme.StyledButton(s, "SessionBtn", "CONTINUAR SESSÃO", b, b, new Vector2(-200f, 140f), new Vector2(430f, 64f), 22, Close);
+            else if (liveWk != null)
+                MenuTheme.StyledButton(s, "SessionBtn", btnLabel, b, b, new Vector2(-200f, 140f), new Vector2(430f, 64f), 22, () => { CareerData.raceActive = false; CareerMode.LaunchNextRace(); });
+            else
+                MenuTheme.StyledButton(s, "SessionBtn", btnLabel, b, b, new Vector2(-200f, 140f), new Vector2(430f, 64f), 22, CareerMode.LaunchNextRace);
             string skipLabel = d.weekendPhase == CareerMode.PH_FP || d.weekendPhase == CareerMode.PH_FP3 ? "PULAR TREINO"
                 : d.weekendPhase == CareerMode.PH_RACE ? "PULAR CORRIDA (SEM PONTOS)"
                 : d.weekendPhase == CareerMode.PH_SPRINT ? "PULAR SPRINT (SEM PONTOS)"
                 : d.weekendPhase == CareerMode.PH_Q3 || d.weekendPhase == CareerMode.PH_SQ3 ? "PULAR (LARGA EM ÚLTIMO)"
                 : "PULAR SESSÃO (LARGA EM ÚLTIMO)";
-            MenuTheme.StyledButton(s, "SkipSess", skipLabel, b, b, new Vector2(260f, 140f), new Vector2(430f, 64f), 20, () => { CareerMode.SkipSession(); ShowHub(); });
+            MenuTheme.StyledButton(s, "SkipSess", skipLabel, b, b, new Vector2(260f, 140f), new Vector2(430f, 64f), 20, () => { CareerData.raceActive = false; CareerMode.SkipSession(); ShowHub(); });
 
             string[] diffNames = { "FÁCIL", "MÉDIO", "DIFÍCIL", "EXPERT" };
             int diff = Mathf.Clamp(d.difficulty, 0, 3);
@@ -558,18 +609,52 @@ namespace RaceX.UI
     internal class SessionClockTicker : MonoBehaviour
     {
         public Text label;
+        RaceX.Core.RaceManager live;
+        double lastLookup;
         int lastSec = -1;
+        string lastSuffix = "";
 
         void Update()
         {
             if (label == null) return;
-            int sec = CareerMode.SessionSecondsLeft();
-            if (sec == lastSec) return;
+            double now = Time.realtimeSinceStartupAsDouble;
+            if (now - lastLookup >= 1.0) // lookup da cena no máximo 1x/s
+            {
+                live = CareerFlow.LiveCareerRace();
+                lastLookup = now;
+            }
+            string suffix = CareerMode.SessionClockPaused ? "  (PAUSADO)" : "";
+            int sec = CareerFlow.LiveSessionSeconds(live);
+            if (sec == lastSec && suffix == lastSuffix) return;
             lastSec = sec;
-            if (sec > 0)
-                label.text = "SESSÃO TERMINA EM  " + (sec / 60) + ":" + (sec % 60).ToString("00");
-            else
-                label.text = "SESSÃO ENCERRADA";
+            lastSuffix = suffix;
+            label.text = sec > 0
+                ? "SESSÃO TERMINA EM  " + (sec / 60) + ":" + (sec % 60).ToString("00") + suffix
+                : "SESSÃO ENCERRADA" + suffix;
+        }
+    }
+
+    /// <summary>Contador de carros NA PISTA no mapa ao vivo do hub (0,5 s, tempo real).</summary>
+    internal class LiveMapCounter : MonoBehaviour
+    {
+        public Text label;
+        double lastRefresh;
+
+        void Update()
+        {
+            if (label == null) return;
+            double now = Time.realtimeSinceStartupAsDouble;
+            if (now - lastRefresh < 0.5) return;
+            lastRefresh = now;
+            var rm = CareerFlow.LiveCareerRace();
+            if (rm == null) { label.text = "PISTA AO VIVO — 0 NA PISTA"; return; }
+            int n = 0;
+            for (int i = 0; i < rm.entries.Count; i++)
+            {
+                var e = rm.entries[i];
+                if (e.car != null && !RaceX.Core.PitLaneSystem.IsInPitFlow(e.car)) n++;
+            }
+            label.text = "PISTA AO VIVO — " + n + " NA PISTA";
         }
     }
 }

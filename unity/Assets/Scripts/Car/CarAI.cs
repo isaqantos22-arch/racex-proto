@@ -7,18 +7,21 @@ namespace RaceX.Car
     [RequireComponent(typeof(CarController))]
     public class CarAI : MonoBehaviour
     {
-        public const float StuckSeconds = 1.5f;
-        public const float ReverseSeconds = 1f;
+        public const float StuckSeconds = 2.5f;
+        public const float ReverseSeconds = 1.5f;
+        public const float MaxReverseSeconds = 2.5f;
         public const float MaxAvoidOffset = 2.2f;
+        const int MaxRecoveryAttempts = 2; // janelas de ré sem sucesso antes do respawn (~12 s)
         public const float RubberBandDistance = 260f;
         public const float RubberBandAmount = 0.02f;
 
         static readonly float[] SpeedPercent = { 0.72f, 0.88f, 1.00f, 1.06f };
         static readonly float[] LineDeviation = { 1.4f, 0.75f, 0.25f, 0.04f };
-        static readonly float[] CornerGrip = { 0.95f, 1.15f, 1.38f, 1.72f };
 
-        /// <summary>Fração do limite físico REAL medido que cada dificuldade usa nas curvas.</summary>
-        static readonly float[] DiffVMaxFraction = { 0.70f, 0.85f, 1.00f, 1.14f };
+        /// <summary>Fração do limite físico REAL (grip do pneu + downforce) que cada dificuldade usa
+        /// nas curvas: Fácil 80%, Médio 88%, Difícil 94%, Expert 98% — nunca acima de 100% (o antigo
+        /// 1,14 do Expert fazia a IA entrar na curva acima da aderência e rodar/capotar).</summary>
+        static readonly float[] DiffVMaxFraction = { 0.80f, 0.88f, 0.94f, 0.98f };
 
         /// <summary>Ajuste fino por corrida (calibração ao vivo usa para busca binária).</summary>
         public static float FractionOverride = 1f;
@@ -67,6 +70,7 @@ namespace RaceX.Car
         public void SetLane(float value) => lane = Mathf.Clamp(value, -1.7f, 1.7f);
         float stuckTimer;
         float reverseTimer;
+        int recoveryAttempts;   // janelas de ré sem sucesso — após 2, respawn na pista
 
         public void Initialize(WaypointSystem wp, RaceManager raceManager, Difficulty diff, float skillBias = 0f)
         {
@@ -115,6 +119,35 @@ namespace RaceX.Car
             car.throttleInput = cachedThrottle;
             car.brakeInput = cachedBrake;
             car.handbrake = false;
+            if (!car.pitControlled && reverseTimer <= 0f) StabilizeSlide();
+        }
+
+        float slideHold;
+
+        // Derrapou/rodou: contra-esterça na direção do movimento, sem acelerar, até alinhar (a 50 Hz).
+        void StabilizeSlide()
+        {
+            var rb = car.Body;
+            if (rb == null) return;
+            Vector3 lv = transform.InverseTransformDirection(rb.linearVelocity);
+            float spd = Mathf.Sqrt(lv.x * lv.x + lv.z * lv.z);
+            if (spd < 6f) { slideHold = 0f; return; }
+            float beta = Mathf.Atan2(lv.x, Mathf.Max(0.01f, lv.z)) * Mathf.Rad2Deg;
+            float yawDeg = rb.angularVelocity.y * Mathf.Rad2Deg;
+            if (lv.z <= 0.5f)
+            {
+                car.steerInput = 0f; car.throttleInput = 0f; car.brakeInput = 1f;
+                slideHold = 0.4f;
+                return;
+            }
+            if (Mathf.Abs(beta) > 11f || (Mathf.Abs(beta) > 6f && Mathf.Abs(yawDeg) > 70f)) slideHold = 0.4f;
+            if (slideHold <= 0f) return;
+            slideHold -= Time.fixedDeltaTime;
+            float sf = Mathf.Clamp01(car.SpeedKmh / Mathf.Max(1f, car.spec.topSpeedKmh));
+            float maxAngle = Mathf.Max(4f, car.spec.maxSteerAngle * Mathf.Lerp(1f, car.spec.steerAtTopSpeed, sf));
+            car.steerInput = Mathf.Clamp((beta - yawDeg * 0.08f) / maxAngle, -1f, 1f);
+            car.throttleInput = 0f;
+            car.brakeInput = Mathf.Abs(beta) > 25f ? 0.45f : 0.15f;
         }
 
         const float ThinkInterval = 0.1f;
@@ -179,7 +212,8 @@ namespace RaceX.Car
             float desiredLateral = Mathf.Lerp(Mathf.Clamp(lateralAtUnlock, -safeMaxLat, safeMaxLat), baseLateral, launchBlend);
 
             float maxSpeed = car.spec.topSpeedKmh / 3.6f * SpeedPercent[d] * skill * RubberBand();
-            float targetSpeed = Mathf.Min(maxSpeed, CornerSpeedAhead(along, speed, d) * skill);
+            // CornerSpeedAhead já aplica o fator de dificuldade × skill, limitado ao teto físico (grip real).
+            float targetSpeed = Mathf.Min(maxSpeed, CornerSpeedAhead(along, speed, d));
 
             // INTELIGÊNCIA DE CORRIDA (regra do usuário): percebe obstáculo a 20+ m → ESCOLHE
             // O LADO COM ESPAÇO NO ASFALTO (nunca joga na grama!) e contorna com agressividade.
@@ -208,7 +242,7 @@ namespace RaceX.Car
                     float sideChoice = ChooseAsphaltSide(aheadOtherLat, side);
                     overtakeSide = Mathf.Clamp(aheadOtherLat + sideChoice * 2.6f, -safeMaxLat, safeMaxLat);
                     AvoidingObstacle = true;
-                    targetSpeed = maxSpeed; // vácuo é físico (CarController), igual para todos
+                    // Ultrapassando: mantém o limite de curva (antes ia a maxSpeed e passava reto na curva).
                 }
                 else if (Mathf.Abs(avoidOffset) < 1.1f)
                 {
@@ -239,10 +273,12 @@ namespace RaceX.Car
                 }
             }
 
-            // PROTEÇÃO ANTI-GRAMA: se o carro já está perto da borda ou com roda fora da pista, puxa de volta pro asfalto!
+            if (car.IsOffTrack) targetSpeed = Mathf.Min(targetSpeed, Mathf.Max(16f, speed * 0.8f)); // fora do asfalto: alivia para voltar
+            // PROTEÇÃO ANTI-GRAMA + RECUPERAÇÃO FORA DA PISTA: se o carro já está perto da borda ou
+            // com roda fora da pista, puxa de volta pro asfalto SUAVEMENTE (limite de velocidade acima).
             if (car.IsOffTrack || Mathf.Abs(myLatNow) > 2.95f)
             {
-                committedLateral = Mathf.MoveTowards(committedLateral, Mathf.Clamp(-myLatNow * 0.35f, -1.2f, 1.2f), thinkDt * 12f);
+                committedLateral = Mathf.MoveTowards(committedLateral, Mathf.Clamp(-myLatNow * 0.5f, -1.4f, 1.4f), thinkDt * 12f);
             }
             else if (AvoidingObstacle || Mathf.Abs(overtakeSide) > 0.1f)
             {
@@ -261,10 +297,12 @@ namespace RaceX.Car
 
             float throttle, brake;
             float error = targetSpeed - speed;
+            bool straightAhead = kNow < 0.004f && Curvature(waypoints.Spline, along + 16f + speed * 0.9f) < 0.008f;
             if (error > 0f || targetSpeed >= maxSpeed * 0.96f)
             {
-                // Retas e saídas de curva: em Hard/Expert pisa 100% no acelerador!
-                throttle = (d >= 2 && error > 0.4f) || targetSpeed >= maxSpeed * 0.96f
+                // Retas e saídas de curva: ABAIXO do alvo em reta = ACELERA 100% (pé embaixo — regra
+                // do usuário para qualquer dificuldade). Saída de curva ainda usa rampa para não rodar.
+                throttle = (targetSpeed >= maxSpeed * 0.96f || (error > 0.05f && straightAhead))
                     ? 1f
                     : Mathf.Clamp01(error / 2.2f + 0.45f);
                 brake = 0f;
@@ -327,36 +365,70 @@ namespace RaceX.Car
             return localX >= 0f ? -1f : 1f;
         }
 
+        /// <summary>µ efetivo do pneu: aderência lateral real do CarSpec (stiffness do WheelCollider)
+        /// × composto/desgaste atual do pit (PitLaneSystem.TireGrip).</summary>
+        float MuEffective()
+        {
+            var s = car != null ? car.spec : null;
+            float mu = s != null ? 1.35f + (s.sidewaysStiffness - 1.6f) * 0.30f : 1.45f;
+            return mu * Mathf.Clamp(PitLaneSystem.TireGrip(car), 0.78f, 1.08f);
+        }
+
+        /// <summary>Limite FÍSICO da curva (m/s) no ponto de curvatura k, do grip real do carro:
+        /// m·v²·k = µ·(m·g + downforce·v²) resolvido para v → v² = µ·g/(k − µ·downforce/massa).
+        /// Sem downforce (conservador): v² = µ·g/k. Nunca acima do medido pela calibração nem do topo.</summary>
+        float PhysicalCornerLimit(float k)
+        {
+            float mu = MuEffective();
+            var s = car != null ? car.spec : null;
+            float v2;
+            if (s != null && s.downforceCoefficient > 0.01f && s.massKg > 50f)
+            {
+                float denom = k - mu * s.downforceCoefficient / s.massKg;
+                v2 = denom > 0f ? mu * 9.81f / denom : float.MaxValue; // downforce vence: sem teto de grip (topo limita)
+            }
+            else v2 = mu * 9.81f / Mathf.Max(k, 1e-4f);
+            float v = Mathf.Sqrt(v2);
+            if (s != null) v = Mathf.Min(v, s.topSpeedKmh / 3.6f);
+            float vMeasured = MeasuredVMax(s != null ? s.model : CarModel.Falcon, 1f / Mathf.Max(k, 1e-4f));
+            if (vMeasured > 0f) v = Mathf.Min(v, vMeasured);
+            return v;
+        }
+
         float CornerSpeedAhead(float along, float speed, int d)
         {
-            float decel = d >= 3 ? 13.5f : d == 2 ? 11.2f : 9.5f;
-            float horizon = speed * speed / (2f * decel) + 18f;
+            // Frenagem REALISTA com a MESMA aderência (µ·g, cap de 15 m/s²). Horizonte = distância de
+            // frenagem na velocidade atual + 30 m de folga — curva apertada nunca fica fora da amostra.
+            float decel = Mathf.Min(MuEffective() * 9.81f, 15f);
+            float horizon = Mathf.Max(60f, speed * speed / (2f * Mathf.Max(4f, decel)) + 30f);
             float best = float.MaxValue;
             var spline = waypoints.Spline;
             int trackId = race != null && race.Settings != null ? (int)race.Settings.track : 0;
-            for (float s = 4f; s <= horizon; s += waypoints.Spacing)
+            // Amostragem DENSA (~3,5 m): curvatura entre amostras espaçadas passava despercebida —
+            // a IA entrava na curva final a 200+ km/h e rodava. Olhar adiante: frenagem + 30 m.
+            for (float s = 4f; s <= horizon; s += 3.5f)
             {
                 float k = Curvature(spline, along + s);
                 if (k < 1e-4f) continue;
-                float vMeasured = MeasuredVMax(car != null ? car.spec.model : CarModel.Falcon, 1f / k);
-                float vCorner = vMeasured > 0f
-                    ? vMeasured * DiffVMaxFraction[d] * FractionOverride
-                    : Mathf.Sqrt(CornerGrip[d] * 9.81f / k);
+                float vPhys = PhysicalCornerLimit(k);
+                float tire = PitLaneSystem.TireGrip(car);
+                float vCap = vPhys * tire; // teto físico com o pneu ATUAL (composto/desgaste)
+                float vCorner = Mathf.Min(vCap, vPhys * DiffVMaxFraction[d] * FractionOverride * skill);
                 if (d >= 2)
                 {
+                    // Amostra do PILOTO (volta limpa) pode ELEVAR o alvo, mas NUNCA acima do teto físico.
                     float playerCleanV = PlayerPaceLearner.SampleSpeed(trackId, along + s, spline.Length);
                     if (playerCleanV > 5f)
                     {
                         float mult = d >= 3 ? 1.045f : 0.98f;
-                        float physicsCap = Mathf.Sqrt(2.05f * 9.81f / k);
-                        vCorner = Mathf.Max(vCorner, Mathf.Min(playerCleanV * mult, physicsCap));
+                        vCorner = Mathf.Max(vCorner, Mathf.Min(playerCleanV * mult, vCap));
                     }
                 }
-                vCorner *= PitLaneSystem.TireGrip(car);
+                // Velocidade permitida AGORA para conseguir frear até vCorner no ponto s:
                 float vAllowed = Mathf.Sqrt(vCorner * vCorner + 2f * decel * Mathf.Max(0f, s - 4f));
                 best = Mathf.Min(best, vAllowed);
             }
-            return best;
+            return best < float.MaxValue ? best : (car != null && car.spec != null ? car.spec.topSpeedKmh / 3.6f : 80f);
         }
 
         public static float IdealSpeedAt(TrackSpline spline, float distance, CarController refCar, int trackId = 0)
@@ -364,10 +436,24 @@ namespace RaceX.Car
             float k = Curvature(spline, distance);
             float top = refCar != null && refCar.spec != null ? refCar.spec.topSpeedKmh / 3.6f : 80f;
             if (k < 1e-4f) return top;
-            float vCorner = Mathf.Sqrt(1.55f * 9.81f / k);
+            // MESMA física do CarAI: v² = µ·(g + downforce·v²/massa)/k, µ base do carro.
+            float mu = 1.45f;
+            float v2 = mu * 9.81f / k;
+            if (refCar != null && refCar.spec != null)
+            {
+                var s = refCar.spec;
+                mu = 1.35f + (s.sidewaysStiffness - 1.6f) * 0.30f;
+                if (s.downforceCoefficient > 0.01f && s.massKg > 50f)
+                {
+                    float denom = k - mu * s.downforceCoefficient / s.massKg;
+                    v2 = denom > 0f ? mu * 9.81f / denom : float.MaxValue;
+                }
+                else v2 = mu * 9.81f / k;
+            }
+            float v = Mathf.Min(Mathf.Sqrt(v2), top);
             float learned = PlayerPaceLearner.SampleSpeed(trackId, distance, spline.Length);
-            if (learned > 5f) vCorner = Mathf.Max(vCorner, Mathf.Min(learned * 1.03f, Mathf.Sqrt(2.0f * 9.81f / k)));
-            return Mathf.Min(top, vCorner);
+            if (learned > 5f) v = Mathf.Max(v, Mathf.Min(learned * 1.02f, v * 1.10f));
+            return v;
         }
 
         public static float SignedCurvature(TrackSpline spline, float distance)
@@ -485,20 +571,74 @@ namespace RaceX.Car
             }
             if (race != null && race.State != RaceState.Racing) { stuckTimer = 0f; return false; }
             bool contact = aheadCar != null && aheadGap < 3.6f && aheadCar.ForwardSpeed < 1.0f && speed < 1.5f;
+            // DOIS PRESOS um contra o outro: só o de MENOR progresso na pista dá ré — o outro segue
+            // em frente. Sem isso os dois invertiam ré para sempre (um contra o outro, sem sair).
+            if (contact && race != null)
+            {
+                var myE = race.GetEntry(car);
+                var otE = race.GetEntry(aheadCar);
+                if (myE != null && otE != null && otE.raceDistance < myE.raceDistance)
+                {
+                    stuckTimer = 0f;
+                    return false; // o OUTRO é o de trás: ele recua; eu sigo
+                }
+            }
             stuckTimer = speed < 2.0f && (throttle > 0f || contact) ? stuckTimer + thinkDt * (contact ? 1.6f : 1f) : 0f;
+            if (speed > 5f) recoveryAttempts = 0; // voltou a andar: janelas de ré reativadas
             if (stuckTimer > StuckSeconds)
             {
                 stuckTimer = 0f;
-                reverseTimer = 2.0f;
-                escapeTimer = 5.0f;
-                if (aheadCar != null)
+                recoveryAttempts++;
+                if (recoveryAttempts > MaxRecoveryAttempts)
                 {
-                    float localX = transform.InverseTransformPoint(aheadCar.transform.position).x;
-                    escapeSide = Mathf.Abs(aheadOtherLat) > 0.5f ? (aheadOtherLat > 0f ? -1f : 1f) : (localX >= 0f ? -1f : 1f);
+                    // 2 janelas de ré não resolveram (~12 s): respawn na linha central, alguns metros
+                    // atrás, só se não houver carro a 15 m do ponto (reaproveita o ResetTo do carro).
+                    if (TryRespawnStuck()) { recoveryAttempts = 0; }
+                    else recoveryAttempts = MaxRecoveryAttempts; // local ocupado: tenta de novo mais tarde
+                    return false;
                 }
-                else escapeSide = committedLateral >= 0f ? -1f : 1f;
+                reverseTimer = Random.Range(ReverseSeconds, MaxReverseSeconds); // ré de 1,5–2,5 s
+                escapeTimer = 5f;
+                escapeSide = ChooseEscapeSide();
             }
             return false;
+        }
+
+        /// <summary>Lado com MAIS espaço livre para a ré (raycasts ±45° do capô). Sem dado, usa a
+        /// posição relativa do carro/obstáculo parado à frente.</summary>
+        float ChooseEscapeSide()
+        {
+            const float Range = 8f;
+            Vector3 origin = transform.position + Vector3.up * 0.5f;
+            float freeR = Physics.Raycast(origin, Quaternion.AngleAxis(45f, transform.up) * transform.forward, out _, Range) ? 0f : Range;
+            float freeL = Physics.Raycast(origin, Quaternion.AngleAxis(-45f, transform.up) * transform.forward, out _, Range) ? 0f : Range;
+            if (freeL < 2.5f && freeR >= freeL) return 1f;
+            if (freeR < 2.5f && freeL >= freeR) return -1f;
+            if (aheadCar != null)
+            {
+                float localX = transform.InverseTransformPoint(aheadCar.transform.position).x;
+                return Mathf.Abs(aheadOtherLat) > 0.5f ? (aheadOtherLat > 0f ? -1f : 1f) : (localX >= 0f ? -1f : 1f);
+            }
+            return committedLateral >= 0f ? -1f : 1f;
+        }
+
+        /// <summary>Respawn do carro preso: centro da pista na distância atual, ~6 m atrás,
+        /// apenas se NENHUM carro estiver a menos de 15 m do ponto.</summary>
+        bool TryRespawnStuck()
+        {
+            if (car == null || car.pitControlled || waypoints == null || waypoints.Spline == null || race == null) return false;
+            if (RaceX.Core.PitLaneSystem.IsInPitFlow(car)) return false;
+            float along = waypoints.DistanceAlong(transform.position, ref hint);
+            var pose = waypoints.Spline.PoseAtDistance(Mathf.Repeat(along - 6f, waypoints.Spline.Length));
+            for (int i = 0; i < race.entries.Count; i++)
+            {
+                var e = race.entries[i];
+                if (e == null || e.car == null || e.car == car) continue;
+                if (RaceX.Core.PitLaneSystem.IsInPitFlow(e.car)) continue;
+                if (Vector3.Distance(e.car.transform.position, pose.position) < 15f) return false;
+            }
+            car.ResetTo(pose.position + Vector3.up * 0.3f, pose.rotation);
+            return true;
         }
 
         float RubberBand()

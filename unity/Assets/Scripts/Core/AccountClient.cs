@@ -295,11 +295,11 @@ namespace RaceX.Core
                             bool cloudNewer = bundle.updatedTicks >= localTicks || !RaceX.Career.CareerMode.HasSave;
                             int creditsToApply = cloudNewer ? bundle.credits : CareerStats.Credits;
                             CareerStats.SyncFromCloud(creditsToApply, Wins, Podiums, Titles, Races, bundle.upgrades, bundle.updatedTicks);
-                            if (!string.IsNullOrEmpty(bundle.careerJson) && (cloudNewer || !RaceX.Career.CareerMode.HasSave))
+                            if (!string.IsNullOrEmpty(bundle.careerJson) && (cloudNewer || !RaceX.Career.CareerMode.HasSave) && !RaceX.Career.CareerMode.LocalCareerAheadOf(bundle.careerJson))
                             {
                                 RaceX.Career.CareerMode.ImportRawJson(bundle.careerJson);
                             }
-                            else if (localTicks > bundle.updatedTicks)
+                            else if (localTicks > bundle.updatedTicks || (!string.IsNullOrEmpty(bundle.careerJson) && RaceX.Career.CareerMode.LocalCareerAheadOf(bundle.careerJson)))
                             {
                                 pushedBack = true;
                             }
