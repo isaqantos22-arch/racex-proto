@@ -289,7 +289,6 @@ namespace RaceX.UI
             MenuTheme.StyledButton(s, "MainSettings", "CONFIGURAÇÕES", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, ShowSettings);
             MenuTheme.StyledButton(s, "MainRecords", "RECORDES", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, ShowRecords);
             MenuTheme.StyledButton(s, "MainAccount", "CONTA", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, ShowAccount);
-            MenuTheme.StyledButton(s, "MainCredits", "CRÉDITOS", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, ShowCredits);
             if (!Application.isMobilePlatform) MenuTheme.StyledButton(s, "MainQuit", "SAIR", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, Application.Quit);
         }
 
@@ -449,6 +448,7 @@ namespace RaceX.UI
         void ShowAccount()
         {
             back = ShowMain;
+            pendingAvatar = -2; // relê o avatar salvo na conta
             var s = NewScreen(AccountClient.IsLoggedIn ? "MINHA CONTA" : "ENTRAR");
             ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.86f);
             var c = new Vector2(0.5f, 0.5f);
@@ -552,10 +552,16 @@ namespace RaceX.UI
             // → FAIXA DE NÚMEROS (4 células) → GRADE 2×2 (nome/e-mail/cor/foto) → AÇÕES em par.
             // Sem áreas vazias: cada faixa ocupa a largura toda do corpo (1300).
             // ---- CABEÇALHO ----
+            if (pendingAvatar < -1) pendingAvatar = PresetOf(AccountClient.Photo);
             var avatar = UIFactory.Panel("Avatar", accountBody, c, c, new Vector2(-530f, 300f), new Vector2(150f, 150f), AvatarColorOf(AccountClient.AvatarColor));
             var initial = UIFactory.Label("AvatarInitial", avatar.transform, string.IsNullOrEmpty(AccountClient.Name) ? "J" : AccountClient.Name.Substring(0, 1).ToUpperInvariant(), 68, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(130f, 130f), Color.white);
             initial.raycastTarget = false;
-            if (!string.IsNullOrEmpty(AccountClient.Photo) && AccountClient.Photo.Length > 128)
+            if (pendingAvatar >= 0)
+            {
+                DrawHelmet((RectTransform)avatar.transform, pendingAvatar, 150f);
+                initial.text = "";
+            }
+            else if (!string.IsNullOrEmpty(AccountClient.Photo) && AccountClient.Photo.Length > 128)
             {
                 try
                 {
@@ -600,15 +606,96 @@ namespace RaceX.UI
             });
             colorBtn.image.color = AvatarColorOf(AccountClient.AvatarColor);
 
+            // AVATAR LOCAL (v79): sem URL — escolhe um dos capacetes prontos (fica salvo na conta).
             var photoCell = AccountCellBg(320f, -160f);
-            UIFactory.Label("CellPhotoL", photoCell.transform, "FOTO (URL)", 20, TextAnchor.UpperLeft, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(16f, -6f), new Vector2(300f, 30f), MenuTheme.TextDim);
-            accPhotoField = AccountFieldIn(photoCell, "", InputField.ContentType.Standard, "cole o endereço de uma imagem");
-            var photoBtn = MenuTheme.StyledButton((RectTransform)photoCell.transform, "AccPhoto", "CARREGAR", c, c, new Vector2(212f, 0f), new Vector2(140f, 76f), 22, AccountDoPhoto);
-            photoBtn.transform.SetAsLastSibling();
+            accPhotoField = null;
+            MenuTheme.StyledButton((RectTransform)photoCell.transform, "AccAvatar", pendingAvatar >= 0 ? "AVATAR: CAPACETE " + (pendingAvatar + 1) : "ESCOLHER AVATAR", c, c, Vector2.zero, new Vector2(570f, 76f), 28,
+                () => ShowAvatarPicker(nextColor));
 
-            // ---- AÇÕES (par de botões, largura toda) ----
-            MenuTheme.StyledButton(accountBody, "AccSave", "SALVAR PERFIL", c, c, new Vector2(-320f, -300f), new Vector2(610f, 92f), 32, () => AccountDoSave(nextColor));
-            MenuTheme.StyledButton(accountBody, "AccLogout", "SAIR DA CONTA", c, c, new Vector2(320f, -300f), new Vector2(610f, 92f), 32, AccountDoLogout);
+            // ---- AÇÕES (4 botões, largura toda) ----
+            MenuTheme.StyledButton(accountBody, "AccSave", "SALVAR PERFIL", c, c, new Vector2(-480f, -300f), new Vector2(300f, 84f), 24, () => AccountDoSave(nextColor));
+            MenuTheme.StyledButton(accountBody, "AccSync", "SINCRONIZAR", c, c, new Vector2(-160f, -300f), new Vector2(300f, 84f), 24, () =>
+            {
+                SetAccountStatus("Sincronizando com a nuvem...");
+                AccountClient.SetProfile(AccountClient.Name, null, AccountClient.AvatarColor, (ok, err) => SetAccountStatus(ok ? "Tudo sincronizado com a nuvem." : "Não sincronizou: " + err));
+            });
+            MenuTheme.StyledButton(accountBody, "AccReset", "REDEFINIR SENHA", c, c, new Vector2(160f, -300f), new Vector2(300f, 84f), 22, () =>
+            {
+                SetAccountStatus("Enviando e-mail...");
+                AccountClient.SendPasswordReset(AccountClient.Email, (ok, err) => SetAccountStatus(ok ? "Enviamos um link de redefinição para " + AccountClient.Email : "Não foi possível enviar: " + err));
+            });
+            MenuTheme.StyledButton(accountBody, "AccLogout", "SAIR DA CONTA", c, c, new Vector2(480f, -300f), new Vector2(300f, 84f), 24, AccountDoLogout);
+        }
+
+        // ---------- Avatares locais (capacetes desenhados por UI — sem imagem externa) ----------
+        int pendingAvatar = -2; // -2 = ainda não lido do perfil; -1 = sem avatar (inicial do nome)
+        static readonly Color[] HelmetMain =
+        {
+            new Color(0.9f, 0.12f, 0.12f), new Color(0.1f, 0.35f, 0.9f), new Color(1f, 0.8f, 0.1f), new Color(0.1f, 0.7f, 0.35f),
+            new Color(0.95f, 0.95f, 0.95f), new Color(0.12f, 0.12f, 0.14f), new Color(1f, 0.48f, 0.1f), new Color(0.55f, 0.2f, 0.85f),
+            new Color(0f, 0.75f, 0.8f), new Color(0.95f, 0.35f, 0.65f), new Color(0.6f, 0.62f, 0.66f), new Color(0.45f, 0.25f, 0.1f)
+        };
+        static readonly Color[] HelmetStripe =
+        {
+            Color.white, new Color(1f, 0.8f, 0.1f), new Color(0.1f, 0.1f, 0.12f), Color.white,
+            new Color(0.9f, 0.12f, 0.12f), new Color(1f, 0.48f, 0.1f), new Color(0.1f, 0.1f, 0.12f), new Color(1f, 0.8f, 0.1f),
+            Color.white, Color.white, new Color(0.1f, 0.35f, 0.9f), new Color(1f, 0.8f, 0.1f)
+        };
+
+        static int PresetOf(string photo)
+        {
+            if (!string.IsNullOrEmpty(photo) && photo.StartsWith("preset:") && int.TryParse(photo.Substring(7), out int n) && n >= 0 && n < HelmetMain.Length) return n;
+            return -1;
+        }
+
+        static void DrawHelmet(RectTransform parent, int preset, float size)
+        {
+            preset = Mathf.Clamp(preset, 0, HelmetMain.Length - 1);
+            var c = new Vector2(0.5f, 0.5f);
+            var bg = UIFactory.Panel("HelmetBg", parent, c, c, Vector2.zero, new Vector2(size, size), new Color(0.06f, 0.07f, 0.1f, 1f));
+            bg.sprite = MenuTheme.RoundedSprite(64, 64, 32);
+            var shell = UIFactory.Panel("HelmetShell", bg.transform, c, c, new Vector2(0f, -size * 0.02f), new Vector2(size * 0.74f, size * 0.7f), HelmetMain[preset]);
+            shell.sprite = MenuTheme.RoundedSprite(64, 60, 28);
+            var stripe = UIFactory.Panel("HelmetStripe", shell.transform, c, c, new Vector2(0f, size * 0.2f), new Vector2(size * 0.14f, size * 0.3f), HelmetStripe[preset]);
+            stripe.sprite = MenuTheme.RoundedSprite(8, 20, 4);
+            var visor = UIFactory.Panel("HelmetVisor", shell.transform, c, c, new Vector2(size * 0.05f, -size * 0.06f), new Vector2(size * 0.58f, size * 0.17f), new Color(0.05f, 0.06f, 0.09f, 0.95f));
+            visor.sprite = MenuTheme.RoundedSprite(40, 12, 6);
+            var shine = UIFactory.Panel("HelmetShine", visor.transform, c, c, new Vector2(-size * 0.12f, size * 0.03f), new Vector2(size * 0.16f, size * 0.03f), new Color(1f, 1f, 1f, 0.35f));
+            shine.raycastTarget = false;
+            foreach (var g in new Image[] { bg, shell, stripe, visor }) g.raycastTarget = false;
+        }
+
+        void ShowAvatarPicker(int colorIdx)
+        {
+            var c = new Vector2(0.5f, 0.5f);
+            var dim = UIFactory.Panel("AvatarPicker", accountBody, c, c, Vector2.zero, new Vector2(1300f, 780f), new Color(0.04f, 0.05f, 0.07f, 0.98f));
+            dim.raycastTarget = true;
+            dim.transform.SetAsLastSibling();
+            var drt = (RectTransform)dim.transform;
+            UIFactory.Label("PickTitle", drt, "ESCOLHA SEU CAPACETE", 34, TextAnchor.MiddleCenter, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -24f), new Vector2(1200f, 50f), MenuTheme.Text);
+            for (int i = 0; i < HelmetMain.Length; i++)
+            {
+                int idx = i;
+                float x = (i % 6 - 2.5f) * 200f;
+                float y = i < 6 ? 120f : -110f;
+                var btn = MenuTheme.StyledButton(drt, "Pick" + i, "", c, c, new Vector2(x, y), new Vector2(180f, 200f), 18, () =>
+                {
+                    pendingAvatar = idx;
+                    Destroy(dim.gameObject);
+                    SetAccountStatus("Avatar escolhido — toque em SALVAR PERFIL para gravar na conta.");
+                    ShowAccountProfile();
+                });
+                if (idx == pendingAvatar) btn.image.color = new Color(MenuTheme.Accent.r, MenuTheme.Accent.g, MenuTheme.Accent.b, 0.45f);
+                var holder = UIFactory.Rect("H" + i, btn.transform, c, c, c, new Vector2(0f, 10f), new Vector2(150f, 150f));
+                DrawHelmet(holder, i, 150f);
+            }
+            MenuTheme.StyledButton(drt, "PickNone", "SEM AVATAR (INICIAL)", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(-260f, 30f), new Vector2(460f, 70f), 22, () =>
+            {
+                pendingAvatar = -1;
+                Destroy(dim.gameObject);
+                ShowAccountProfile();
+            });
+            MenuTheme.StyledButton(drt, "PickClose", "FECHAR", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(260f, 30f), new Vector2(460f, 70f), 22, () => Destroy(dim.gameObject));
         }
 
         Image AccountCellBg(float x, float y)
@@ -680,7 +767,8 @@ namespace RaceX.UI
         void AccountDoSave(int color)
         {
             SetAccountStatus("Salvando...");
-            AccountClient.SetProfile(accNameField != null ? accNameField.text : null, null, color, (ok, err) =>
+            string photo = pendingAvatar >= 0 ? "preset:" + pendingAvatar : (pendingAvatar == -1 && PresetOf(AccountClient.Photo) >= 0 ? "" : null);
+            AccountClient.SetProfile(accNameField != null ? accNameField.text : null, photo, color, (ok, err) =>
             {
                 if (ok)
                 {
@@ -693,6 +781,7 @@ namespace RaceX.UI
 
         void AccountDoLogout()
         {
+            pendingAvatar = -2;
             AccountClient.Logout();
             SetAccountStatus("");
             ShowAccountAuth();
@@ -1146,159 +1235,343 @@ namespace RaceX.UI
             });
         }
 
+        // ======================= CONFIGURAÇÕES (v79: 2 cartões) =======================
         internal void ShowSettings()
         {
             back = () => { SettingsManager.Save(); ShowMain(); };
             var s = NewScreen("CONFIGURAÇÕES");
+            ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.86f);
+            bool mobile = Application.isMobilePlatform;
+            var audio = SetupCard(s, "ÁUDIO E JOGO", ContentX - 365f, 8);
+            var video = SetupCard(s, "VÍDEO E DESEMPENHO", ContentX + 365f, mobile ? 4 : 5);
             int row = 0;
-            rowTop = 400f; rowStep = 68f;
-            OptionRow(s, "Volume geral", row++, () => Pct(SettingsManager.MasterVolume), d => { SettingsManager.MasterVolume = Clamp10(SettingsManager.MasterVolume, d); AudioListener.volume = SettingsManager.MasterVolume; });
-            OptionRow(s, "Volume do motor", row++, () => Pct(SettingsManager.EngineVolume), d => SettingsManager.EngineVolume = Clamp10(SettingsManager.EngineVolume, d));
-            OptionRow(s, "Música", row++, () => SettingsManager.MusicOn ? "Ligada" : "Desligada", d => SettingsManager.MusicOn = !SettingsManager.MusicOn);
-            OptionRow(s, "Efeitos sonoros", row++, () => SettingsManager.SfxOn ? "Ligados" : "Desligados", d => SettingsManager.SfxOn = !SettingsManager.SfxOn);
-            OptionRow(s, "Nomes sobre carros", row++, () => SettingsManager.NameTags ? "Ligados" : "Desligados", d => SettingsManager.NameTags = !SettingsManager.NameTags);
-            OptionRow(s, "Mini-mapa", row++, () => SettingsManager.MinimapDynamic ? "Dinâmico (trecho)" : "Pista inteira", d => SettingsManager.MinimapDynamic = !SettingsManager.MinimapDynamic);
-            OptionRow(s, "Qualidade", row++, () => QualityNames[(int)SettingsManager.Quality], d => { SettingsManager.Quality = (QualityTier)Step((int)SettingsManager.Quality, d, 4); SettingsManager.ApplyQuality(SettingsManager.Quality); });
-            if (Application.isMobilePlatform)
-                OptionRow(s, "Controles", row++, () => ControlNames[(int)SettingsManager.ControlMode], d => SettingsManager.ControlMode = SettingsManager.ControlMode == ControlMode.Buttons ? ControlMode.Joystick : ControlMode.Buttons);
+            CardRow(audio, "Volume geral", row++, () => Pct(SettingsManager.MasterVolume), d => { SettingsManager.MasterVolume = Clamp10(SettingsManager.MasterVolume, d); AudioListener.volume = SettingsManager.MasterVolume; });
+            CardRow(audio, "Volume motor", row++, () => Pct(SettingsManager.EngineVolume), d => SettingsManager.EngineVolume = Clamp10(SettingsManager.EngineVolume, d));
+            CardRow(audio, "Música", row++, () => SettingsManager.MusicOn ? "LIGADA" : "DESLIGADA", d => SettingsManager.MusicOn = !SettingsManager.MusicOn);
+            CardRow(audio, "Efeitos", row++, () => SettingsManager.SfxOn ? "LIGADOS" : "DESLIGADOS", d => SettingsManager.SfxOn = !SettingsManager.SfxOn);
+            CardRow(audio, "Rádio do pit", row++, () => SettingsManager.PitRadio == 0 ? "DESLIGADO" : "LIGADO", d => SettingsManager.PitRadio = SettingsManager.PitRadio == 0 ? 1 : 0);
+            CardRow(audio, "Nomes nos carros", row++, () => SettingsManager.NameTags ? "LIGADOS" : "DESLIGADOS", d => SettingsManager.NameTags = !SettingsManager.NameTags);
+            CardRow(audio, "Mini-mapa", row++, () => SettingsManager.MinimapDynamic ? "DINÂMICO" : "PISTA INTEIRA", d => SettingsManager.MinimapDynamic = !SettingsManager.MinimapDynamic);
+            if (mobile)
+                CardRow(audio, "Controles", row++, () => ControlNames[(int)SettingsManager.ControlMode], d => SettingsManager.ControlMode = SettingsManager.ControlMode == ControlMode.Buttons ? ControlMode.Joystick : ControlMode.Buttons);
             else
-                OptionRow(s, "Tela cheia", row++, () => Screen.fullScreen ? "Sim" : "Não", d => Screen.fullScreen = !Screen.fullScreen);
-            OptionRow(s, "F1 em corridas GT", row++, () => SettingsManager.AllowF1 ? "Sim" : "Não", d => SettingsManager.AllowF1 = !SettingsManager.AllowF1);
-            OptionRow(s, "Contador de FPS", row++, () => SettingsManager.ShowFps ? "Ligado" : "Desligado", d => SettingsManager.ShowFps = !SettingsManager.ShowFps);
-            OptionRow(s, "Rádio do pit", row++, () => SettingsManager.PitRadio == 0 ? "Desligado" : "Ligado", d => SettingsManager.PitRadio = SettingsManager.PitRadio == 0 ? 1 : 0);
-            rowTop = 330f; rowStep = 84f;
-            MenuTheme.StyledButton(s, "Back", "VOLTAR", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 40f), new Vector2(380f, 100f), 36, () => { SettingsManager.Save(); ShowMain(); });
+                CardRow(audio, "F1 em GT", row++, () => SettingsManager.AllowF1 ? "SIM" : "NÃO", d => SettingsManager.AllowF1 = !SettingsManager.AllowF1);
+
+            row = 0;
+            CardRow(video, "Qualidade", row++, () => QualityNames[(int)SettingsManager.Quality].ToUpperInvariant(), d => { SettingsManager.Quality = (QualityTier)Step((int)SettingsManager.Quality, d, 4); SettingsManager.ApplyQuality(SettingsManager.Quality); });
+            CardRow(video, "Limite de FPS", row++, () => SettingsManager.FpsLabel(SettingsManager.TargetFps), d =>
+            {
+                SettingsManager.TargetFps = StepIn(SettingsManager.FpsOptions, SettingsManager.TargetFps, d);
+                SettingsManager.ApplyFrameRate(SettingsManager.Quality);
+            });
+            CardRow(video, "Contador FPS", row++, () => SettingsManager.ShowFps ? "LIGADO" : "DESLIGADO", d => SettingsManager.ShowFps = !SettingsManager.ShowFps);
+            if (mobile)
+                CardRow(video, "F1 em GT", row++, () => SettingsManager.AllowF1 ? "SIM" : "NÃO", d => SettingsManager.AllowF1 = !SettingsManager.AllowF1);
+            else
+            {
+                CardRow(video, "Tela cheia", row++, () => Screen.fullScreen ? "SIM" : "NÃO", d => Screen.fullScreen = !Screen.fullScreen);
+                CardRow(video, "Resolução", row++, () => Screen.width + " × " + Screen.height, d => { });
+            }
+            // Explicação do FPS/qualidade (pedido: deixar claro o seletor 30/60/120).
+            var c = new Vector2(0.5f, 0.5f);
+            float hintY = 350f - (96f + (mobile ? 4 : 5) * 76f) - 30f;
+            var hint = UIFactory.Label("FpsHint", s,
+                "AUTO: celular 60 FPS em Alta/Ultra e 30 FPS em Baixa/Média; PC sem limite.\n30 economiza bateria · 60 é o recomendado · 120 só em telas de 120 Hz.\nQualidade mais baixa = mais FPS (menos sombras e resolução).",
+                20, TextAnchor.UpperLeft, c, new Vector2(0.5f, 1f), new Vector2(ContentX + 365f, hintY), new Vector2(680f, 100f), MenuTheme.TextDim);
+            hint.horizontalOverflow = HorizontalWrapMode.Wrap;
+            MenuTheme.StyledButton(s, "About", "SOBRE O JOGO", c, c, new Vector2(ContentX + 365f, hintY - 150f), new Vector2(420f, 64f), 24, ShowCredits);
+
+            var b = new Vector2(0.5f, 0f);
+            MenuTheme.StyledButton(s, "Back", "VOLTAR", b, b, new Vector2(ContentX, 40f), new Vector2(380f, 90f), 32, () => { SettingsManager.Save(); ShowMain(); });
         }
 
         static string Pct(float v) => Mathf.RoundToInt(v * 100f) + "%";
         static float Clamp10(float v, int d) => Mathf.Clamp01(Mathf.Round((v + d * 0.1f) * 10f) / 10f);
+
+        // ======================= GARAGEM (v79) =======================
+        string garageStatus = "";
 
         internal void ShowGarage()
         {
             back = ShowMain;
             garageIndex = (int)settings.players[0].car;
             var s = NewScreen("GARAGEM");
-            SetShowroomCam(new Vector3(0f, 2.2f, -7.4f), 10f);
-            string modelName = CarLabel((CarModel)garageIndex);
-            var c = new Vector2(0.5f, 0.5f);
+            ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.18f);
+            // Carro em DESTAQUE: câmera mais perto e deslocada → o carro fica à esquerda, livre dos cartões.
+            SetShowroomCam(new Vector3(1.5f, 1.9f, -6.6f), 8f);
             var current = (CarModel)garageIndex;
-            MenuTheme.StyledButton(s, "GaragePrev", "<", c, c, new Vector2(-490f, 430f), new Vector2(70f, 56f), 34, () => ChangeGarage(-1));
-            UIFactory.Label("GarageName", s, modelName, 46, TextAnchor.MiddleCenter, c, c, new Vector2(-90f, 430f), new Vector2(760f, 60f), MenuTheme.Accent);
-            MenuTheme.StyledButton(s, "GarageNext", ">", c, c, new Vector2(310f, 430f), new Vector2(70f, 56f), 34, () => ChangeGarage(1));
-            UIFactory.Label("GarageCredits", s, "Créditos: " + CareerStats.Credits, 30, TextAnchor.MiddleCenter, c, c, new Vector2(215f, 386f), new Vector2(600f, 36f), MenuTheme.Text);
+            var c = new Vector2(0.5f, 0.5f);
+            var top = new Vector2(0.5f, 1f);
 
+            // Faixa de seleção (2 linhas de chips no topo).
             for (int i = 0; i < AllModels.Length; i++)
             {
-                int idx = i;
                 CarModel cm = AllModels[i];
                 bool sel = (int)cm == garageIndex;
-                float cx = 215f + (i % 7 - 3) * 126f;
-                float cy = 316f - (i / 7) * 56f;
-                MenuTheme.StyledButton(s, "GarageCar" + i, CarLabel(cm).Split(' ')[0], c, c, new Vector2(cx, cy), new Vector2(118f, 46f), 20,
-                    () => { garageIndex = (int)cm; settings.players[0].car = cm; RefreshShowroomCarAsync(); ShowGarage(); });
-                if (sel) UIFactory.Panel("GarageSel" + i, s, c, c, new Vector2(cx, cy - 26f), new Vector2(114f, 4f), MenuTheme.Accent);
+                float cx = ContentX + (i % 7 - 3) * 168f;
+                float cy = -132f - (i / 7) * 56f;
+                var chip = MenuTheme.StyledButton(s, "GarageCar" + i, ShortCarLabel(cm), top, top, new Vector2(cx, cy), new Vector2(158f, 46f), 18,
+                    () => { garageIndex = (int)cm; settings.players[0].car = cm; garageStatus = ""; RefreshShowroomCarAsync(); ShowGarage(); });
+                if (sel) chip.image.color = new Color(MenuTheme.Accent.r, MenuTheme.Accent.g, MenuTheme.Accent.b, 0.55f);
             }
 
-            string[] upLabels = { "Motor", "Freios", "Pneus" };
-            int[] kinds = { CareerStats.KindEngine, CareerStats.KindBrakes, CareerStats.KindTires };
-            for (int row = 0; row < 3; row++)
+            // Nome do carro sob ele, com < > para trocar.
+            var bc = new Vector2(0.5f, 0f);
+            MenuTheme.StyledButton(s, "GaragePrev", "<", bc, bc, new Vector2(-470f, 150f), new Vector2(70f, 64f), 34, () => ChangeGarage(-1));
+            UIFactory.Label("GarageName", s, CarLabel(current).ToUpperInvariant(), 40, TextAnchor.MiddleCenter, bc, bc, new Vector2(-190f, 150f), new Vector2(480f, 64f), MenuTheme.Accent);
+            MenuTheme.StyledButton(s, "GarageNext", ">", bc, bc, new Vector2(90f, 150f), new Vector2(70f, 64f), 34, () => ChangeGarage(1));
+            UIFactory.Label("GarageCat", s, IsFormula(current) ? "FÓRMULA" : "GT / SUPERCARRO", 22, TextAnchor.MiddleCenter, bc, bc, new Vector2(-190f, 110f), new Vector2(480f, 30f), MenuTheme.TextDim);
+
+            // CARTÃO DE DADOS à direita (fora do carro).
+            var card = UIFactory.Panel("GarageCard", s, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-30f, -80f), new Vector2(640f, 800f), new Color(0.05f, 0.06f, 0.09f, 0.94f));
+            card.sprite = MenuTheme.RoundedSprite(128, 160, 16);
+            var crt = (RectTransform)card.transform;
+            var tl = new Vector2(0f, 1f);
+            UIFactory.Label("CardCredits", crt, "CRÉDITOS: " + CareerStats.Credits.ToString("N0", System.Globalization.CultureInfo.InvariantCulture).Replace(",", ".") + " cr", 26, TextAnchor.MiddleLeft, tl, tl, new Vector2(28f, -18f), new Vector2(590f, 40f), MenuTheme.Text);
+            UIFactory.Label("PerfTitle", crt, "DESEMPENHO", 24, TextAnchor.MiddleLeft, tl, tl, new Vector2(28f, -66f), new Vector2(400f, 34f), MenuTheme.Accent);
+            UIFactory.Panel("PerfLine", crt, tl, tl, new Vector2(28f, -100f), new Vector2(584f, 2f), MenuTheme.AccentDim);
+
+            var baseSpec = CarSpec.CreateDefault(current);
+            var upSpec = CarSpec.CreateDefault(current);
+            CareerStats.ApplyUpgrades(upSpec);
+            float maxTop = 1f, maxTq = 1f, maxBr = 1f, maxGrip = 1f, maxDf = 0.01f, maxMass = 1f;
+            foreach (var m in AllModels)
             {
-                int kind = kinds[row];
+                var sp = CarSpec.CreateDefault(m);
+                maxTop = Mathf.Max(maxTop, sp.topSpeedKmh); maxTq = Mathf.Max(maxTq, sp.maxTorqueNm); maxBr = Mathf.Max(maxBr, sp.brakeTorque);
+                maxGrip = Mathf.Max(maxGrip, sp.sidewaysStiffness); maxDf = Mathf.Max(maxDf, sp.downforceCoefficient); maxMass = Mathf.Max(maxMass, sp.massKg);
+            }
+            maxTop *= 1.2f; maxTq *= 1.3f; maxBr *= 1.35f; maxGrip *= 1.25f; maxDf *= 1.25f;
+            GarageStat(crt, 0, "Vel. máxima", baseSpec.topSpeedKmh / maxTop, upSpec.topSpeedKmh / maxTop, Mathf.RoundToInt(upSpec.topSpeedKmh) + " km/h");
+            GarageStat(crt, 1, "Torque", baseSpec.maxTorqueNm / maxTq, upSpec.maxTorqueNm / maxTq, Mathf.RoundToInt(upSpec.maxTorqueNm) + " Nm");
+            GarageStat(crt, 2, "Freios", baseSpec.brakeTorque / maxBr, upSpec.brakeTorque / maxBr, Mathf.RoundToInt(upSpec.brakeTorque) + " Nm");
+            GarageStat(crt, 3, "Aderência", baseSpec.sidewaysStiffness / maxGrip, upSpec.sidewaysStiffness / maxGrip, upSpec.sidewaysStiffness.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture));
+            GarageStat(crt, 4, "Downforce", baseSpec.downforceCoefficient / maxDf, upSpec.downforceCoefficient / maxDf, upSpec.downforceCoefficient.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture));
+            // Peso: barra "cheia" = mais leve.
+            GarageStat(crt, 5, "Peso", 1f - baseSpec.massKg / (maxMass * 1.15f), 1f - upSpec.massKg / (maxMass * 1.15f), Mathf.RoundToInt(upSpec.massKg) + " kg");
+
+            UIFactory.Label("UpTitle", crt, "MELHORIAS (NÍVEL ATÉ " + CareerStats.MaxUpgrade + ")", 24, TextAnchor.MiddleLeft, tl, tl, new Vector2(28f, -404f), new Vector2(590f, 34f), MenuTheme.Accent);
+            UIFactory.Panel("UpLine", crt, tl, tl, new Vector2(28f, -438f), new Vector2(584f, 2f), MenuTheme.AccentDim);
+            for (int k = 0; k < CareerStats.KindCount; k++)
+            {
+                int kind = k;
                 int lvl = CareerStats.UpgradeLevel(current, kind);
-                var rowRt = UIFactory.Rect("UpgRow" + row, s, c, c, c, new Vector2(215f, 232f - row * 52f), new Vector2(700f, 40f));
-                UIFactory.Label("UpgL" + row, rowRt, upLabels[row], 26, TextAnchor.MiddleLeft, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(10f, 0f), new Vector2(160f, 36f), MenuTheme.Text);
-                UIFactory.Label("UpgV" + row, rowRt, "Nv " + lvl + "/" + CareerStats.MaxUpgrade, 26, TextAnchor.MiddleCenter, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(180f, 0f), new Vector2(140f, 36f), MenuTheme.Accent);
+                float y = -470f - k * 58f;
+                UIFactory.Label("UpN" + k, crt, CareerStats.KindNames[k].ToUpperInvariant(), 20, TextAnchor.MiddleLeft, tl, tl, new Vector2(28f, y), new Vector2(200f, 26f), MenuTheme.Text);
+                UIFactory.Label("UpE" + k, crt, CareerStats.KindEffects[k], 15, TextAnchor.MiddleLeft, tl, tl, new Vector2(28f, y - 22f), new Vector2(200f, 20f), MenuTheme.TextDim);
+                for (int p = 0; p < CareerStats.MaxUpgrade; p++)
+                {
+                    var pip = UIFactory.Panel("Pip" + k + "_" + p, crt, tl, tl, new Vector2(232f + p * 17f, y - 6f), new Vector2(13f, 22f), p < lvl ? (p < 5 ? MenuTheme.Accent : new Color(1f, 0.78f, 0.3f)) : new Color(1f, 1f, 1f, 0.12f));
+                    pip.raycastTarget = false;
+                }
                 if (lvl >= CareerStats.MaxUpgrade)
-                    MenuTheme.StyledButton(rowRt, "UpgB" + row, "MAX", new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(560f, 0f), new Vector2(190f, 40f), 22, () => { });
+                    UIFactory.Label("UpMax" + k, crt, "MÁXIMO", 20, TextAnchor.MiddleCenter, tl, tl, new Vector2(412f, y - 2f), new Vector2(200f, 44f), new Color(0.35f, 0.9f, 0.45f));
                 else
                 {
                     int cost = CareerStats.UpgradeCost(lvl);
-                    string btn = "COMPRAR " + cost + " cr";
-                    MenuTheme.StyledButton(rowRt, "UpgB" + row, btn, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(560f, 0f), new Vector2(260f, 40f), 20, () =>
+                    bool can = CareerStats.Credits >= cost;
+                    var btn = MenuTheme.StyledButton(crt, "UpB" + k, cost.ToString("N0", System.Globalization.CultureInfo.InvariantCulture).Replace(",", ".") + " cr", tl, tl, new Vector2(412f, y + 4f), new Vector2(200f, 46f), 20, () =>
                     {
-                        CareerStats.BuyUpgrade(current, kind);
+                        garageStatus = CareerStats.BuyUpgrade(current, kind)
+                            ? CareerStats.KindNames[kind] + " melhorado!"
+                            : "Créditos insuficientes — ganhe mais em PROGRESSO > como ganhar.";
                         ShowGarage();
                     });
+                    if (!can) btn.image.color = new Color(1f, 1f, 1f, 0.03f);
                 }
             }
-
-            var spec = CarSpec.CreateDefault(current);
-            CareerStats.ApplyUpgrades(spec);
-            string[] labels = { "Velocidade", "Aceleração", "Aderência" };
-            float[] vals =
-            {
-                Mathf.Clamp01(spec.topSpeedKmh / 340f) * 0.7f + 0.3f,
-                Mathf.Clamp01(1f - (spec.zeroToHundredSeconds - 2.5f) / 2.5f) * 0.7f + 0.3f,
-                Mathf.Clamp01(spec.downforceCoefficient / 4f) * 0.6f + 0.35f
-            };
-            for (int row = 0; row < 3; row++)
-            {
-                var rowRt = UIFactory.Rect("GarageRow" + row, s, c, c, c, new Vector2(215f, 44f - row * 48f), new Vector2(560f, 34f));
-                MenuTheme.StatBar(rowRt, labels[row], vals[row]);
-            }
-            UIFactory.Label("GarageNote", s, "Ganhe créditos correndo para melhorar o carro", 24, TextAnchor.MiddleCenter, c, c, new Vector2(215f, -128f), new Vector2(700f, 30f), MenuTheme.TextDim);
+            UIFactory.Label("GarageStatus", crt, garageStatus, 20, TextAnchor.MiddleCenter, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 46f), new Vector2(600f, 30f), MenuTheme.Accent);
+            UIFactory.Label("GarageNote", crt, "Barra clara = de fábrica · laranja = com suas melhorias", 17, TextAnchor.MiddleCenter, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 16f), new Vector2(600f, 26f), MenuTheme.TextDim);
             MenuTheme.StyledButton(s, "GarageBack", "VOLTAR", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(140f, -52f), new Vector2(260f, 60f), 28, ShowMain);
+        }
+
+        /// <summary>Linha de atributo: barra de fábrica (clara) + barra com melhorias (laranja) + valor real.</summary>
+        void GarageStat(RectTransform card, int row, string label, float baseT, float upT, string value)
+        {
+            var tl = new Vector2(0f, 1f);
+            float y = -130f - row * 44f;
+            UIFactory.Label("StL" + row, card, label.ToUpperInvariant(), 19, TextAnchor.MiddleLeft, tl, tl, new Vector2(28f, y), new Vector2(170f, 30f), MenuTheme.TextDim);
+            var bg = UIFactory.Panel("StBg" + row, card, tl, tl, new Vector2(200f, y - 8f), new Vector2(260f, 14f), new Color(1f, 1f, 1f, 0.08f));
+            bg.raycastTarget = false;
+            var up = UIFactory.Panel("StUp" + row, bg.transform, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), Vector2.zero, new Vector2(260f * Mathf.Clamp01(upT), 14f), MenuTheme.Accent);
+            up.raycastTarget = false;
+            var bs = UIFactory.Panel("StBase" + row, bg.transform, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), Vector2.zero, new Vector2(260f * Mathf.Clamp01(Mathf.Min(baseT, upT)), 14f), new Color(1f, 1f, 1f, 0.55f));
+            bs.raycastTarget = false;
+            UIFactory.Label("StV" + row, card, value, 20, TextAnchor.MiddleRight, tl, tl, new Vector2(470f, y), new Vector2(142f, 30f), MenuTheme.Text);
+        }
+
+        static bool IsFormula(CarModel m) => m == CarModel.F1 || m == CarModel.F2008 || m == CarModel.F1Studio;
+
+        static string ShortCarLabel(CarModel m)
+        {
+            switch (m)
+            {
+            case CarModel.Falcon: return "CORVETTE";
+            case CarModel.Titan: return "CAYMAN S";
+            case CarModel.Storm: return "TEMERARIO";
+            case CarModel.F1: return "F1";
+            case CarModel.Ferrari: return "FERRARI";
+            case CarModel.R8: return "AUDI R8";
+            case CarModel.Mustang: return "MUSTANG";
+            case CarModel.Revuelto: return "REVUELTO";
+            case CarModel.GtrNismo: return "GT-R";
+            case CarModel.McLarenP1: return "MCLAREN P1";
+            case CarModel.Bugatti: return "BUGATTI";
+            case CarModel.F2008: return "F2008";
+            case CarModel.F1Studio: return "F1 2022";
+            default: return m.ToString().ToUpperInvariant();
+            }
         }
 
         void ChangeGarage(int delta)
         {
             garageIndex = Step(garageIndex, delta, AllModels.Length);
             settings.players[0].car = (CarModel)garageIndex;
+            garageStatus = "";
             RefreshShowroomCarAsync();
             ShowGarage();
         }
 
+        // ======================= PROGRESSO (v79) =======================
         void ShowProgress()
         {
             back = ShowMain;
             var s = NewScreen("PROGRESSO");
-            var c = new Vector2(0.5f, 0.5f);
-            var box = UIFactory.Panel("ProgressBox", s, c, c, new Vector2(215f, 40f), new Vector2(820f, 560f), new Color(1f, 1f, 1f, 0.05f));
-            string[] labels = { "Corridas", "Vitórias", "Pódios", "Créditos" };
-            float[] vals =
+            ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.88f);
+            var stats = SetupCard(s, "SUA CARREIRA", ContentX - 365f, 7);
+            var tl = new Vector2(0f, 1f);
+            var ml = new Vector2(0f, 0.5f);
+            int upPts = CareerStats.TotalUpgradePoints();
+            int upMax = AllModels.Length * CareerStats.KindCount * CareerStats.MaxUpgrade;
+                        string[] names = { "Corridas", "Vitórias", "Pódios", "Títulos", "Créditos", "Melhorias compradas", "Próxima meta" };
+            string[] vals =
             {
-                Mathf.Clamp01(CareerStats.Races / 50f),
-                Mathf.Clamp01(CareerStats.Wins / 25f),
-                Mathf.Clamp01(CareerStats.Podiums / 40f),
-                Mathf.Clamp01(CareerStats.Credits / 60000f)
+                CareerStats.Races.ToString(), CareerStats.Wins.ToString(), CareerStats.Podiums.ToString(), CareerStats.Titles.ToString(),
+                CareerStats.Credits.ToString("N0", System.Globalization.CultureInfo.InvariantCulture).Replace(",", ".") + " cr", upPts + " / " + upMax,
+                NextGoal()
             };
-            int[] nums = { CareerStats.Races, CareerStats.Wins, CareerStats.Podiums, CareerStats.Credits };
-            for (int i = 0; i < 4; i++)
+            float[] fills =
             {
-                var rowRt = UIFactory.Rect("ProgressRow" + i, box.transform, c, c, c, new Vector2(0f, 190f - i * 84f), new Vector2(640f, 36f));
-                MenuTheme.StatBar(rowRt, labels[i] + ": " + nums[i], vals[i]);
+                Mathf.Clamp01(CareerStats.Races / 50f), Mathf.Clamp01(CareerStats.Wins / 25f), Mathf.Clamp01(CareerStats.Podiums / 40f),
+                Mathf.Clamp01(CareerStats.Titles / 5f), Mathf.Clamp01(CareerStats.Credits / 60000f), upMax > 0 ? upPts / (float)upMax : 0f, -1f
+            };
+            for (int i = 0; i < names.Length; i++)
+            {
+                float y = -84f - i * 76f;
+                var line = UIFactory.Panel("PRow" + i, stats, tl, tl, new Vector2(16f, y), new Vector2(668f, 68f), new Color(1f, 1f, 1f, i % 2 == 0 ? 0.05f : 0.025f));
+                var lr = (RectTransform)line.transform;
+                UIFactory.Label("PL" + i, lr, names[i].ToUpperInvariant(), 21, TextAnchor.MiddleLeft, ml, ml, new Vector2(16f, 0f), new Vector2(300f, 60f), MenuTheme.TextDim);
+                UIFactory.Label("PV" + i, lr, vals[i], 24, TextAnchor.MiddleRight, ml, ml, new Vector2(400f, 0f), new Vector2(250f, 60f), MenuTheme.Text);
+                if (fills[i] >= 0f)
+                {
+                    var bg = UIFactory.Panel("PB" + i, lr, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(16f, 6f), new Vector2(636f, 4f), new Color(1f, 1f, 1f, 0.08f));
+                    UIFactory.Panel("PF" + i, bg.transform, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), Vector2.zero, new Vector2(636f * fills[i], 4f), MenuTheme.Accent);
+                }
             }
-            UIFactory.Label("ProgressNote", box.transform, "Corra para ganhar créditos e evoluir seus carros na GARAGEM", 26, TextAnchor.MiddleCenter, c, c, new Vector2(0f, -190f), new Vector2(760f, 50f), MenuTheme.TextDim);
-            MenuTheme.StyledButton(s, "ProgressBack", "VOLTAR", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(215f, 24f), new Vector2(300f, 56f), 26, ShowMain);
+
+            // COMO GANHAR CRÉDITOS (pedido: explicar).
+            var how = SetupCard(s, "COMO GANHAR CRÉDITOS", ContentX + 365f, 8);
+            var exp = UIFactory.Label("HowText", how,
+                "Você ganha créditos ao TERMINAR A CORRIDA DE DOMINGO do MODO CARREIRA. Quanto melhor a posição, mais créditos " +
+                "(mínimo de 400 cr). Treinos, classificação e sprint não pagam.\n\nGaste na GARAGEM: motor, freios, pneus, aerodinâmica e peso, " +
+                "até o nível " + CareerStats.MaxUpgrade + " em cada carro. A melhoria vale nas suas corridas na hora.",
+                21, TextAnchor.UpperLeft, tl, tl, new Vector2(28f, -80f), new Vector2(640f, 220f), MenuTheme.Text);
+            exp.horizontalOverflow = HorizontalWrapMode.Wrap;
+            UIFactory.Label("HowTab", how, "PRÊMIO POR POSIÇÃO (GRID DE 24 CARROS)", 20, TextAnchor.MiddleLeft, tl, tl, new Vector2(28f, -316f), new Vector2(640f, 30f), MenuTheme.Accent);
+            int[] positions = { 1, 2, 3, 5, 10, 15, 20, 24 };
+            for (int i = 0; i < positions.Length; i++)
+            {
+                int col = i % 2, r = i / 2;
+                string txt = positions[i] + "º  →  " + CareerStats.RewardFor(positions[i], 24).ToString("N0", System.Globalization.CultureInfo.InvariantCulture).Replace(",", ".") + " cr";
+                UIFactory.Label("Rw" + i, how, txt, 22, TextAnchor.MiddleLeft, tl, tl, new Vector2(40f + col * 320f, -360f - r * 40f), new Vector2(300f, 36f), r == 0 && col == 0 ? Gold : MenuTheme.Text);
+            }
+            UIFactory.Label("HowCost", how, "Custo da melhoria: " + CareerStats.UpgradeCost(0).ToString("N0", System.Globalization.CultureInfo.InvariantCulture).Replace(",", ".") + " cr no nível 1, +" + (CareerStats.UpgradeCost(1) - CareerStats.UpgradeCost(0)).ToString("N0", System.Globalization.CultureInfo.InvariantCulture).Replace(",", ".") + " cr a cada nível.", 19, TextAnchor.MiddleLeft, tl, tl, new Vector2(28f, -530f), new Vector2(640f, 30f), MenuTheme.TextDim);
+            MenuTheme.StyledButton(how, "GoGarage", "IR PARA A GARAGEM", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 20f), new Vector2(420f, 60f), 22, ShowGarage);
+
+            MenuTheme.StyledButton(s, "ProgressBack", "VOLTAR", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(ContentX, 30f), new Vector2(380f, 80f), 30, ShowMain);
         }
+
+        static readonly Color Gold = new Color32(255, 193, 7, 255);
+
+        static string NextGoal()
+        {
+            int[] goals = { 1, 5, 10, 25, 50, 100 };
+            foreach (int g in goals) if (CareerStats.Wins < g) return g + (g == 1 ? " vitória" : " vitórias");
+            return "lenda!";
+        }
+
+        // ======================= RECORDES (v79) =======================
+        static int recordsTrack;
 
         void ShowRecords()
         {
             back = ShowMain;
             var s = NewScreen("RECORDES");
+            ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.9f);
+            recordsTrack = Mathf.Clamp(recordsTrack, 0, TrackNames.Length - 1);
             var c = new Vector2(0.5f, 0.5f);
+            var tl = new Vector2(0f, 1f);
+            // Lista de pistas (2 colunas × 12) com o melhor tempo de qualquer carro.
+            var list = UIFactory.Panel("TrackList", s, c, new Vector2(0.5f, 1f), new Vector2(ContentX - 380f, 380f), new Vector2(720f, 800f), new Color(0.05f, 0.06f, 0.09f, 0.94f));
+            list.sprite = MenuTheme.RoundedSprite(144, 160, 16);
+            var lrt = (RectTransform)list.transform;
+            UIFactory.Label("ListTitle", lrt, "PISTAS — SEU MELHOR TEMPO", 24, TextAnchor.MiddleLeft, tl, tl, new Vector2(24f, -16f), new Vector2(660f, 36f), MenuTheme.Accent);
             for (int t = 0; t < TrackNames.Length; t++)
             {
-                float x = 215f + (t - 1) * 470f;
-                UIFactory.Label("RecHead" + t, s, TrackNames[t], 28, TextAnchor.MiddleCenter, c, c, new Vector2(x, 265f), new Vector2(440f, 40f), MenuTheme.Accent);
-                for (int m = 0; m < AllModels.Length; m++)
-                {
-                    float best = SettingsManager.GetBestLap(t, (int)AllModels[m]);
-                    string line = $"{CarLabel(AllModels[m]),-22} {(best > 0f ? HUD.FormatTime(best) : "--:--.---")}";
-                    UIFactory.Label("Rec" + t + "_" + m, s, line, 22, TextAnchor.MiddleLeft, c, c, new Vector2(x, 225f - m * 44f), new Vector2(440f, 40f), MenuTheme.Text);
-                }
+                int tid = t;
+                float best = BestOnTrack(t, out _);
+                int col = t / 12, r = t % 12;
+                string label = TrackNames[t] + "   " + (best > 0f ? HUD.FormatTime(best) : "--:--");
+                var btn = MenuTheme.StyledButton(lrt, "Trk" + t, label, tl, tl, new Vector2(16f + col * 348f, -64f - r * 60f), new Vector2(338f, 54f), 16, () => { recordsTrack = tid; ShowRecords(); });
+                btn.GetComponentInChildren<Text>().alignment = TextAnchor.MiddleCenter;
+                if (t == recordsTrack) btn.image.color = new Color(MenuTheme.Accent.r, MenuTheme.Accent.g, MenuTheme.Accent.b, 0.5f);
             }
-            MenuTheme.StyledButton(s, "Back", "VOLTAR", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 40f), new Vector2(380f, 100f), 36, ShowMain);
+
+            // Cartão da pista escolhida: tempo por carro.
+            var card = UIFactory.Panel("RecCard", s, c, new Vector2(0.5f, 1f), new Vector2(ContentX + 380f, 380f), new Vector2(700f, 800f), new Color(0.05f, 0.06f, 0.09f, 0.94f));
+            card.sprite = MenuTheme.RoundedSprite(140, 160, 16);
+            var crt = (RectTransform)card.transform;
+            MenuTheme.StyledButton(crt, "RecPrev", "<", tl, tl, new Vector2(16f, -14f), new Vector2(64f, 52f), 30, () => { recordsTrack = (recordsTrack + TrackNames.Length - 1) % TrackNames.Length; ShowRecords(); });
+            UIFactory.Label("RecTitle", crt, TrackNames[recordsTrack].ToUpperInvariant(), 28, TextAnchor.MiddleCenter, tl, tl, new Vector2(90f, -14f), new Vector2(520f, 52f), MenuTheme.Accent);
+            MenuTheme.StyledButton(crt, "RecNext", ">", tl, tl, new Vector2(620f, -14f), new Vector2(64f, 52f), 30, () => { recordsTrack = (recordsTrack + 1) % TrackNames.Length; ShowRecords(); });
+            float trackBest = BestOnTrack(recordsTrack, out int bestModel);
+            UIFactory.Label("RecBest", crt, trackBest > 0f ? "RECORDE: " + HUD.FormatTime(trackBest) + " — " + CarLabel((CarModel)bestModel) : "SEM VOLTAS NESTA PISTA AINDA", 20, TextAnchor.MiddleCenter, tl, tl, new Vector2(16f, -76f), new Vector2(668f, 30f), MenuTheme.TextDim);
+            for (int m = 0; m < AllModels.Length; m++)
+            {
+                float best = SettingsManager.GetBestLap(recordsTrack, (int)AllModels[m]);
+                float y = -120f - m * 50f;
+                var row = UIFactory.Panel("RecRow" + m, crt, tl, tl, new Vector2(16f, y), new Vector2(668f, 44f), new Color(1f, 1f, 1f, m % 2 == 0 ? 0.05f : 0.02f));
+                var rr = (RectTransform)row.transform;
+                bool isRec = best > 0f && (int)AllModels[m] == bestModel;
+                var ml = new Vector2(0f, 0.5f);
+                UIFactory.Label("RN", rr, CarLabel(AllModels[m]), 22, TextAnchor.MiddleLeft, ml, ml, new Vector2(16f, 0f), new Vector2(420f, 40f), isRec ? Gold : MenuTheme.Text);
+                UIFactory.Label("RT", rr, best > 0f ? HUD.FormatTime(best) : "--:--.---", 22, TextAnchor.MiddleRight, ml, ml, new Vector2(440f, 0f), new Vector2(210f, 40f), isRec ? Gold : best > 0f ? MenuTheme.Text : MenuTheme.TextDim);
+            }
+            MenuTheme.StyledButton(s, "Back", "VOLTAR", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(ContentX, 24f), new Vector2(380f, 70f), 28, ShowMain);
         }
 
+        static float BestOnTrack(int track, out int model)
+        {
+            float best = 0f; model = -1;
+            foreach (var m in AllModels)
+            {
+                float t = SettingsManager.GetBestLap(track, (int)m);
+                if (t > 0f && (best <= 0f || t < best)) { best = t; model = (int)m; }
+            }
+            return best;
+        }
+
+        // ======================= SOBRE (saiu do menu principal; abre por CONFIGURAÇÕES) =======================
         void ShowCredits()
         {
-            back = ShowMain;
-            var s = NewScreen("CRÉDITOS");
-            UIFactory.Label("Text", s,
-                "RaceX Proto — protótipo\n\nCódigo: gerado a partir do Prompt Mestre\nEngine: Unity 6 + URP\nRede: Node.js + Socket.io (MIT)\n\nTodos os modelos e pistas são gerados por código (sem assets de terceiros).",
-                36, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(1400f, 600f));
-            MenuTheme.StyledButton(s, "Back", "VOLTAR", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 40f), new Vector2(380f, 100f), 36, ShowMain);
+            back = ShowSettings;
+            var s = NewScreen("SOBRE O JOGO");
+            ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.88f);
+            var t = UIFactory.Label("Text", s,
+                "RaceX Proto — protótipo de corrida\n\nEngine: Unity 6 + URP\nMultiplayer: Node.js + Socket.IO\nContas e nuvem: Supabase\n\nVersão " + Application.version,
+                32, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(ContentX, 40f), new Vector2(1200f, 500f));
+            t.horizontalOverflow = HorizontalWrapMode.Wrap;
+            MenuTheme.StyledButton(s, "Back", "VOLTAR", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(ContentX, 40f), new Vector2(380f, 90f), 32, ShowSettings);
         }
     }
 }

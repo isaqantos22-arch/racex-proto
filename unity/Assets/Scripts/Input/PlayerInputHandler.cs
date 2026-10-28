@@ -107,7 +107,9 @@ namespace RaceX.Input
             car.steerInput = Mathf.Clamp(s, -1f, 1f);
             car.throttleInput = Mathf.Clamp01(th);
             car.brakeInput = Mathf.Clamp01(br);
-            car.handbrake = hb;
+            // Piloto automático do pit (entrada/box/saída): o freio de mão do jogador NÃO interfere —
+            // segurar F. MÃO travava as rodas traseiras e o carro não saía do box.
+            car.handbrake = hb && !car.pitControlled;
 
             if (cam && carCamera != null) carCamera.NextView();
             if (pz) PausePressed?.Invoke();

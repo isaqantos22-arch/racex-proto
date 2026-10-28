@@ -7,8 +7,23 @@ namespace RaceX.Core
     public static class CareerStats
     {
         const string Prefix = "RaceX.";
-        public const int MaxUpgrade = 5;
-        public const int KindEngine = 0, KindBrakes = 1, KindTires = 2;
+        /// <summary>v79: 10 níveis (antes 5). Os níveis 6–10 rendem metade de cada um dos 5 primeiros —
+        /// quem já tinha nível 5 mantém exatamente o mesmo carro.</summary>
+        public const int MaxUpgrade = 10;
+        public const int KindEngine = 0, KindBrakes = 1, KindTires = 2, KindAero = 3, KindWeight = 4;
+        public const int KindCount = 5;
+        public static readonly string[] KindNames = { "Motor", "Freios", "Pneus", "Aerodinâmica", "Redução de peso" };
+        public static readonly string[] KindEffects = { "+vel. máx e torque", "+força de frenagem", "+aderência lateral", "+downforce nas curvas", "−peso do carro" };
+
+        /// <summary>Efeito acumulado em "níveis cheios": 1..5 valem 1 cada; 6..10 valem 0,5 cada.</summary>
+        public static float EffectiveLevel(int lvl) => Mathf.Min(lvl, 5) + Mathf.Max(0, lvl - 5) * 0.5f;
+
+        /// <summary>Prêmio em créditos por posição (mesma fórmula do OnRaceFinished) — tela PROGRESSO.</summary>
+        public static int RewardFor(int position, int totalCars)
+        {
+            int baseReward = Mathf.Max(3, totalCars) * 400;
+            return Mathf.Max(400, baseReward - (position - 1) * 350);
+        }
 
         public static int Credits
         {
@@ -61,7 +76,7 @@ namespace RaceX.Core
             var models = (CarModel[])System.Enum.GetValues(typeof(CarModel));
             int sum = 0;
             for (int m = 0; m < models.Length; m++)
-                for (int k = 0; k < 3; k++)
+                for (int k = 0; k < KindCount; k++)
                     sum += UpgradeLevel(models[m], k);
             return sum;
         }
@@ -72,10 +87,15 @@ namespace RaceX.Core
             int maxModel = 0;
             for (int i = 0; i < models.Length; i++)
                 if ((int)models[i] > maxModel) maxModel = (int)models[i];
-            int[] arr = new int[(maxModel + 1) * 3];
-            for (int m = 0; m <= maxModel; m++)
+            // Layout compatível: [modelos × 3 kinds antigos] + [modelos × 2 kinds novos (aero, peso)].
+            int mc = maxModel + 1;
+            int[] arr = new int[mc * KindCount];
+            for (int m = 0; m < mc; m++)
                 for (int k = 0; k < 3; k++)
                     arr[m * 3 + k] = PlayerPrefs.GetInt(Prefix + "Upg." + k + "." + m, 0);
+            for (int m = 0; m < mc; m++)
+                for (int k = 3; k < KindCount; k++)
+                    arr[mc * 3 + m * 2 + (k - 3)] = PlayerPrefs.GetInt(Prefix + "Upg." + k + "." + m, 0);
             return arr;
         }
 
@@ -88,20 +108,29 @@ namespace RaceX.Core
             if (races > Races) Races = races;
             if (upgrades != null && upgrades.Length >= 3)
             {
-                int modelCount = upgrades.Length / 3;
+                var models = (CarModel[])System.Enum.GetValues(typeof(CarModel));
+                int maxModel = 0;
+                for (int i = 0; i < models.Length; i++) if ((int)models[i] > maxModel) maxModel = (int)models[i];
+                int mc = maxModel + 1;
+                bool extended = upgrades.Length == mc * KindCount;
+                int modelCount = extended ? mc : upgrades.Length / 3;
                 for (int m = 0; m < modelCount; m++)
-                {
                     for (int k = 0; k < 3; k++)
-                    {
-                        int cloudLvl = Mathf.Clamp(upgrades[m * 3 + k], 0, MaxUpgrade);
-                        int localLvl = PlayerPrefs.GetInt(Prefix + "Upg." + k + "." + m, 0);
-                        if (cloudLvl > localLvl || cloudTicks >= LastUpdatedTicks)
-                            PlayerPrefs.SetInt(Prefix + "Upg." + k + "." + m, Mathf.Max(cloudLvl, localLvl));
-                    }
-                }
+                        MergeLevel(m, k, upgrades[m * 3 + k]);
+                if (extended)
+                    for (int m = 0; m < mc; m++)
+                        for (int k = 3; k < KindCount; k++)
+                            MergeLevel(m, k, upgrades[mc * 3 + m * 2 + (k - 3)]);
             }
             if (cloudTicks > LastUpdatedTicks) LastUpdatedTicks = cloudTicks;
             PlayerPrefs.Save();
+        }
+
+        static void MergeLevel(int model, int kind, int cloudLevel)
+        {
+            int cloudLvl = Mathf.Clamp(cloudLevel, 0, MaxUpgrade);
+            int localLvl = PlayerPrefs.GetInt(Prefix + "Upg." + kind + "." + model, 0);
+            if (cloudLvl > localLvl) PlayerPrefs.SetInt(Prefix + "Upg." + kind + "." + model, cloudLvl);
         }
 
         /// <summary>Custo para comprar o proximo nivel (level atual -> atual+1).</summary>
@@ -128,13 +157,17 @@ namespace RaceX.Core
         public static void ApplyUpgrades(CarSpec spec)
         {
             if (spec == null) return;
-            int engine = UpgradeLevel(spec.model, KindEngine);
-            int brakes = UpgradeLevel(spec.model, KindBrakes);
-            int tires = UpgradeLevel(spec.model, KindTires);
+            float engine = EffectiveLevel(UpgradeLevel(spec.model, KindEngine));
+            float brakes = EffectiveLevel(UpgradeLevel(spec.model, KindBrakes));
+            float tires = EffectiveLevel(UpgradeLevel(spec.model, KindTires));
+            float aero = EffectiveLevel(UpgradeLevel(spec.model, KindAero));
+            float weight = EffectiveLevel(UpgradeLevel(spec.model, KindWeight));
             spec.topSpeedKmh *= 1f + 0.02f * engine;
             spec.maxTorqueNm *= 1f + 0.03f * engine;
             spec.brakeTorque *= 1f + 0.04f * brakes;
             spec.sidewaysStiffness *= 1f + 0.03f * tires;
+            spec.downforceCoefficient *= 1f + 0.03f * aero;
+            spec.massKg *= 1f - 0.01f * weight;
         }
 
         /// <summary>Recompensa de fim de corrida (melhor posicao = mais creditos).</summary>

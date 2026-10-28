@@ -19,6 +19,16 @@ namespace RaceX.Career
         public int wins;
     }
 
+    /// <summary>Uma volta do JOGADOR na sessão atual (MINHAS VOLTAS no hub): setores e se foi limpa.</summary>
+    [Serializable]
+    public class LapRecord
+    {
+        public int lapNo;
+        public float s1, s2, s3, total;
+        public int c1, c2, c3; // cor do setor no momento (0 nenhuma, 1 roxo, 2 verde, 3 amarelo)
+        public bool clean;
+    }
+
     /// <summary>Save do modo carreira (serializado com JsonUtility — campos públicos, sem Dictionary).</summary>
     [Serializable]
     public class CareerData
@@ -60,6 +70,14 @@ namespace RaceX.Career
         public List<string> qLocked = new List<string>();
         /// <summary>Dificuldade das IAs na carreira (0 Fácil, 1 Médio, 2 Difícil, 3 Expert).</summary>
         public int difficulty = 1;
+        /// <summary>Estratégia de pit escolhida no HUB para a próxima corrida/sprint (-1 = automática).</summary>
+        public int stratStops = -1;
+        public int stratStart = 1;
+        public int stratStop = 2;
+        /// <summary>Voltas do jogador na sessão atual (chave = temporada/rodada/fase).</summary>
+        public List<LapRecord> sessionLaps = new List<LapRecord>();
+        public string sessionLapsKey = "";
+        public string sessionLapsTitle = "";
         /// <summary>Versão do save (0 = save antigo pré-fases-eliminatórias → migrar).</summary>
         public int saveVersion;
 
@@ -339,6 +357,9 @@ namespace RaceX.Career
         }
 
         /// <summary>Voltas da rodada (calendário fixo de 6 etapas).</summary>
+        /// <summary>Voltas da corrida/sprint da etapa (mesma regra do LaunchNextRace).</summary>
+        public static int SessionLapsFor(int round, int phase) => phase == PH_SPRINT ? Mathf.Max(5, RoundLaps(round) / 4) : RoundLaps(round);
+
         public static int RoundLaps(int round)
         {
             return round >= 0 && round < CalendarLaps.Length ? CalendarLaps[round] : CalendarLaps[0];
@@ -351,27 +372,59 @@ namespace RaceX.Career
 
         static bool importingCloud;
 
-        public static void Save()
+        /// <summary>Salvamento de MARCO (mudança de fase, resultado, escolha no hub): grava no disco,
+        /// mostra o aviso e sincroniza na nuvem.</summary>
+        public static void Save() => SaveInternal(false);
+
+        /// <summary>Salvamento SILENCIOSO (durante a sessão: melhor volta do treino, relógio da sessão):
+        /// grava só no disco, sem aviso na tela e sem subir para a nuvem a cada volta.</summary>
+        public static void SaveQuiet() => SaveInternal(true);
+
+        static float lastCloudPush = -999f;
+
+        static void SaveInternal(bool quiet)
         {
             if (data == null) return;
             RaceX.UI.SaveToast.EnsureInstance();
             data.saveVersion = 4;
+            // 1) DISCO (o que importa): arquivo temporário + troca — nunca deixa o save pela metade.
+            bool localOk;
             try
             {
-                File.WriteAllText(SavePath, JsonUtility.ToJson(data, true));
-                if (!importingCloud)
+                string json = JsonUtility.ToJson(data, true);
+                string tmp = SavePath + ".tmp";
+                File.WriteAllText(tmp, json);
+                if (File.Exists(SavePath)) File.Delete(SavePath);
+                File.Move(tmp, SavePath);
+                localOk = true;
+            }
+            catch (Exception ex)
+            {
+                localOk = false;
+                Debug.LogWarning("[Carreira] falha ao salvar no disco: " + ex.Message);
+                // Último recurso: escrita direta (caso o Move falhe no sistema de arquivos do aparelho).
+                try { File.WriteAllText(SavePath, JsonUtility.ToJson(data, true)); localOk = true; }
+                catch (Exception ex2) { Debug.LogWarning("[Carreira] escrita direta também falhou: " + ex2.Message); }
+            }
+            if (importingCloud) return;
+            // O aviso reflete SÓ o disco: falha de rede/nuvem não é "falha ao salvar progresso".
+            if (!localOk) { RaceX.UI.SaveToast.Show(false); return; }
+            if (!quiet) RaceX.UI.SaveToast.Show(true);
+            // 2) NUVEM (melhor esforço, separada): erro aqui nunca vira "FALHA" na tela.
+            try
+            {
+                if (data.titles > CareerStats.Titles) CareerStats.Titles = data.titles;
+                CareerStats.TouchUpdated();
+                bool due = !quiet || Time.realtimeSinceStartup - lastCloudPush > 120f;
+                if (due && AccountClient.IsLoggedIn)
                 {
-                    RaceX.UI.SaveToast.Show(true);
-                    if (data.titles > CareerStats.Titles) CareerStats.Titles = data.titles;
-                    CareerStats.TouchUpdated();
-                    if (AccountClient.IsLoggedIn)
-                        AccountClient.PushFullState();
+                    lastCloudPush = Time.realtimeSinceStartup;
+                    AccountClient.PushFullState();
                 }
             }
             catch (Exception ex)
             {
-                RaceX.UI.SaveToast.Show(false);
-                Debug.LogWarning("[Carreira] falha ao salvar: " + ex.Message);
+                Debug.LogWarning("[Carreira] sincronização com a nuvem adiada: " + ex.Message);
             }
         }
 
@@ -913,6 +966,7 @@ namespace RaceX.Career
                     data.sqChain.Clear(); data.sqLocked.Clear();
                     data.qChain.Clear(); data.qLocked.Clear();
                     data.round++;
+            data.stratStops = -1; // estratégia do hub volta ao automático na próxima etapa
                     Save();
                     if (data.round >= TotalRounds) FinishSeason();
                     break;
@@ -1096,6 +1150,7 @@ namespace RaceX.Career
             data.sqChain.Clear(); data.sqLocked.Clear();
             data.qChain.Clear(); data.qLocked.Clear();
             data.round++;
+            data.stratStops = -1; // estratégia do hub volta ao automático na próxima etapa
             Save();
             if (data.round >= TotalRounds) FinishSeason();
         }
@@ -1156,7 +1211,7 @@ namespace RaceX.Career
             if (data != null && data.sessionDeadlineUtc > 0)
             {
                 data.sessionDeadlineUtc = DateTime.UtcNow.Ticks + pausedRemainTicks;
-                Save();
+                SaveQuiet();
             }
             pausedRemainTicks = -1;
         }
@@ -1169,7 +1224,7 @@ namespace RaceX.Career
             long now = DateTime.UtcNow.Ticks;
             if (data.sessionDeadlineUtc > now) return; // já correndo (reabrir sessão não recomeça o tempo)
             data.sessionDeadlineUtc = now + (long)seconds * TimeSpan.TicksPerSecond;
-            Save();
+            SaveQuiet();
         }
 
         /// <summary>Segundos restantes do relógio REAL da sessão (0 = expirou/sem sessão cronometrada).</summary>
@@ -1191,7 +1246,7 @@ namespace RaceX.Career
             bool changed = false;
             if (data.sessionDeadlineUtc != 0) { data.sessionDeadlineUtc = 0; changed = true; }
             if (data.pracNames.Count > 0) { data.pracNames.Clear(); data.pracBest.Clear(); changed = true; }
-            if (changed) Save();
+            if (changed) SaveQuiet();
         }
 
         /// <summary>Aceleração do tempo (botão 5x do HUD): comprime o prazo UTC restante pelo fator — pular a minutagem restante.</summary>
@@ -1201,13 +1256,13 @@ namespace RaceX.Career
             if (SessionClockPaused)
             {
                 pausedRemainTicks = (long)(pausedRemainTicks / Mathf.Max(1.01f, factor));
-                Save();
+                SaveQuiet();
                 return;
             }
             long now = DateTime.UtcNow.Ticks;
             if (data.sessionDeadlineUtc <= now) return;
             data.sessionDeadlineUtc = now + (long)((data.sessionDeadlineUtc - now) / Mathf.Max(1.01f, factor));
-            Save();
+            SaveQuiet();
         }
 
         /// <summary>PRAZO VENCIDO (relógio real) notificado pelo RaceManager/testes: encerra a sessão
@@ -1227,9 +1282,47 @@ namespace RaceX.Career
             int i = data.pracNames.IndexOf(driver);
             if (i >= 0)
             {
-                if (best < data.pracBest[i]) { data.pracBest[i] = best; Save(); }
+                if (best < data.pracBest[i]) { data.pracBest[i] = best; SaveQuiet(); }
             }
-            else { data.pracNames.Add(driver); data.pracBest.Add(best); Save(); }
+            else { data.pracNames.Add(driver); data.pracBest.Add(best); SaveQuiet(); }
+        }
+
+        static string CurrentSessionKey => data == null ? "" : data.season + "-" + data.round + "-" + data.weekendPhase;
+
+        /// <summary>Registra uma volta completa do JOGADOR na sessão (MINHAS VOLTAS). Salva em silêncio.</summary>
+        public static void RecordSessionLap(float s1, float s2, float s3, float total, int c1, int c2, int c3, bool clean)
+        {
+            if (data == null || total <= 0f) return;
+            if (data.sessionLaps == null) data.sessionLaps = new List<LapRecord>();
+            string key = CurrentSessionKey;
+            if (data.sessionLapsKey != key)
+            {
+                data.sessionLaps.Clear();
+                data.sessionLapsKey = key;
+                data.sessionLapsTitle = SessionTitle(data.weekendPhase) + " — " + RoundTrack(data.round).ToString().ToUpperInvariant();
+            }
+            data.sessionLaps.Add(new LapRecord
+            {
+                lapNo = data.sessionLaps.Count + 1,
+                s1 = s1, s2 = s2, s3 = s3, total = total,
+                c1 = c1, c2 = c2, c3 = c3, clean = clean
+            });
+            if (data.sessionLaps.Count > 200) data.sessionLaps.RemoveAt(0);
+            SaveQuiet();
+        }
+
+        /// <summary>Voltas do jogador na ÚLTIMA sessão com voltas (a atual, ou a que acabou de terminar
+        /// até a próxima registrar a 1ª volta).</summary>
+        public static List<LapRecord> CurrentSessionLaps()
+        {
+            if (data == null || data.sessionLaps == null) return new List<LapRecord>();
+            return data.sessionLaps;
+        }
+
+        /// <summary>Nome da sessão das voltas mostradas em MINHAS VOLTAS.</summary>
+        public static string SessionLapsTitle()
+        {
+            return data != null && !string.IsNullOrEmpty(data.sessionLapsTitle) ? data.sessionLapsTitle : "SESSÃO ATUAL";
         }
 
         /// <summary>Melhor volta gravada do piloto no treino em andamento (0 = não tem).</summary>

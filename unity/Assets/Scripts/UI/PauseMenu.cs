@@ -41,37 +41,50 @@ namespace RaceX.UI
             panel = dim.gameObject;
 
             var c = new Vector2(0.5f, 0.5f);
-            UIFactory.Label("Title", panel.transform, "PAUSA", 80, TextAnchor.MiddleCenter, c, c, new Vector2(0f, 300f), new Vector2(800f, 120f));
             // Carreira: MENU DA CARREIRA volta ao hub com o relógio REAL retomado (a sessão segue viva lá).
             bool careerBtn = race != null && race.Settings.careerPhase >= 0;
-            // 5 botões sem sobreposição: linha própria para cada um.
-            UIFactory.Button("Continue", panel.transform, "CONTINUAR", c, c, new Vector2(0f, careerBtn ? 210f : 150f), new Vector2(520f, 100f), Toggle);
+            bool stratVisible = StrategyVisible;
+            // LISTA DINÂMICA (v79): os botões são empilhados conforme os que existem — antes as posições
+            // eram fixas para 6 botões, sobrava um buraco sem a ESTRATÉGIA e o título/MENU saíam cortados.
+            var items = new System.Collections.Generic.List<(string name, string label, System.Action act)>();
+            items.Add(("Continue", "CONTINUAR", new System.Action(Toggle)));
             if (careerBtn)
-                UIFactory.Button("CareerHub", panel.transform, "MENU DA CARREIRA", c, c, new Vector2(0f, 90f), new Vector2(520f, 100f), () =>
+                items.Add(("CareerHub", "MENU DA CARREIRA", (System.Action)(() =>
                 {
                     panel.SetActive(false);
                     Time.timeScale = 1f; // corrida segue com a IA pilotando seu carro (treino real)
                     RaceX.Career.CareerMode.ResumeSessionClock(); // sessão corre viva dentro do hub
                     RaceX.UI.CareerFlow.Open();
-                });
-            UIFactory.Button("Restart", panel.transform, "REINICIAR", c, c, new Vector2(0f, careerBtn ? -30f : 30f), new Vector2(520f, 100f), SceneLoader.ReloadCurrent);
-            // ESTRATÉGIA: paradas + compostos da corrida (só com pit ativo e corrida por distância).
-            bool stratVisible = StrategyVisible;
+                })));
+            items.Add(("Restart", "REINICIAR", new System.Action(SceneLoader.ReloadCurrent)));
             if (stratVisible)
-            {
-                UIFactory.Button("Strategy", panel.transform, "ESTRATÉGIA", c, c, new Vector2(0f, careerBtn ? -150f : -90f), new Vector2(520f, 100f), () =>
+                items.Add(("Strategy", "ESTRATÉGIA", (System.Action)(() =>
                 {
                     if (strategyPanel != null) strategyPanel.SetActive(!strategyPanel.activeSelf);
                     settingsPanel.SetActive(false);
-                });
-                BuildStrategyPanel(panel.transform, c, new Vector2(-560f, -30f));
+                })));
+            items.Add(("Settings", "CONFIGURAÇÕES", (System.Action)(() =>
+            {
+                settingsPanel.SetActive(!settingsPanel.activeSelf);
+                if (strategyPanel != null) strategyPanel.SetActive(false);
+            })));
+            items.Add(("Quit", "SAIR PARA O MENU", new System.Action(SceneLoader.LoadMainMenu)));
+
+            const float btnH = 84f, step = 98f, titleH = 110f;
+            float totalH = titleH + items.Count * step;
+            float topY = totalH * 0.5f;
+            UIFactory.Label("Title", panel.transform, "PAUSA", 72, TextAnchor.MiddleCenter, c, c, new Vector2(0f, topY - titleH * 0.5f), new Vector2(800f, titleH));
+            for (int i = 0; i < items.Count; i++)
+            {
+                var it = items[i];
+                float y = topY - titleH - step * i - step * 0.5f;
+                UIFactory.Button(it.name, panel.transform, it.label, c, c, new Vector2(0f, y), new Vector2(520f, btnH), it.act);
             }
-            UIFactory.Button("Settings", panel.transform, "CONFIGURAÇÕES", c, c, new Vector2(0f, careerBtn ? -270f : -210f), new Vector2(520f, 100f), () => settingsPanel.SetActive(!settingsPanel.activeSelf));
-            UIFactory.Button("Quit", panel.transform, "SAIR PARA O MENU", c, c, new Vector2(0f, careerBtn ? -390f : -330f), new Vector2(520f, 100f), SceneLoader.LoadMainMenu);
+            if (stratVisible) BuildStrategyPanel(panel.transform, c, new Vector2(-560f, 0f));
 
             bool mobile = Application.isMobilePlatform;
             float panelH = mobile ? 400f : 320f;
-            var sp = UIFactory.Panel("SettingsPanel", panel.transform, c, c, new Vector2(560f, -30f), new Vector2(480f, panelH), new Color(0.1f, 0.12f, 0.16f, 0.95f));
+            var sp = UIFactory.Panel("SettingsPanel", panel.transform, c, c, new Vector2(560f, 0f), new Vector2(480f, panelH), new Color(0.1f, 0.12f, 0.16f, 0.95f));
             settingsPanel = sp.gameObject;
             volumeLabel = UIFactory.Label("Volume", sp.transform, "", 34, TextAnchor.MiddleCenter, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -20f), new Vector2(440f, 60f));
             UIFactory.Button("VolDown", sp.transform, "-", new Vector2(0.5f, 0f), new Vector2(1f, 0f), new Vector2(-20f, panelH - 70f), new Vector2(120f, 90f), () => ChangeVolume(-0.1f), 50);

@@ -15,6 +15,7 @@ namespace RaceX.Core
             public int sector = -1;
             public float start;
             public bool valid;
+            public bool dirty; // saiu da pista / bateu forte nesta volta (MINHAS VOLTAS: volta não limpa)
             public readonly float[] lap = new float[3];
             public readonly float[] last = new float[3];
             public readonly float[] pb = new float[3];
@@ -72,6 +73,7 @@ namespace RaceX.Core
                 if (e == null || e.car == null) continue;
                 var s = Get(e);
                 RecordGap(s, e, now);
+                if (e.car.IsOffTrack) s.dirty = true;
                 var p = race.GetProgress(e);
                 if (p == null || e.car.pitControlled) { s.valid = false; continue; }
                 int k = p.distanceInLap < 0f ? -1 : Mathf.Clamp(Mathf.FloorToInt(p.distanceInLap / (L / 3f)), 0, 2);
@@ -93,7 +95,19 @@ namespace RaceX.Core
             if (s.sector != 2) return;
             float now = Time.time;
             if (s.valid) Close(s, 2, now - s.start);
+            // MINHAS VOLTAS (carreira): guarda a volta completa do jogador com os 3 setores e as cores.
+            if (e.isHuman && race != null && race.Settings != null && race.Settings.careerPhase >= 0)
+            {
+                try
+                {
+                    RaceX.Career.CareerMode.RecordSessionLap(s.lap[0], s.lap[1], s.lap[2], lapTime,
+                        s.lap[0] > 0f ? (int)s.color[0] : 0, s.lap[1] > 0f ? (int)s.color[1] : 0, s.lap[2] > 0f ? (int)s.color[2] : 0,
+                        !s.dirty);
+                }
+                catch (System.Exception ex) { Debug.LogWarning("[SectorTimer] volta não registrada: " + ex.Message); }
+            }
             for (int i = 0; i < 3; i++) s.lap[i] = 0f;
+            s.dirty = false;
             s.sector = 0;
             s.start = now;
             s.valid = e.car != null && !e.car.pitControlled;
@@ -130,6 +144,7 @@ namespace RaceX.Core
             if (e == null) return;
             var s = Get(e);
             for (int i = 0; i < 3; i++) s.lap[i] = 0f;
+            s.dirty = false;
             s.sector = 0;
             s.start = Time.time;
             s.valid = e.car != null && !e.car.pitControlled;

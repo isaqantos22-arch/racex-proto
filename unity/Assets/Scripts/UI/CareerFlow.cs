@@ -563,7 +563,19 @@ namespace RaceX.UI
                 : d.weekendPhase == CareerMode.PH_SPRINT ? "PULAR SPRINT (SEM PONTOS)"
                 : d.weekendPhase == CareerMode.PH_Q3 || d.weekendPhase == CareerMode.PH_SQ3 ? "PULAR (LARGA EM ÚLTIMO)"
                 : "PULAR SESSÃO (LARGA EM ÚLTIMO)";
-            MenuTheme.StyledButton(s, "SkipSess", skipLabel, b, b, new Vector2(260f, 140f), new Vector2(430f, 64f), 20, () => { CareerData.raceActive = false; CareerMode.SkipSession(); ShowHub(); });
+            // PULAR com CONFIRMAÇÃO (v79): um toque sem querer não joga a sessão fora.
+            string skipLabelCopy = skipLabel;
+            MenuTheme.StyledButton(s, "SkipSess", skipLabel, b, b, new Vector2(260f, 140f), new Vector2(430f, 64f), 20, () =>
+                ShowConfirm(s, "PULAR ESTA SESSÃO?", skipLabelCopy + "\nEssa ação não pode ser desfeita.", () => { CareerData.raceActive = false; CareerMode.SkipSession(); ShowHub(); }));
+
+            // ESTRATÉGIA DE PIT direto no HUB (corrida e sprint) e MINHAS VOLTAS (sessão atual).
+            bool raceLike = d.weekendPhase == CareerMode.PH_RACE || d.weekendPhase == CareerMode.PH_SPRINT;
+            if (raceLike)
+            {
+                int sLaps = CareerMode.SessionLapsFor(d.round, d.weekendPhase);
+                MenuTheme.StyledButton(s, "StrategyBtn", "ESTRATÉGIA: " + StrategySummary(d, sLaps), b, b, new Vector2(-660f, 140f), new Vector2(360f, 64f), 18, () => ShowStrategyModal(s, d, sLaps));
+            }
+            MenuTheme.StyledButton(s, "MyLapsBtn", "MINHAS VOLTAS (" + CareerMode.CurrentSessionLaps().Count + ")", b, b, new Vector2(-660f, 60f), new Vector2(360f, 64f), 18, () => { lapsPage = -1; ShowLapsModal(s); });
 
             string[] diffNames = { "FÁCIL", "MÉDIO", "DIFÍCIL", "EXPERT" };
             int diff = Mathf.Clamp(d.difficulty, 0, 3);
@@ -575,6 +587,182 @@ namespace RaceX.UI
             });
             if (closeBtn)
                 MenuTheme.StyledButton(s, "WeekendBack", "VOLTAR", b, b, new Vector2(260f, 60f), new Vector2(430f, 64f), 20, Close); // fecha o grid 2x2 (2 em cima, 2 embaixo)
+        }
+
+        // ---------- Modais (overlay por cima do hub) ----------
+        static Image Modal(RectTransform s, string title, Vector2 size, out GameObject root)
+        {
+            var c = new Vector2(0.5f, 0.5f);
+            var dim = UIFactory.Panel("ModalDim", s, c, c, Vector2.zero, Vector2.zero, new Color(0f, 0f, 0f, 0.74f));
+            var drt = (RectTransform)dim.transform;
+            drt.anchorMin = Vector2.zero; drt.anchorMax = Vector2.one; drt.sizeDelta = Vector2.zero;
+            dim.raycastTarget = true; // bloqueia cliques no hub por trás
+            dim.transform.SetAsLastSibling();
+            root = dim.gameObject;
+            var box = UIFactory.Panel("ModalBox", dim.transform, c, c, Vector2.zero, size, new Color(0.07f, 0.08f, 0.11f, 0.98f));
+            box.raycastTarget = true;
+            var top = new Vector2(0.5f, 1f);
+            UIFactory.Panel("ModalLine", box.transform, top, top, Vector2.zero, new Vector2(size.x, 4f), MenuTheme.Accent);
+            UIFactory.Label("ModalTitle", box.transform, title, 34, TextAnchor.MiddleCenter, top, top, new Vector2(0f, -20f), new Vector2(size.x - 40f, 50f), MenuTheme.Text);
+            return box;
+        }
+
+        static void ShowConfirm(RectTransform s, string title, string body, Action onYes)
+        {
+            var box = Modal(s, title, new Vector2(820f, 360f), out var root);
+            var c = new Vector2(0.5f, 0.5f);
+            var bodyT = UIFactory.Label("ConfirmBody", box.transform, body, 24, TextAnchor.MiddleCenter, c, c, new Vector2(0f, 20f), new Vector2(760f, 120f), MenuTheme.TextDim);
+            bodyT.horizontalOverflow = HorizontalWrapMode.Wrap;
+            var bt = new Vector2(0.5f, 0f);
+            MenuTheme.StyledButton((RectTransform)box.transform, "ConfirmYes", "SIM", bt, bt, new Vector2(-190f, 34f), new Vector2(320f, 70f), 26, () =>
+            {
+                UnityEngine.Object.Destroy(root);
+                onYes?.Invoke();
+            });
+            MenuTheme.StyledButton((RectTransform)box.transform, "ConfirmNo", "NÃO", bt, bt, new Vector2(190f, 34f), new Vector2(320f, 70f), 26, () => UnityEngine.Object.Destroy(root));
+        }
+
+        // ---------- ESTRATÉGIA (hub) ----------
+        static readonly string[] CompoundFull = { "MACIO (S)", "MÉDIO (M)", "DURO (H)" };
+
+        static int StratStopsShown(CareerData d, int laps) =>
+            d.stratStops >= 0 ? d.stratStops : RaceX.Core.PitLaneSystem.SuggestedStops(laps, d.stratStart, d.stratStop);
+
+        static string StrategySummary(CareerData d, int laps)
+        {
+            int stops = StratStopsShown(d, laps);
+            string seq = RaceX.Core.PitLaneSystem.CompoundLetter(d.stratStart);
+            for (int i = 0; i < stops; i++) seq += "→" + RaceX.Core.PitLaneSystem.CompoundLetter(d.stratStop);
+            return (d.stratStops < 0 ? "AUTO " : "") + stops + "P " + seq;
+        }
+
+        static void ShowStrategyModal(RectTransform s, CareerData d, int laps)
+        {
+            var box = Modal(s, "ESTRATÉGIA DE PIT — " + laps + " VOLTAS", new Vector2(1000f, 640f), out var root);
+            var brt = (RectTransform)box.transform;
+            var c = new Vector2(0.5f, 0.5f);
+            int stops = StratStopsShown(d, laps);
+            Action reopen = () => { UnityEngine.Object.Destroy(root); ShowStrategyModal(s, d, laps); };
+            Action<int, int, int> change = (dStops, dStart, dStop) =>
+            {
+                int st = Mathf.Clamp(StratStopsShown(d, laps) + dStops, 0, 3);
+                d.stratStart = Mathf.Clamp(d.stratStart + dStart, 0, 2);
+                d.stratStop = Mathf.Clamp(d.stratStop + dStop, 0, 2);
+                d.stratStops = st;
+                ApplyStrategyToLiveRace(d);
+                CareerMode.SaveQuiet();
+                reopen();
+            };
+            StratRow(brt, "PARADAS", stops.ToString(), 170f, () => change(-1, 0, 0), () => change(1, 0, 0));
+            StratRow(brt, "PNEU DE LARGADA", CompoundFull[Mathf.Clamp(d.stratStart, 0, 2)], 85f, () => change(0, -1, 0), () => change(0, 1, 0));
+            StratRow(brt, "PNEU DAS PARADAS", CompoundFull[Mathf.Clamp(d.stratStop, 0, 2)], 0f, () => change(0, 0, -1), () => change(0, 0, 1));
+
+            var boxLaps = RaceX.Core.PitLaneSystem.StopLapsFor(laps, d.stratStart, d.stratStop, stops);
+            string boxTxt = boxLaps.Count == 0 ? "SEM PARADAS" : "BOX NA VOLTA " + string.Join(", ", boxLaps);
+            int covered = RaceX.Core.PitLaneSystem.CompoundLifeLaps(d.stratStart) + stops * RaceX.Core.PitLaneSystem.CompoundLifeLaps(d.stratStop);
+            UIFactory.Label("StratBox", brt, boxTxt, 26, TextAnchor.MiddleCenter, c, c, new Vector2(0f, -80f), new Vector2(940f, 40f), MenuTheme.Accent);
+            UIFactory.Label("StratLife", brt, "VIDA DOS PNEUS: MACIO ~" + RaceX.Core.PitLaneSystem.CompoundLifeLaps(0) + " · MÉDIO ~" + RaceX.Core.PitLaneSystem.CompoundLifeLaps(1) + " · DURO ~" + RaceX.Core.PitLaneSystem.CompoundLifeLaps(2) + " VOLTAS", 20, TextAnchor.MiddleCenter, c, c, new Vector2(0f, -124f), new Vector2(940f, 30f), MenuTheme.TextDim);
+            if (covered < laps)
+                UIFactory.Label("StratWarn", brt, "ATENÇÃO: esses pneus cobrem só ~" + covered + " das " + laps + " voltas — o desgaste vai custar tempo.", 20, TextAnchor.MiddleCenter, c, c, new Vector2(0f, -160f), new Vector2(940f, 30f), new Color(1f, 0.45f, 0.3f));
+            var bt = new Vector2(0.5f, 0f);
+            MenuTheme.StyledButton(brt, "StratAuto", "AUTOMÁTICA", bt, bt, new Vector2(-220f, 34f), new Vector2(380f, 70f), 24, () =>
+            {
+                d.stratStops = -1; d.stratStart = 1; d.stratStop = 2;
+                ApplyStrategyToLiveRace(d);
+                CareerMode.SaveQuiet();
+                reopen();
+            });
+            MenuTheme.StyledButton(brt, "StratClose", "FECHAR", bt, bt, new Vector2(220f, 34f), new Vector2(380f, 70f), 24, () => { UnityEngine.Object.Destroy(root); ShowHub(); });
+        }
+
+        static void StratRow(RectTransform box, string label, string value, float y, Action prev, Action next)
+        {
+            var c = new Vector2(0.5f, 0.5f);
+            var row = UIFactory.Panel("StratRow_" + label, box, c, c, new Vector2(0f, y), new Vector2(900f, 70f), new Color(1f, 1f, 1f, 0.05f));
+            var ml = new Vector2(0f, 0.5f);
+            UIFactory.Label("L", row.transform, label, 24, TextAnchor.MiddleLeft, ml, ml, new Vector2(24f, 0f), new Vector2(330f, 60f), MenuTheme.TextDim);
+            MenuTheme.StyledButton((RectTransform)row.transform, "Prev", "<", ml, ml, new Vector2(380f, 0f), new Vector2(70f, 56f), 30, prev);
+            UIFactory.Label("V", row.transform, value, 28, TextAnchor.MiddleCenter, ml, ml, new Vector2(460f, 0f), new Vector2(330f, 60f), MenuTheme.Text);
+            MenuTheme.StyledButton((RectTransform)row.transform, "Next", ">", ml, ml, new Vector2(800f, 0f), new Vector2(70f, 56f), 30, next);
+        }
+
+        /// <summary>Hub aberto por cima da corrida/sprint em andamento: a estratégia vale na hora.</summary>
+        static void ApplyStrategyToLiveRace(CareerData d)
+        {
+            var live = LiveCareerRace();
+            if (live == null || live.Settings.laps >= 900 || live.Settings.careerPhase != d.weekendPhase) return;
+            foreach (var e in live.entries)
+            {
+                if (!e.isHuman || e.car == null) continue;
+                if (RaceX.Core.PitLaneSystem.StopsDone(e.car) > 0) continue; // já parou: não troca o pneu montado
+                int laps = Mathf.Max(2, live.Settings.laps);
+                int stops = d.stratStops >= 0 ? d.stratStops : RaceX.Core.PitLaneSystem.SuggestedStops(laps, d.stratStart, d.stratStop);
+                RaceX.Core.PitLaneSystem.SetPlayerStrategy(e.car, stops, d.stratStart, d.stratStop);
+            }
+        }
+
+        // ---------- MINHAS VOLTAS ----------
+        static int lapsPage = -1;
+        const int LapsPerPage = 12;
+
+        static void ShowLapsModal(RectTransform s)
+        {
+            var laps = CareerMode.CurrentSessionLaps();
+            var box = Modal(s, "MINHAS VOLTAS — " + CareerMode.SessionLapsTitle(), new Vector2(1300f, 800f), out var root);
+            var brt = (RectTransform)box.transform;
+            var top = new Vector2(0.5f, 1f);
+            int pages = Mathf.Max(1, Mathf.CeilToInt(laps.Count / (float)LapsPerPage));
+            if (lapsPage < 0 || lapsPage >= pages) lapsPage = pages - 1; // abre na página mais recente
+            // Melhores da sessão (destaque): volta e setores.
+            float bestLap = float.MaxValue; float[] bestS = { float.MaxValue, float.MaxValue, float.MaxValue };
+            foreach (var l in laps)
+            {
+                if (l.clean && l.total > 0f && l.total < bestLap) bestLap = l.total;
+                if (l.s1 > 0f && l.s1 < bestS[0]) bestS[0] = l.s1;
+                if (l.s2 > 0f && l.s2 < bestS[1]) bestS[1] = l.s2;
+                if (l.s3 > 0f && l.s3 < bestS[2]) bestS[2] = l.s3;
+            }
+            float[] colX = { -520f, -300f, -90f, 120f, 340f, 520f };
+            string[] heads = { "VOLTA", "S1", "S2", "S3", "TEMPO", "LIMPA" };
+            for (int i = 0; i < heads.Length; i++)
+                UIFactory.Label("H" + i, brt, heads[i], 22, TextAnchor.MiddleCenter, top, top, new Vector2(colX[i], -96f), new Vector2(200f, 34f), MenuTheme.TextDim);
+            UIFactory.Panel("HLine", brt, top, top, new Vector2(0f, -116f), new Vector2(1220f, 2f), MenuTheme.AccentDim);
+            if (laps.Count == 0)
+            {
+                UIFactory.Label("Empty", brt, "Nenhuma volta completa nesta sessão ainda.\nA volta de saída do box não conta.", 26, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(1100f, 100f), MenuTheme.TextDim);
+            }
+            int first = lapsPage * LapsPerPage;
+            for (int r = 0; r < LapsPerPage && first + r < laps.Count; r++)
+            {
+                var l = laps[first + r];
+                float y = -150f - r * 46f;
+                var rowBg = UIFactory.Panel("Row" + r, brt, top, top, new Vector2(0f, y), new Vector2(1220f, 40f), new Color(1f, 1f, 1f, r % 2 == 0 ? 0.05f : 0.02f));
+                rowBg.raycastTarget = false;
+                UIFactory.Label("N" + r, brt, l.lapNo.ToString(), 24, TextAnchor.MiddleCenter, top, top, new Vector2(colX[0], y), new Vector2(200f, 40f), MenuTheme.Text);
+                float[] secs = { l.s1, l.s2, l.s3 };
+                int[] cols = { l.c1, l.c2, l.c3 };
+                for (int k = 0; k < 3; k++)
+                {
+                    Color chip = cols[k] == 1 ? new Color(0.62f, 0.25f, 0.95f, 0.9f) : cols[k] == 2 ? new Color(0.2f, 0.8f, 0.3f, 0.9f) : cols[k] == 3 ? new Color(1f, 0.78f, 0.1f, 0.9f) : new Color(1f, 1f, 1f, 0.06f);
+                    if (secs[k] > 0f && Mathf.Abs(secs[k] - bestS[k]) < 0.0005f) chip = new Color(0.62f, 0.25f, 0.95f, 0.9f);
+                    var cp = UIFactory.Panel("Chip" + r + "_" + k, brt, top, top, new Vector2(colX[k + 1], y), new Vector2(180f, 34f), chip);
+                    cp.raycastTarget = false;
+                    UIFactory.Label("S" + r + "_" + k, cp.transform, secs[k] > 0f ? secs[k].ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) : "--.---", 22, TextAnchor.MiddleCenter,
+                        new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(180f, 34f), cols[k] == 3 ? new Color(0.08f, 0.08f, 0.1f) : Color.white);
+                }
+                bool isBest = l.clean && Mathf.Abs(l.total - bestLap) < 0.0005f;
+                UIFactory.Label("T" + r, brt, HUD.FormatTime(l.total), 24, TextAnchor.MiddleCenter, top, top, new Vector2(colX[4], y), new Vector2(220f, 40f), isBest ? new Color(0.75f, 0.45f, 1f) : MenuTheme.Text);
+                UIFactory.Label("C" + r, brt, l.clean ? "SIM" : "NÃO", 22, TextAnchor.MiddleCenter, top, top, new Vector2(colX[5], y), new Vector2(160f, 40f), l.clean ? new Color(0.35f, 0.9f, 0.45f) : new Color(1f, 0.45f, 0.3f));
+            }
+            var bt = new Vector2(0.5f, 0f);
+            if (pages > 1)
+            {
+                MenuTheme.StyledButton(brt, "PgPrev", "<", bt, bt, new Vector2(-460f, 34f), new Vector2(90f, 64f), 30, () => { lapsPage = Mathf.Max(0, lapsPage - 1); UnityEngine.Object.Destroy(root); ShowLapsModal(s); });
+                UIFactory.Label("PgLbl", brt, "PÁGINA " + (lapsPage + 1) + "/" + pages, 22, TextAnchor.MiddleCenter, bt, bt, new Vector2(-330f, 46f), new Vector2(170f, 40f), MenuTheme.TextDim);
+                MenuTheme.StyledButton(brt, "PgNext", ">", bt, bt, new Vector2(-200f, 34f), new Vector2(90f, 64f), 30, () => { lapsPage = Mathf.Min(pages - 1, lapsPage + 1); UnityEngine.Object.Destroy(root); ShowLapsModal(s); });
+            }
+            UIFactory.Label("Legend", brt, "ROXO = melhor da sessão · VERDE = melhor pessoal · AMARELO = mais lento", 18, TextAnchor.MiddleCenter, bt, bt, new Vector2(170f, 104f), new Vector2(800f, 28f), MenuTheme.TextDim);
+            MenuTheme.StyledButton(brt, "LapsClose", "FECHAR", bt, bt, new Vector2(400f, 34f), new Vector2(320f, 64f), 24, () => UnityEngine.Object.Destroy(root));
         }
 
         /// <summary>Painel de fim de temporada — aparece no lugar do botão de corrida.</summary>

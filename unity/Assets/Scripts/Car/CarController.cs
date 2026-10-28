@@ -194,7 +194,7 @@ namespace RaceX.Car
                 }
 
                 bool rear = i >= RL;
-                float sideFactor = rear && handbrake ? spec.handbrakeRearStiffness : 1f;
+                float sideFactor = rear && handbrake && !pitControlled ? spec.handbrakeRearStiffness : 1f;
                 // Pneu desgastado perde aderência progressivamente (até ~12% a 100% de desgaste;
                 // TireGrip devolve 1f quando o pit está desligado — nenhum efeito fora dele).
                 float tireGrip = Mathf.Clamp(RaceX.Core.PitLaneSystem.TireGrip(this), 0.85f, 1.08f);
@@ -389,12 +389,12 @@ namespace RaceX.Car
                 {
                     t *= 1f - 0.5f * spec.abs;
                 }
-                if (i >= RL && handbrake && !inputLocked) t = Mathf.Max(t, spec.handbrakeTorque);
+                if (i >= RL && handbrake && !inputLocked && !pitControlled) t = Mathf.Max(t, spec.handbrakeTorque);
                 // Freio de arrasto em baixa usa o acelerador EFETIVO (piloto automático incluído):
                 // antes olhava só o throttleInput do jogador — com o pit autopilot acelerando e o
                 // jogador sem tocar nada, esse freio ficava ligado e o carro "só andava se acelera".
                 float driveThr = pitControlled ? extThrottle : throttleInput;
-                if (Gear > 0 && !inputLocked && driveThr < 0.05f && brake < 0.05f && !handbrake) t = spec.massKg * 0.2f;
+                if (Gear > 0 && !inputLocked && driveThr < 0.05f && brake < 0.05f && (!handbrake || pitControlled)) t = spec.massKg * 0.2f;
                 wheels[i].brakeTorque = t;
             }
         }

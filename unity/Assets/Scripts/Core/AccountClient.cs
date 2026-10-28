@@ -128,6 +128,27 @@ namespace RaceX.Core
                 SaveProfile(null);
         }
 
+        /// <summary>Envia o e-mail de redefinição de senha (Supabase /auth/v1/recover).</summary>
+        public static void SendPasswordReset(string email, Action<bool, string> done)
+        {
+            if (string.IsNullOrWhiteSpace(email)) { if (done != null) done(false, "Informe o e-mail da conta"); return; }
+            Runner.Run(RecoverCoroutine(email.Trim(), done));
+        }
+
+        static IEnumerator RecoverCoroutine(string email, Action<bool, string> done)
+        {
+            var req = new UnityWebRequest(SupabaseUrl + "/auth/v1/recover", "POST");
+            req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes("{\"email\":" + Json(email) + "}"));
+            req.downloadHandler = new DownloadHandlerBuffer();
+            req.SetRequestHeader("apikey", AnonKey);
+            req.SetRequestHeader("Content-Type", "application/json");
+            yield return req.SendWebRequest();
+            bool ok = req.result == UnityWebRequest.Result.Success;
+            string err = ok ? "" : (req.error ?? "Falha de conexão");
+            req.Dispose();
+            if (done != null) done(ok, err);
+        }
+
         /// <summary>Edita perfil localmente e empurra para a nuvem.</summary>
         public static void SetProfile(string name, string photo, int color, Action<bool, string> done)
         {

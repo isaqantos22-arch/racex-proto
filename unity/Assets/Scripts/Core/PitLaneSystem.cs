@@ -32,6 +32,7 @@ namespace RaceX.Core
             public bool isHuman;
             public int compound = 1;
             public float wear;
+            public float temp = 1f;  // temperatura do pneu 0 (frio, saída do box) .. 1 (janela ideal)
             public bool requested;
             public bool inPit;
             public float stopTimer;
@@ -106,7 +107,16 @@ namespace RaceX.Core
         public static float TireGrip(CarController car)
         {
             var st = instance != null ? instance.Find(car) : null;
-            return st == null ? 1f : CompoundGrip[st.compound] * (1f - 0.12f * st.wear);
+            if (st == null) return 1f;
+            float tempF = instance.race != null && instance.race.Settings.pitStops ? Mathf.Lerp(0.93f, 1f, st.temp) : 1f;
+            return CompoundGrip[st.compound] * (1f - 0.12f * st.wear) * tempF;
+        }
+
+        /// <summary>Temperatura do pneu 0..1 (0 = frio ao sair do box, 1 = aquecido após ~1 volta).</summary>
+        public static float TireTemp(CarController car)
+        {
+            var st = instance != null ? instance.Find(car) : null;
+            return st == null ? 1f : st.temp;
         }
 
         /// <summary>Composto atual (0 macio, 1 médio, 2 duro). -1 = sem pit ativo.</summary>
@@ -309,8 +319,11 @@ namespace RaceX.Core
                     }
                     st.holding = true;
                     st.inPit = true;
+                    st.temp = 0f; // treino/quali: sai da garagem com pneu frio
                     ApplyHold(st);
                 }
+                else st.temp = 0.85f; // largada do grid: pneu quase na janela (volta de apresentação)
+                if (e.isHuman) ApplyCareerHubStrategy(st);
                 cars.Add(st);
             }
         }
@@ -743,8 +756,65 @@ namespace RaceX.Core
             return true;
         }
 
-        /// <summary>Duração real do composto em voltas (Macio ~8, Médio ~14, Duro ~22 — clampado ao tamanho da corrida).</summary>
-        static int CompoundLife(int compound) => compound == 0 ? 8 : compound == 1 ? 14 : 22;
+        /// <summary>Duração real do composto em voltas (Macio ~18, Médio ~28, Duro ~40 — pedido do usuário, v79).</summary>
+        static int CompoundLife(int compound) => compound == 0 ? 18 : compound == 1 ? 28 : 40;
+
+        /// <summary>Vida do composto em voltas (para a UI de estratégia).</summary>
+        public static int CompoundLifeLaps(int compound) => CompoundLife(Mathf.Clamp(compound, 0, 2));
+
+        /// <summary>Quantas paradas a estratégia precisa: soma das vidas dos stints até cobrir as voltas.</summary>
+        static int StopsNeeded(int laps, int startC, int stopC)
+        {
+            int covered = CompoundLife(startC);
+            int stops = 0;
+            while (covered < laps && stops < 3) { covered += CompoundLife(stopC); stops++; }
+            return stops;
+        }
+
+        /// <summary>Volta de cada parada, proporcional à vida de cada stint (o macio sai antes do duro).</summary>
+        static void FillStopLaps(List<int> stopLaps, int laps, int startC, int stopC, int stops)
+        {
+            stopLaps.Clear();
+            if (stops <= 0) return;
+            float total = CompoundLife(startC) + stops * (float)CompoundLife(stopC);
+            float acc = CompoundLife(startC);
+            int prev = 1;
+            for (int i = 0; i < stops; i++)
+            {
+                int lap = Mathf.Clamp(Mathf.RoundToInt(laps * acc / total), prev + 1, laps - 1);
+                stopLaps.Add(lap);
+                prev = lap;
+                acc += CompoundLife(stopC);
+            }
+        }
+
+        /// <summary>Carreira: aplica a estratégia escolhida no HUB (paradas e compostos) ao jogador.</summary>
+        void ApplyCareerHubStrategy(CarState st)
+        {
+            if (race == null || race.Settings.careerPhase < 0 || race.Settings.laps >= 900) return;
+            var d = RaceX.Career.CareerMode.data;
+            if (d == null || d.stratStops < 0) return;
+            int laps = Mathf.Max(2, race.Settings.laps);
+            int startC = Mathf.Clamp(d.stratStart, 0, 2), stopC = Mathf.Clamp(d.stratStop, 0, 2);
+            st.compound = startC;
+            st.plannedStops = Mathf.Clamp(d.stratStops, 0, 3);
+            st.stopsDone = 0;
+            st.strategy.Clear();
+            st.strategy.Add(startC);
+            for (int i = 0; i < st.plannedStops; i++) st.strategy.Add(stopC);
+            FillStopLaps(st.stopLaps, laps, startC, stopC, st.plannedStops);
+        }
+
+        /// <summary>Estratégia automática sugerida (usada pelo hub da carreira para mostrar o padrão).</summary>
+        public static int SuggestedStops(int laps, int startC, int stopC) => StopsNeeded(Mathf.Max(2, laps), Mathf.Clamp(startC, 0, 2), Mathf.Clamp(stopC, 0, 2));
+
+        /// <summary>Voltas de box de uma estratégia (texto do hub: "BOX V24").</summary>
+        public static List<int> StopLapsFor(int laps, int startC, int stopC, int stops)
+        {
+            var l = new List<int>();
+            FillStopLaps(l, Mathf.Max(2, laps), Mathf.Clamp(startC, 0, 2), Mathf.Clamp(stopC, 0, 2), Mathf.Clamp(stops, 0, 3));
+            return l;
+        }
 
         /// <summary>Próxima parada planejada da IA: volta atual + vida do composto × margem de segurança.
         /// Em corridas longas isso gera MÚLTIPLAS paradas (recalcula a cada pit) — como na F1 real.</summary>
@@ -768,11 +838,10 @@ namespace RaceX.Core
             int laps = Mathf.Max(2, race.Settings.laps);
             int startC = st.compound;
             int stopC = 2; // M → H (padrão conservador)
-            int stops = Mathf.Clamp(Mathf.CeilToInt(laps / (float)CompoundLife(startC)) - 1, 0, 3);
+            int stops = StopsNeeded(laps, startC, stopC);
             st.plannedStops = stops;
             for (int i = 0; i < stops; i++) st.strategy.Add(stopC);
-            for (int i = 0; i < stops; i++)
-                st.stopLaps.Add(Mathf.Clamp(Mathf.RoundToInt(laps * (i + 1) / (float)(stops + 1)), 2, laps - 1));
+            FillStopLaps(st.stopLaps, laps, startC, stopC, stops);
         }
 
         /// <summary>Paradas planejadas do JOGADOR (0..3). -1 = sem pit ativo.</summary>
@@ -854,8 +923,7 @@ namespace RaceX.Core
             var rm = instance.race;
             if (rm == null || rm.Settings.laps >= 900) return; // sessão por tempo: sem paradas
             int laps = Mathf.Max(2, rm.Settings.laps);
-            for (int i = 0; i < stops; i++)
-                st.stopLaps.Add(Mathf.Clamp(Mathf.RoundToInt(laps * (i + 1) / (float)(stops + 1)), 2, laps - 1));
+            FillStopLaps(st.stopLaps, laps, startC, stopC, stops);
             if (st.stopsDone > st.plannedStops) st.stopsDone = st.plannedStops;
         }
 
@@ -1042,6 +1110,26 @@ namespace RaceX.Core
                 w.GetComponent<MeshRenderer>().sharedMaterial = wall;
                 }
             }
+                // MURETA NAS PONTAS (v79): o muro por box só começava em rel 15 e acabava em laneLength−15 —
+                // o vão aberto na frente dos boxes 0/1 deixava carro sair do box direto para a pista (e carro
+                // da pista entrar na contramão). Fecha de rel 5 (fim da rampa de entrada) até laneLength−6
+                // (antes da rampa de saída). As rotas de entrada/saída passam a ≥ 3 m da mureta (lat −7,8).
+                float[,] ends = { { 5f, 15f }, { laneLength - 15f, laneLength - 6f } };
+                for (int k = 0; k < 2; k++)
+                {
+                    float r0 = ends[k, 0], r1 = ends[k, 1];
+                    if (r1 - r0 < 1f) continue;
+                    var pw = spline.PoseAtDistance(Mathf.Repeat(laneStart + (r0 + r1) * 0.5f, spline.Length));
+                    Vector3 rw = pw.rotation * Vector3.right;
+                    var we = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    we.name = "PitWallEnd" + k;
+                    we.transform.SetParent(transform, false);
+                    we.transform.position = pw.position - rw * (laneOffset - 6.2f) + Vector3.up * 0.55f;
+                    we.transform.rotation = pw.rotation;
+                    we.transform.localScale = new Vector3(0.3f, 1.1f, r1 - r0);
+                    var c_we = we.GetComponent<Collider>(); if (c_we != null) c_we.sharedMaterial = pitPhys;
+                    we.GetComponent<MeshRenderer>().sharedMaterial = wall;
+                }
                 // RAMPAS DE ACESSO: triângulos de asfalto da borda da pista até o pit lane (entrada e saída).
                 // LADO DO PIT: borda da pista (−6,5 m) até o CENTRO do lane (−14 m) — antes atravessava a pista toda.
                 for (int k = 0; k < 2; k++)
@@ -1217,6 +1305,8 @@ namespace RaceX.Core
             float lapLen = spline != null ? Mathf.Max(100f, spline.Length) : 3000f;
             float dist = Mathf.Max(0f, st.car.ForwardSpeed) * Time.deltaTime;
             float baseAdd = dist / lapLen / life; // desgaste 0..1 por volta dividido pela vida
+            // Aquecimento: frio (0) → janela ideal (1) em ~1 volta de distância; patinar aquece mais rápido.
+            if (st.temp < 1f) st.temp = Mathf.Min(1f, st.temp + dist / lapLen * (1f + Mathf.Min(1f, st.car.MaxWheelSlip)));
             float slipSum = 0f;
             for (int i = 0; i < 4; i++)
             {
@@ -1423,6 +1513,7 @@ namespace RaceX.Core
                 if (st.stopTimer >= StopSeconds)
                 {
                     st.wear = 0f;
+                    st.temp = 0f; // jogo novo de pneus: sai do box FRIO (azul no painel) e aquece em ~1 volta
                     for (int wi = 0; wi < 4; wi++) st.wearW[wi] = 0f;
                     st.car.Repair();
                     st.stopTimer = 0f;

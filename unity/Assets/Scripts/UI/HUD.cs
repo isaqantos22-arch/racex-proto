@@ -25,9 +25,20 @@ namespace RaceX.UI
         float fpsAcc;
         int fpsFrames, fpsLast = -1;
         float fpsMin = float.MaxValue;
-        Image[] wheelImgs;      // painel CARRO: 4 rodas (desgaste verde/amarelo/vermelho)
+        Image[] wheelImgs;      // painel CARRO: 4 rodas (temperatura azul → desgaste verde/amarelo/laranja/vermelho)
+        Text[] wheelPct;        // % de vida de cada pneu ao lado da roda
+        Text carTitle;          // "CARRO · M" (composto atual)
         Image dmgFrontImg, dmgRearImg; // barras de dano frente/trás
         float lastPanelT;
+        /// <summary>Cor do pneu: AZUL enquanto frio (aquecendo, ~1 volta) → verde → amarelo → laranja → vermelho com o desgaste.</summary>
+        static Color TyreColor(float temp, float wear)
+        {
+            if (temp < 0.98f) return Color.Lerp(new Color(0.2f, 0.45f, 1f), new Color(0.3f, 0.85f, 0.95f), Mathf.Clamp01(temp));
+            if (wear < 0.35f) return new Color(0.25f, 0.85f, 0.35f);
+            if (wear < 0.55f) return new Color(1f, 0.85f, 0.15f);
+            if (wear < 0.75f) return new Color(1f, 0.55f, 0.1f);
+            return new Color(1f, 0.22f, 0.15f);
+        }
         static Color ZoneColor(float d) => d < 0.05f ? new Color(0.25f, 0.85f, 0.35f) : d < 0.35f ? new Color(1f, 0.75f, 0.1f) : new Color(1f, 0.22f, 0.15f);
         UnityEngine.UI.Button pitButton;
         bool lastPitHighlighted;
@@ -133,11 +144,11 @@ namespace RaceX.UI
             // Pivot (0.5, 0.5) em todos os elementos internos para o corpo nunca vazar para fora do painel.
             if (!compact)
             {
-                var carPanel = UIFactory.Panel("CarPanel", root, tr, tr, new Vector2(-160f * s, -250f * s), new Vector2(150f * s, 225f * s), new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.88f));
-                carPanel.sprite = MenuTheme.RoundedSprite(75, 112, 20);
+                var carPanel = UIFactory.Panel("CarPanel", root, tr, tr, new Vector2(-160f * s, -250f * s), new Vector2(200f * s, 225f * s), new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.88f));
+                carPanel.sprite = MenuTheme.RoundedSprite(100, 112, 20);
                 var topAnchor = new Vector2(0.5f, 1f);
                 var centerPivot = new Vector2(0.5f, 0.5f);
-                UIFactory.Label("CarTitle", carPanel.transform, "CARRO", (int)(17 * s), TextAnchor.MiddleCenter, topAnchor, topAnchor, new Vector2(0f, -10f * s), new Vector2(140f * s, 22f * s), MenuTheme.TextDim);
+                carTitle = UIFactory.Label("CarTitle", carPanel.transform, "CARRO", (int)(17 * s), TextAnchor.MiddleCenter, topAnchor, topAnchor, new Vector2(0f, -10f * s), new Vector2(190f * s, 22f * s), MenuTheme.TextDim);
                 dmgFrontImg = UIFactory.Panel("DmgF", carPanel.transform, topAnchor, centerPivot, new Vector2(0f, -44f * s), new Vector2(44f * s, 9f * s), Color.green);
                 dmgFrontImg.sprite = MenuTheme.RoundedSprite(22, 5, 4);
                 var m = entry.model;
@@ -161,11 +172,18 @@ namespace RaceX.UI
                 dmgRearImg.sprite = MenuTheme.RoundedSprite(22, 5, 4);
                 var wPos = new[] { new Vector2(-34f, -80f), new Vector2(34f, -80f), new Vector2(-34f, -164f), new Vector2(34f, -164f) };
                 wheelImgs = new Image[4];
+                wheelPct = new Text[4];
                 for (int i = 0; i < 4; i++)
                 {
                     var w = UIFactory.Panel("Wheel" + i, carPanel.transform, topAnchor, centerPivot, wPos[i] * s, new Vector2(18f * s, 28f * s), Color.green);
                     w.sprite = MenuTheme.RoundedSprite(9, 14, 5);
                     wheelImgs[i] = w;
+                    // % de vida ao lado de CADA pneu (esquerda dos esquerdos, direita dos direitos).
+                    bool leftSide = wPos[i].x < 0f;
+                    var pct = UIFactory.Label("WheelPct" + i, carPanel.transform, "100%", (int)(15 * s), leftSide ? TextAnchor.MiddleRight : TextAnchor.MiddleLeft,
+                        topAnchor, centerPivot, new Vector2((leftSide ? -70f : 70f) * s, wPos[i].y * s), new Vector2(46f * s, 22f * s), Color.white);
+                    pct.raycastTarget = false;
+                    wheelPct[i] = pct;
                 }
             }
 
@@ -268,7 +286,12 @@ namespace RaceX.UI
                 float done = st.LapSectorTime(entry, k);
                 string dTxt = "";
                 Color dCol = Color.white;
-                if (k == cur && done <= 0f)
+                if (k == cur && done <= 0f && entry.outLap)
+                {
+                    txt = "S" + (k + 1) + "  --.---";
+                    col = SecNone;
+                }
+                else if (k == cur && done <= 0f)
                 {
                     txt = "S" + (k + 1) + "  " + st.CurrentSectorElapsed(entry).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
                     col = SecNone;
@@ -485,15 +508,20 @@ namespace RaceX.UI
             if (timeText != null)
             {
                 float current = race.State == RaceState.Racing && !entry.finished ? Time.time - entry.lapStartTime : 0f;
-                // Relógio resolve a string no máx. a cada 0,1 s (não toda frame).
-                int bucket = Mathf.FloorToInt(current * 10f);
+                // VOLTA DE SAÍDA / NO BOX (v79): o cronômetro não corre fora de volta cronometrada —
+                // zera e começa exatamente ao cruzar a linha pela 1ª vez depois do box.
+                bool inPit = RaceX.Core.PitLaneSystem.IsInPitFlow(car);
+                bool outLapNow = entry.outLap && !inPit;
+                int bucket = inPit ? -7 : outLapNow ? -8 : Mathf.FloorToInt(current * 10f);
+                float leftNow = race.SessionTimeLeft;
+                if (inPit || outLapNow) bucket = bucket * 100000 - Mathf.FloorToInt(Mathf.Max(0f, leftNow)); // relógio da sessão segue vivo
                 if (bucket != lastTimeBucket)
                 {
                     lastTimeBucket = bucket;
                     string sess = "";
-                    float left = race.SessionTimeLeft;
-                    if (left >= 0f) sess = "  |  FIM DA SESSÃO EM " + FormatTime(left);
-                    timeText.text = FormatTime(current) + (entry.bestLap > 0f ? "  ·  Melhor " + FormatTime(entry.bestLap) : "") + sess;
+                    if (leftNow >= 0f) sess = "  |  FIM DA SESSÃO EM " + FormatTime(leftNow);
+                    string lapPart = inPit ? "NO BOX" : outLapNow ? "VOLTA DE SAÍDA" : FormatTime(current);
+                    timeText.text = lapPart + (entry.bestLap > 0f ? "  ·  Melhor " + FormatTime(entry.bestLap) : "") + sess;
                 }
             }
             if (entry.position != lastPos)
@@ -515,10 +543,24 @@ namespace RaceX.UI
             if (wheelImgs != null && Time.time - lastPanelT > 0.2f)
             {
                 lastPanelT = Time.time;
+                bool pitSys = RaceX.Core.PitLaneSystem.Instance != null && RaceX.Core.PitLaneSystem.PitEnabled;
+                float temp = pitSys ? RaceX.Core.PitLaneSystem.TireTemp(car) : 1f;
                 for (int i = 0; i < 4; i++)
                 {
-                    float w = RaceX.Core.PitLaneSystem.WearOf(car, i);
-                    wheelImgs[i].color = w < 0.4f ? new Color(0.25f, 0.85f, 0.35f) : w < 0.7f ? new Color(1f, 0.75f, 0.1f) : new Color(1f, 0.22f, 0.15f);
+                    float w = pitSys ? RaceX.Core.PitLaneSystem.WearOf(car, i) : 0f;
+                    Color col = TyreColor(temp, w);
+                    wheelImgs[i].color = col;
+                    if (wheelPct != null)
+                    {
+                        wheelPct[i].text = pitSys ? Mathf.RoundToInt((1f - w) * 100f) + "%" : "";
+                        wheelPct[i].color = col;
+                    }
+                }
+                if (carTitle != null)
+                {
+                    int cp = pitSys ? RaceX.Core.PitLaneSystem.CompoundOf(car) : -1;
+                    string ct = cp < 0 ? "CARRO" : "CARRO · " + RaceX.Core.PitLaneSystem.CompoundLetter(cp) + (temp < 0.98f ? " · FRIO" : "");
+                    if (carTitle.text != ct) carTitle.text = ct;
                 }
                 dmgFrontImg.color = ZoneColor(car.DmgFront);
                 dmgRearImg.color = ZoneColor(car.DmgRear);
@@ -552,7 +594,8 @@ namespace RaceX.UI
             }
             if (tireText != null)
             {
-                string tw = RaceX.Core.PitLaneSystem.WearText(car);
+                // v79: "PNEU M 100%" saiu do topo — a % fica ao lado de cada roda no painel CARRO.
+                string tw = "";
                 if (tw != lastTire)
                 {
                     lastTire = tw;

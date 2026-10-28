@@ -71,6 +71,13 @@ namespace RaceX.Car
         float stuckTimer;
         float reverseTimer;
         int recoveryAttempts;   // janelas de ré sem sucesso — após 2, respawn na pista
+        // CÃO DE GUARDA POR PROGRESSO (v79): mede o avanço REAL ao longo do traçado. Velocidade engana
+        // (carro encostado no muro oscila, carro na fila "anda" 1 m e para); sem avançar 15 m em 7 s
+        // ou andando na CONTRAMÃO por 3 s → respawn em ponto livre da pista.
+        float progressRef = float.NaN;
+        float progressTimer;
+        float wrongWayTimer;
+        int respawnFails;
 
         public void Initialize(WaypointSystem wp, RaceManager raceManager, Difficulty diff, float skillBias = 0f)
         {
@@ -317,6 +324,7 @@ namespace RaceX.Car
             bool pastLaunch = (Time.time - unlockTime) > 12f;
             if (pastLaunch && UpdateRecovery(speed, ref steer, ref throttle, ref brake)) { }
             else if (!pastLaunch) { reverseTimer = 0f; stuckTimer = 0f; }
+            if (pastLaunch && ProgressWatchdog(along, speed)) return;
 
             // ANTI-EMPURRÃO (regra do usuário): encostou em carro mais lento/parado → para de
             // acelerar e freia; se estiver de frente para um carro parado a curta distância e o nariz
@@ -593,8 +601,10 @@ namespace RaceX.Car
                 {
                     // 2 janelas de ré não resolveram (~12 s): respawn na linha central, alguns metros
                     // atrás, só se não houver carro a 15 m do ponto (reaproveita o ResetTo do carro).
+                    // Ponto livre não encontrado: volta a alternar janelas de ré (antes ficava preso em
+                    // "tentar respawn" para sempre — a fila inteira travava porque sempre havia carro a 15 m).
                     if (TryRespawnStuck()) { recoveryAttempts = 0; }
-                    else recoveryAttempts = MaxRecoveryAttempts; // local ocupado: tenta de novo mais tarde
+                    else recoveryAttempts = 0;
                     return false;
                 }
                 reverseTimer = Random.Range(ReverseSeconds, MaxReverseSeconds); // ré de 1,5–2,5 s
@@ -622,23 +632,71 @@ namespace RaceX.Car
             return committedLateral >= 0f ? -1f : 1f;
         }
 
-        /// <summary>Respawn do carro preso: centro da pista na distância atual, ~6 m atrás,
-        /// apenas se NENHUM carro estiver a menos de 15 m do ponto.</summary>
+        /// <summary>Cão de guarda por PROGRESSO: true = fez respawn agora (Think encerra).</summary>
+        bool ProgressWatchdog(float along, float speed)
+        {
+            if (race == null || race.State != RaceState.Racing || car.pitControlled || RaceX.Core.PitLaneSystem.IsInPitFlow(car))
+            {
+                progressRef = float.NaN; progressTimer = 0f; wrongWayTimer = 0f;
+                return false;
+            }
+            float L = waypoints.Spline.Length;
+            if (float.IsNaN(progressRef)) { progressRef = along; progressTimer = 0f; }
+            progressTimer += thinkDt;
+            // Contramão: nariz contra o sentido da pista e andando (não é só um giro rápido).
+            var pose = waypoints.Spline.PoseAtDistance(along);
+            float dirDot = Vector3.Dot(transform.forward, pose.rotation * Vector3.forward);
+            wrongWayTimer = dirDot < -0.25f && car.SpeedKmh > 8f ? wrongWayTimer + thinkDt : 0f;
+            bool wrongWay = wrongWayTimer > 3f;
+            if (progressTimer >= 7f || wrongWay)
+            {
+                float delta = Mathf.Repeat(along - progressRef + L * 0.5f, L) - L * 0.5f; // avanço com sinal (volta da pista)
+                bool noProgress = delta < 15f;
+                progressRef = along;
+                progressTimer = 0f;
+                if (noProgress || wrongWay)
+                {
+                    wrongWayTimer = 0f;
+                    if (TryRespawnStuck()) return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>Respawn do carro preso/na contramão: centro da pista, no primeiro ponto LIVRE
+        /// (nenhum carro a menos de 9 m) procurando atrás e depois À FRENTE da fila. Depois de várias
+        /// falhas seguidas aceita folga menor (5 m) — carro preso para sempre é pior que nascer perto.</summary>
         bool TryRespawnStuck()
         {
             if (car == null || car.pitControlled || waypoints == null || waypoints.Spline == null || race == null) return false;
             if (RaceX.Core.PitLaneSystem.IsInPitFlow(car)) return false;
             float along = waypoints.DistanceAlong(transform.position, ref hint);
-            var pose = waypoints.Spline.PoseAtDistance(Mathf.Repeat(along - 6f, waypoints.Spline.Length));
-            for (int i = 0; i < race.entries.Count; i++)
+            float L = waypoints.Spline.Length;
+            float clearance = respawnFails >= 3 ? 5f : 9f;
+            float[] offsets = { -6f, -14f, 12f, 20f, 28f, 36f, 48f, 60f, 75f, -24f };
+            foreach (float off in offsets)
             {
-                var e = race.entries[i];
-                if (e == null || e.car == null || e.car == car) continue;
-                if (RaceX.Core.PitLaneSystem.IsInPitFlow(e.car)) continue;
-                if (Vector3.Distance(e.car.transform.position, pose.position) < 15f) return false;
+                var pose = waypoints.Spline.PoseAtDistance(Mathf.Repeat(along + off, L));
+                bool free = true;
+                for (int i = 0; i < race.entries.Count; i++)
+                {
+                    var e = race.entries[i];
+                    if (e == null || e.car == null || e.car == car) continue;
+                    if (RaceX.Core.PitLaneSystem.IsInPitFlow(e.car)) continue;
+                    if (Vector3.Distance(e.car.transform.position, pose.position) < clearance) { free = false; break; }
+                }
+                if (!free) continue;
+                car.ResetTo(pose.position + Vector3.up * 0.3f, pose.rotation);
+                respawnFails = 0;
+                stuckTimer = 0f; reverseTimer = 0f; escapeTimer = 0f; passTimer = 0f; slideHold = 0f;
+                recoveryAttempts = 0;
+                committedLateral = 0f;
+                progressRef = float.NaN; progressTimer = 0f; wrongWayTimer = 0f;
+                cachedSteer = 0f; cachedThrottle = 0.6f; cachedBrake = 0f;
+                return true;
             }
-            car.ResetTo(pose.position + Vector3.up * 0.3f, pose.rotation);
-            return true;
+            respawnFails++;
+            return false;
         }
 
         float RubberBand()

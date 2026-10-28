@@ -53,9 +53,11 @@ namespace RaceX.Track
             if (failed) return false;
             try
             {
-                var shader = Shader.Find("Universal Render Pipeline/Unlit")
-                          ?? Shader.Find("Universal Render Pipeline/Lit")
-                          ?? Shader.Find("Sprites/Default")
+                // Sprites/Default PRIMEIRO: usa a COR DE VÉRTICE (preto/terra por segmento), tem alfa e
+                // Cull Off. O URP/Unlit ignorava a cor de vértice (marca branca/invisível) — bug v78.
+                var shader = Shader.Find("Sprites/Default")
+                          ?? Shader.Find("Universal Render Pipeline/Particles/Unlit")
+                          ?? Shader.Find("Universal Render Pipeline/Unlit")
                           ?? Shader.Find("Unlit/Color");
                 if (shader == null) { failed = true; return false; }
                 material = new Material(shader) { name = "SkidMarks" };
@@ -79,8 +81,10 @@ namespace RaceX.Track
                 for (int i = 0; i < MaxSegments; i++)
                 {
                     int b = i * 4, t = i * 6;
-                    tris[t] = b; tris[t + 1] = b + 2; tris[t + 2] = b + 1;
-                    tris[t + 3] = b; tris[t + 4] = b + 3; tris[t + 5] = b + 2;
+                    // Face para CIMA (sentido horário visto de cima no Unity) — antes a face apontava para
+                    // baixo e era descartada pelo culling dos shaders URP.
+                    tris[t] = b; tris[t + 1] = b + 1; tris[t + 2] = b + 2;
+                    tris[t + 3] = b; tris[t + 4] = b + 2; tris[t + 5] = b + 3;
                 }
                 mesh.SetTriangles(tris, 0);
                 mesh.vertices = verts;
@@ -89,7 +93,10 @@ namespace RaceX.Track
 
                 var go = new GameObject("SkidMarks");
                 go.AddComponent<MeshFilter>().sharedMesh = mesh;
-                go.AddComponent<MeshRenderer>().sharedMaterial = material;
+                var mr = go.AddComponent<MeshRenderer>();
+                mr.sharedMaterial = material;
+                mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                mr.receiveShadows = false;
                 ready = true;
             }
             catch (System.Exception ex)
@@ -175,13 +182,26 @@ namespace RaceX.Track
             float wb = car.spec.wheelbase * 0.5f;
             for (int i = 0; i < 4; i++)
             {
-                float x = (i % 2 == 0 ? -1f : 1f) * track;
-                float z = i < 2 ? wb : -wb;
-                Vector3 pos = car.transform.position + car.transform.rotation * new Vector3(x, 0f, z);
-                // Acompanha o chão real (raycast curto) para não flutuar nem z-fightar.
-                if (Physics.Raycast(pos + Vector3.up * 0.7f, Vector3.down, out var hit, 2.5f, ~0, QueryTriggerInteraction.Ignore))
-                    pos.y = hit.point.y;
-                pos.y += 0.03f;
+                Vector3 pos;
+                var wc = car.wheels != null && i < car.wheels.Length ? car.wheels[i] : null;
+                // Ponto de CONTATO real do pneu com o chão (WheelHit). O raycast antigo batia no próprio
+                // BoxCollider do carro e a marca nascia DENTRO da carroceria (invisível).
+                if (wc != null && wc.GetGroundHit(out var wh))
+                    pos = wh.point;
+                else if (wc != null)
+                {
+                    // Roda no ar: sem marca nesta roda.
+                    hasLast[i] = false;
+                    continue;
+                }
+                else
+                {
+                    float x = (i % 2 == 0 ? -1f : 1f) * track;
+                    float z = i < 2 ? wb : -wb;
+                    pos = car.transform.position + car.transform.rotation * new Vector3(x, 0f, z);
+                    pos.y -= car.spec.wheelRadius;
+                }
+                pos.y += 0.025f;
                 Vector3 d = pos - lastPos[i]; d.y = 0f;
                 Vector3 dir = d.sqrMagnitude > 0.001f ? d.normalized : fwd;
                 var side = new Vector3(-dir.z, 0f, dir.x) * (QuadWidth * 0.5f);

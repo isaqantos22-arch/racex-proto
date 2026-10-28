@@ -138,7 +138,32 @@ namespace RaceX.Core
                 case QualityTier.High: QualitySettings.shadowDistance = 50f; break;
                 default: QualitySettings.shadowDistance = 80f; break;
             }
-            Application.targetFrameRate = Application.isMobilePlatform ? (tier >= QualityTier.High ? 60 : 30) : -1;
+            ApplyFrameRate(tier);
+        }
+
+        /// <summary>Limite de FPS escolhido em CONFIGURAÇÕES: 0 = AUTO (celular: 60 em Alta/Ultra, 30 em
+        /// Baixa/Média; PC: sem limite), ou 30 / 60 / 120. 120 só vale em telas que suportam.</summary>
+        public static readonly int[] FpsOptions = { 0, 30, 60, 120 };
+
+        public static int TargetFps
+        {
+            get { int v = PlayerPrefs.GetInt(Prefix + "TargetFps", 0); return System.Array.IndexOf(FpsOptions, v) >= 0 ? v : 0; }
+            set => PlayerPrefs.SetInt(Prefix + "TargetFps", System.Array.IndexOf(FpsOptions, value) >= 0 ? value : 0);
+        }
+
+        public static string FpsLabel(int v) => v <= 0 ? "AUTO" : v + " FPS";
+
+        public static void ApplyFrameRate(QualityTier tier)
+        {
+            int fps = TargetFps;
+            if (fps <= 0)
+            {
+                Application.targetFrameRate = Application.isMobilePlatform ? (tier >= QualityTier.High ? 60 : 30) : -1;
+                return;
+            }
+            // Limite manual: sem V-Sync no PC (o V-Sync ignora targetFrameRate).
+            if (!Application.isMobilePlatform) QualitySettings.vSyncCount = 0;
+            Application.targetFrameRate = fps;
         }
 
         public static float RenderDistance(QualityTier tier)
