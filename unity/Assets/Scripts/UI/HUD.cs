@@ -132,8 +132,23 @@ namespace RaceX.UI
                 UIFactory.Label("CarTitle", carPanel.transform, "CARRO", (int)(17 * s), TextAnchor.MiddleCenter, topAnchor, topAnchor, new Vector2(0f, -10f * s), new Vector2(140f * s, 22f * s), MenuTheme.TextDim);
                 dmgFrontImg = UIFactory.Panel("DmgF", carPanel.transform, topAnchor, centerPivot, new Vector2(0f, -44f * s), new Vector2(44f * s, 9f * s), Color.green);
                 dmgFrontImg.sprite = MenuTheme.RoundedSprite(22, 5, 4);
-                var body = UIFactory.Panel("Body", carPanel.transform, topAnchor, centerPivot, new Vector2(0f, -122f * s), new Vector2(48f * s, 122f * s), new Color(1f, 1f, 1f, 0.16f));
-                body.sprite = MenuTheme.RoundedSprite(24, 61, 10);
+                var m = entry.model;
+                bool formula = m == RaceX.Car.CarModel.F1 || m == RaceX.Car.CarModel.F2008 || m == RaceX.Car.CarModel.F1Studio;
+                var parts = formula
+                    ? new[] { new Vector4(0f, -62f, 76f, 8f), new Vector4(0f, -84f, 12f, 36f), new Vector4(0f, -122f, 26f, 54f), new Vector4(0f, -134f, 44f, 34f), new Vector4(0f, -164f, 20f, 26f), new Vector4(0f, -184f, 62f, 10f) }
+                    : new[] { new Vector4(0f, -122f, 52f, 128f), new Vector4(0f, -100f, 40f, 16f), new Vector4(0f, -126f, 38f, 30f), new Vector4(0f, -156f, 34f, 12f) };
+                for (int pi = 0; pi < parts.Length; pi++)
+                {
+                    var pv = parts[pi];
+                    float a = formula ? (pi == 2 ? 0.26f : 0.18f) : (pi == 0 ? 0.16f : pi == 2 ? 0.08f : 0.3f);
+                    var part = UIFactory.Panel("Body" + pi, carPanel.transform, topAnchor, centerPivot, new Vector2(pv.x, pv.y) * s, new Vector2(pv.z, pv.w) * s, new Color(1f, 1f, 1f, a));
+                    part.sprite = MenuTheme.RoundedSprite(Mathf.Max(4, (int)pv.z / 2), Mathf.Max(4, (int)pv.w / 2), Mathf.Clamp((int)Mathf.Min(pv.z, pv.w) / 4, 1, 10));
+                }
+                if (formula)
+                {
+                    var cockpit = UIFactory.Panel("Cockpit", carPanel.transform, topAnchor, centerPivot, new Vector2(0f, -112f) * s, new Vector2(12f, 18f) * s, new Color(0f, 0f, 0f, 0.55f));
+                    cockpit.sprite = MenuTheme.RoundedSprite(6, 9, 3);
+                }
                 dmgRearImg = UIFactory.Panel("DmgR", carPanel.transform, topAnchor, centerPivot, new Vector2(0f, -200f * s), new Vector2(44f * s, 9f * s), Color.green);
                 dmgRearImg.sprite = MenuTheme.RoundedSprite(22, 5, 4);
                 var wPos = new[] { new Vector2(-34f, -80f), new Vector2(34f, -80f), new Vector2(-34f, -164f), new Vector2(34f, -164f) };
@@ -180,6 +195,175 @@ namespace RaceX.UI
             race.LapCompleted += OnLap;
             race.RaceFinished += ShowResults;
             MiniMap.Create(root, race, entry, compact);
+            if (!compact)
+            {
+                BuildSectors(root);
+                BuildTower(root);
+            }
+        }
+
+        static readonly Color SecPurple = new Color(0.62f, 0.25f, 0.95f, 0.92f);
+        static readonly Color SecGreen = new Color(0.2f, 0.8f, 0.3f, 0.92f);
+        static readonly Color SecYellow = new Color(1f, 0.78f, 0.1f, 0.92f);
+        static readonly Color SecNone = new Color(0.1f, 0.11f, 0.14f, 0.8f);
+        Image[] secBg;
+        Text[] secText;
+        Text deltaText;
+        float secTimer;
+        RectTransform towerRoot;
+        Image[] towerBg;
+        Text[] towerPos, towerName, towerTyre, towerGap;
+        float towerTimer;
+
+        void BuildSectors(RectTransform root)
+        {
+            SectorTimer.Ensure(race);
+            var tl = new Vector2(0f, 1f);
+            secBg = new Image[3];
+            secText = new Text[3];
+            for (int i = 0; i < 3; i++)
+            {
+                var bg = UIFactory.Panel("Sector" + (i + 1), root, tl, tl, new Vector2(270f + i * 172f, -128f), new Vector2(166f, 36f), SecNone);
+                bg.sprite = MenuTheme.RoundedSprite(83, 18, 8);
+                bg.raycastTarget = false;
+                secBg[i] = bg;
+                var t = UIFactory.Label("SectorTxt", bg.transform, "S" + (i + 1), 22, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(160f, 34f), Color.white);
+                t.raycastTarget = false;
+                secText[i] = t;
+            }
+            deltaText = UIFactory.Label("Delta", root, "", 26, TextAnchor.UpperLeft, tl, tl, new Vector2(270f, -170f), new Vector2(500f, 34f), Color.white);
+            deltaText.raycastTarget = false;
+        }
+
+        void UpdateSectors()
+        {
+            if (secBg == null || SectorTimer.Instance == null) return;
+            secTimer -= Time.unscaledDeltaTime;
+            if (secTimer > 0f) return;
+            secTimer = 0.1f;
+            var st = SectorTimer.Instance;
+            int cur = race.State == RaceState.Racing && !entry.finished ? st.CurrentSector(entry) : -1;
+            float acc = 0f, pbAcc = 0f;
+            bool anyDelta = false;
+            for (int k = 0; k < 3; k++)
+            {
+                string txt;
+                Color col;
+                float done = st.LapSectorTime(entry, k);
+                if (k == cur && done <= 0f)
+                {
+                    txt = "S" + (k + 1) + "  " + st.CurrentSectorElapsed(entry).ToString("0.0");
+                    col = SecNone;
+                }
+                else
+                {
+                    float shown = done > 0f ? done : st.LastSectorTime(entry, k);
+                    txt = shown > 0f ? "S" + (k + 1) + "  " + shown.ToString("0.000") : "S" + (k + 1) + "  --.---";
+                    var c = st.ColorOf(entry, k);
+                    col = c == SectorTimer.SectorColor.Purple ? SecPurple : c == SectorTimer.SectorColor.Green ? SecGreen : c == SectorTimer.SectorColor.Yellow ? SecYellow : SecNone;
+                }
+                if (secText[k].text != txt) secText[k].text = txt;
+                if (secBg[k].color != col) secBg[k].color = col;
+                secText[k].color = col == SecYellow ? new Color(0.08f, 0.08f, 0.1f) : Color.white;
+                float pb = st.PersonalBest(entry, k);
+                if (done > 0f && pb > 0f) { acc += done; pbAcc += pb; anyDelta = true; }
+            }
+            string dtx = "";
+            if (anyDelta)
+            {
+                float d = acc - pbAcc;
+                dtx = "DELTA " + (d >= 0f ? "+" : "-") + Mathf.Abs(d).ToString("0.000");
+                deltaText.color = d > 0.0005f ? new Color(1f, 0.3f, 0.25f) : new Color(0.3f, 1f, 0.45f);
+            }
+            if (deltaText.text != dtx) deltaText.text = dtx;
+        }
+
+        void BuildTower(RectTransform root)
+        {
+            var ml = new Vector2(0f, 0.5f);
+            towerRoot = UIFactory.Stretch("Tower", root);
+            towerRoot.anchorMin = ml; towerRoot.anchorMax = ml; towerRoot.pivot = ml;
+            towerRoot.anchoredPosition = new Vector2(30f, -60f);
+            towerRoot.sizeDelta = new Vector2(400f, 5 * 40f);
+            towerBg = new Image[5];
+            towerPos = new Text[5]; towerName = new Text[5]; towerTyre = new Text[5]; towerGap = new Text[5];
+            var tl = new Vector2(0f, 1f);
+            for (int i = 0; i < 5; i++)
+            {
+                var bg = UIFactory.Panel("Row" + i, towerRoot, tl, tl, new Vector2(0f, -i * 40f), new Vector2(400f, 36f), SecNone);
+                bg.sprite = MenuTheme.RoundedSprite(100, 18, 6);
+                bg.raycastTarget = false;
+                towerBg[i] = bg;
+                towerPos[i] = UIFactory.Label("Pos", bg.transform, "", 22, TextAnchor.MiddleLeft, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(10f, 0f), new Vector2(54f, 34f), Color.white);
+                towerName[i] = UIFactory.Label("Name", bg.transform, "", 22, TextAnchor.MiddleLeft, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(66f, 0f), new Vector2(180f, 34f), Color.white);
+                towerTyre[i] = UIFactory.Label("Tyre", bg.transform, "", 22, TextAnchor.MiddleCenter, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(246f, 0f), new Vector2(30f, 34f), Color.white);
+                towerGap[i] = UIFactory.Label("Gap", bg.transform, "", 22, TextAnchor.MiddleRight, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-10f, 0f), new Vector2(120f, 34f), Color.white);
+                foreach (var t in new[] { towerPos[i], towerName[i], towerTyre[i], towerGap[i] }) t.raycastTarget = false;
+            }
+        }
+
+        static void SetText(Text t, string s) { if (t.text != s) t.text = s; }
+
+        void UpdateTower()
+        {
+            if (towerRoot == null) return;
+            towerTimer -= Time.unscaledDeltaTime;
+            if (towerTimer > 0f) return;
+            towerTimer = 0.25f;
+            var list = race.entries;
+            bool show = list.Count >= 2;
+            if (towerRoot.gameObject.activeSelf != show) towerRoot.gameObject.SetActive(show);
+            if (!show) return;
+            int me = list.IndexOf(entry);
+            if (me < 0) { towerRoot.gameObject.SetActive(false); return; }
+            int first = Mathf.Clamp(me - 2, 0, Mathf.Max(0, list.Count - 5));
+            bool timed = race.Settings.laps >= 900;
+            float lapLen = race.Track != null && race.Track.Waypoints != null ? race.Track.Waypoints.Length : 0f;
+            var st = SectorTimer.Instance;
+            for (int r = 0; r < 5; r++)
+            {
+                int idx = first + r;
+                bool used = idx < list.Count;
+                if (towerBg[r].gameObject.activeSelf != used) towerBg[r].gameObject.SetActive(used);
+                if (!used) continue;
+                var e = list[idx];
+                bool isMe = e == entry;
+                towerBg[r].color = isMe ? new Color(MenuTheme.Accent.r, MenuTheme.Accent.g, MenuTheme.Accent.b, 0.55f) : SecNone;
+                SetText(towerPos[r], "P" + (idx + 1));
+                string nm = string.IsNullOrEmpty(e.name) ? "-" : e.name.ToUpperInvariant();
+                SetText(towerName[r], nm.Length > 12 ? nm.Substring(0, 12) : nm);
+                int cp = e.car != null ? RaceX.Core.PitLaneSystem.CompoundOf(e.car) : -1;
+                SetText(towerTyre[r], cp == 0 ? "S" : cp == 1 ? "M" : cp == 2 ? "H" : "");
+                towerTyre[r].color = cp == 0 ? new Color(1f, 0.25f, 0.2f) : cp == 1 ? new Color(1f, 0.85f, 0.15f) : Color.white;
+                string gap;
+                if (timed)
+                {
+                    if (isMe) gap = e.bestLap > 0f ? FormatTime(e.bestLap) : "VOCÊ";
+                    else if (e.bestLap > 0f && entry.bestLap > 0f)
+                    {
+                        float d = e.bestLap - entry.bestLap;
+                        gap = (d >= 0f ? "+" : "-") + Mathf.Abs(d).ToString("0.000");
+                    }
+                    else gap = e.bestLap > 0f ? FormatTime(e.bestLap) : "--:--.---";
+                }
+                else if (isMe) gap = "VOCÊ";
+                else
+                {
+                    bool ahead = idx < me;
+                    float dd = ahead ? e.raceDistance - entry.raceDistance : entry.raceDistance - e.raceDistance;
+                    if (lapLen > 1f && dd >= lapLen)
+                    {
+                        int lapsDown = Mathf.FloorToInt(dd / lapLen);
+                        gap = (ahead ? "-" : "+") + lapsDown + (lapsDown == 1 ? " VOLTA" : " VOLTAS");
+                    }
+                    else
+                    {
+                        float g = st != null ? (ahead ? st.GapSeconds(e, entry) : st.GapSeconds(entry, e)) : 0f;
+                        gap = (ahead ? "-" : "+") + g.ToString("0.000");
+                    }
+                }
+                SetText(towerGap[r], gap);
+            }
         }
 
         void OnDestroy()
@@ -253,6 +437,9 @@ namespace RaceX.UI
                 lastPos = entry.position;
                 positionText.text = $"{entry.position}º / {race.entries.Count}";
             }
+
+            UpdateSectors();
+            UpdateTower();
 
             int kmh = Mathf.RoundToInt(car.SpeedKmh);
             if (kmh != lastSpeed)
@@ -447,6 +634,8 @@ namespace RaceX.UI
             var order = new List<string>();
             for (int i = 0; i < standings.Count; i++) order.Add(standings[i].name);
             if (careerRace) RaceX.Career.CareerMode.OnCareerSessionFinished(myPos, standings.Count, order);
+            bool realRace = race.Settings.laps < 900 && (!careerRace || careerPhase == RaceX.Career.CareerMode.PH_RACE || careerPhase == RaceX.Career.CareerMode.PH_SPRINT);
+            if (realRace && entry.finished) PodiumCelebration.Play(resultsPanel, myPos);
             for (int i = 0; i < standings.Count && i < 16; i++)
             {
                 var e = standings[i];

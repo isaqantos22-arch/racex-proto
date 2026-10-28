@@ -24,9 +24,10 @@ namespace RaceX.UI
         {
             float size = compact ? 150f : 230f;
             float s = compact ? 0.7f : 1f;
-            var bg = UIFactory.Panel("MiniMap", parent, new Vector2(1f, 1f), new Vector2(1f, 1f),
-                new Vector2(-24f, -24f - 120f * s), new Vector2(size, size), new Color(0f, 0f, 0f, 0.45f));
+            var bg = UIFactory.Panel("MiniMap", parent, new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(24f, -24f - 120f * s), new Vector2(size, size), new Color(0f, 0f, 0f, 0.45f));
             bg.raycastTarget = false;
+            bg.gameObject.AddComponent<UnityEngine.UI.RectMask2D>();
             var image = UIFactory.Panel("MiniMapTrack", bg.transform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(size, size), Color.white);
             image.raycastTarget = false;
             var mm = bg.gameObject.AddComponent<MiniMap>();

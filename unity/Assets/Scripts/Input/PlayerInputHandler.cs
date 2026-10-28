@@ -72,6 +72,8 @@ namespace RaceX.Input
 
         void Update()
         {
+            if (UnityEngine.Input.GetKeyDown(KeyCode.P) && car != null)
+                RaceX.Core.PitLaneSystem.RequestPit(car);
             if (car == null) return;
             float s = 0f, th = 0f, br = 0f;
             bool hb = false, cam = false, pz = false;

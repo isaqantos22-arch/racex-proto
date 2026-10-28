@@ -26,7 +26,7 @@ namespace RaceX.UI
             btn.colors = cb;
             if (onClick != null) btn.onClick.AddListener(() => onClick());
 
-            var lineImg = UIFactory.Panel(name + "_Line", img.transform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(2f, 2f), new Vector2(size.x - 4f, 3f), Accent);
+            var lineImg = UIFactory.Panel(name + "_Line", img.transform, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(2f, 2f), new Vector2(size.x - 4f, 3f), Accent);
             lineImg.raycastTarget = false;
             var labelT = UIFactory.Label(name + "_Label", img.transform, Spaced(label), font, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 2f), size, Text);
             labelT.raycastTarget = false;

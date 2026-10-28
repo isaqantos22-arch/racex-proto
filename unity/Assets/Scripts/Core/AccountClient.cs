@@ -82,6 +82,7 @@ namespace RaceX.Core
             public int credits;
             public int[] upgrades;
             public string careerJson;
+            public string playerPace;
         }
 
         static string BuildCloudCareerField()
@@ -91,7 +92,8 @@ namespace RaceX.Core
                 updatedTicks = CareerStats.LastUpdatedTicks > 0 ? CareerStats.LastUpdatedTicks : DateTime.UtcNow.Ticks,
                 credits = CareerStats.Credits,
                 upgrades = CareerStats.ExportUpgradesArray(),
-                careerJson = RaceX.Career.CareerMode.ExportRawJson()
+                careerJson = RaceX.Career.CareerMode.ExportRawJson(),
+                playerPace = RaceX.Car.PlayerPaceLearner.ExportAll()
             };
             string raw = JsonUtility.ToJson(bundle);
             return "B64:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(raw));
@@ -288,6 +290,7 @@ namespace RaceX.Core
                         var bundle = JsonUtility.FromJson<CloudBundle>(raw);
                         if (bundle != null)
                         {
+                            RaceX.Car.PlayerPaceLearner.ImportMerge(bundle.playerPace);
                             long localTicks = CareerStats.LastUpdatedTicks;
                             bool cloudNewer = bundle.updatedTicks >= localTicks || !RaceX.Career.CareerMode.HasSave;
                             int creditsToApply = cloudNewer ? bundle.credits : CareerStats.Credits;

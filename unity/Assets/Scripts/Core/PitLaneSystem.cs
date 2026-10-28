@@ -138,6 +138,26 @@ namespace RaceX.Core
             return st != null && (st.inPit || st.holding || st.exiting);
         }
 
+        /// <summary>Indica se o carro está dentro/saindo da garagem para a câmera de 3ª pessoa aproximar e não atravessar a parede de fundo.</summary>
+        public static bool IsInGarageView(CarController car)
+        {
+            if (instance == null || car == null) return false;
+            var st = instance.Find(car);
+            if (st == null) return false;
+            if (st.holding) return true;
+            if (st.exiting && st.routeIdx <= 1) return true;
+            if (st.inPit && !st.exiting && Vector3.Distance(car.transform.position, st.boxTarget) < 14f) return true;
+            return false;
+        }
+
+        /// <summary>Retorna o composto atual do carro (0=Macio/S, 1=Médio/M, 2=Duro/H).</summary>
+        public static int CompoundOf(CarController car)
+        {
+            if (instance == null || car == null) return 1;
+            var st = instance.Find(car);
+            return st != null ? st.compound : 1;
+        }
+
         /// <summary>Solta o JOGADOR do fluxo do pit IMEDIATAMENTE (fechou o menu da carreira, quer voltar
         /// à pista já). Sem isso o carro continuava em fila/rota com o limite de 80 km/h do pit depois
         /// do menu — a sensação de "carro limitado ao voltar". Se estiver apenas na rota de ENTRADA,
@@ -528,7 +548,14 @@ namespace RaceX.Core
             if (float.IsNaN(steer)) steer = 0f;
             st.car.extSteer = Mathf.Clamp(steer + avoidBias, -1f, 1f);
             bool ultimo = st.routeIdx >= st.route.Count - 1;
-            float targetSpeed = ultimo ? speedLimit : Mathf.Max(6.0f, Mathf.Min(speedLimit, to.magnitude * 0.55f));
+            bool penultimoEntrada = !st.exiting && st.routeIdx == st.route.Count - 2;
+            float targetSpeed;
+            if (!st.exiting && ultimo)
+                targetSpeed = Mathf.Clamp(to.magnitude * 0.40f, 2.0f, 5.0f);
+            else if (penultimoEntrada)
+                targetSpeed = Mathf.Clamp(to.magnitude * 0.45f, 4.0f, 7.5f);
+            else
+                targetSpeed = ultimo ? speedLimit : Mathf.Max(6.0f, Mathf.Min(speedLimit, to.magnitude * 0.55f));
             float turnAngle = Mathf.Abs(Vector3.SignedAngle(st.car.transform.forward, to.normalized, Vector3.up));
             if (!ultimo && turnAngle > 22f) targetSpeed = Mathf.Min(targetSpeed, 16f / 3.6f);
             if (blocker != null)
@@ -1063,10 +1090,9 @@ namespace RaceX.Core
                 toBox = st.boxTarget - st.car.transform.position; toBox.y = 0f;
                 float dBox = toBox.magnitude;
                 float speed = st.car.ForwardSpeed;
-                if (dBox > 5f)
+                if (dBox > 5.5f && st.stopTimer <= 0f)
                 {
-                    // Se o jogador estiver colado no box mas travado nos metros finais, alinha direto no box.
-                    if (st.isHuman && st.stillTimer > 1.5f && dBox < 24f)
+                    if ((st.isHuman && st.stillTimer > 1.0f && dBox < 24f) || dBox < 8.5f)
                     {
                         var pose = PitSpawnPose(e.gridSlot);
                         st.car.ResetTo(pose.position, pose.rotation);
@@ -1076,14 +1102,18 @@ namespace RaceX.Core
                     {
                         float steer = Vector3.SignedAngle(st.car.transform.forward, toBox.normalized, Vector3.up) / 30f;
                         st.car.extSteer = Mathf.Clamp(steer, -1f, 1f);
-                        float target = Mathf.Min(LaneSpeedMs, Mathf.Max(4.5f, dBox * 0.5f));
-                        st.car.extThrottle = speed < target ? 0.65f : 0f;
-                        st.car.extBrake = speed > target + 1f ? 1f : 0f;
+                        float target = Mathf.Clamp(dBox * 0.38f, 2.0f, 5.0f);
+                        st.car.extThrottle = speed < target ? 0.45f : 0f;
+                        st.car.extBrake = speed > target + 0.5f ? 1f : 0f;
                         return;
                     }
                 }
-                st.car.extThrottle = 0f;
-                st.car.extBrake = 1f;
+                if (st.stopTimer <= 0f)
+                {
+                    var pose = PitSpawnPose(e.gridSlot);
+                    st.car.ResetTo(pose.position, pose.rotation);
+                }
+                ApplyHold(st);
                 st.stopTimer += Time.deltaTime;
                 if (st.stopTimer >= StopSeconds)
                 {

@@ -3,7 +3,16 @@ using UnityEngine;
 
 namespace RaceX.Track
 {
-    public enum TrackId { ForestCircuit = 0, DesertCanyon = 1, NightCity = 2 }
+    public enum TrackId
+    {
+        ForestCircuit = 0, DesertCanyon = 1, NightCity = 2,
+        Velocita = 3, Principado = 4, Ardenne = 5, JardimDaBaia = 6,
+        GolfoReal = 7, SerraDoCafe = 8, CircuitoDoSol = 9,
+        ParqueReal = 10, DragaoOriental = 11, CornicheDaNoite = 12, PortoSul = 13,
+        IlhaDasCascatas = 14, ValeDourado = 15, ColinasVerdes = 16, CampoDoNorte = 17,
+        CurvasDoDanubio = 18, DunasDoNorte = 19, Fortaleza = 20, ColinasDoTexas = 21,
+        EstadioCentral = 22, NeonStrip = 23
+    }
 
     public class TrackDefinition
     {
@@ -35,8 +44,23 @@ namespace RaceX.Track
     {
         public static readonly TrackId[] All =
         {
-            TrackId.ForestCircuit, TrackId.DesertCanyon, TrackId.NightCity
+            TrackId.ForestCircuit, TrackId.DesertCanyon, TrackId.NightCity,
+            TrackId.Velocita, TrackId.Principado, TrackId.Ardenne, TrackId.JardimDaBaia,
+            TrackId.GolfoReal, TrackId.SerraDoCafe, TrackId.CircuitoDoSol,
+            TrackId.ParqueReal, TrackId.DragaoOriental, TrackId.CornicheDaNoite, TrackId.PortoSul,
+            TrackId.IlhaDasCascatas, TrackId.ValeDourado, TrackId.ColinasVerdes, TrackId.CampoDoNorte,
+            TrackId.CurvasDoDanubio, TrackId.DunasDoNorte, TrackId.Fortaleza, TrackId.ColinasDoTexas,
+            TrackId.EstadioCentral, TrackId.NeonStrip
         };
+
+        /// <summary>Voltas de prova REAL (regra F1: 305 km de corrida, Mônaco 260 km). Pista curta → muitas voltas.</summary>
+        public static int RealLaps(TrackId id)
+        {
+            float km = Get(id).targetLength / 1000f;
+            if (km <= 0.01f) km = 2f;
+            float raceKm = id == TrackId.Principado ? 260f : 305f;
+            return Mathf.Max(3, Mathf.CeilToInt(raceKm / km));
+        }
 
         public static TrackDefinition Get(TrackId id)
         {
@@ -102,7 +126,209 @@ namespace RaceX.Track
                         fogDensity = 0.0016f,
                         skyboxExr = "Skyboxes/sky_city.hdr",
                     };
+                case TrackId.Velocita: // Inspirada em Monza: retões, dois chicanes e curvão final
+                    return new TrackDefinition
+                    {
+                        id = TrackId.Velocita,
+                        displayName = "Velocità Park",
+                        sceneName = "Track_Velocita",
+                        targetLength = 2400f,
+                        roadWidth = 13f,
+                        controlPoints = new[]
+                        {
+                            new Vector3(0, 0, 0), new Vector3(0, 0, 220), new Vector3(-20, 0, 330), new Vector3(30, 0, 420),
+                            new Vector3(110, 0, 460), new Vector3(200, 0, 440), new Vector3(245, 0, 370), new Vector3(330, 0, 385),
+                            new Vector3(420, 0, 430), new Vector3(530, 0, 420), new Vector3(610, 0, 350), new Vector3(640, 0, 250),
+                            new Vector3(700, 0, 180), new Vector3(800, 0, 170), new Vector3(880, 0, 230), new Vector3(920, 0, 150),
+                            new Vector3(880, 0, 40), new Vector3(760, 0, -30), new Vector3(590, 0, -60), new Vector3(420, 0, -55),
+                            new Vector3(250, 0, -70), new Vector3(110, 0, -60)
+                        },
+                        groundColor = new Color(0.2f, 0.38f, 0.15f),
+                        asphaltSmoothness = 0.35f,
+                        grassBandA = new Color(0.25f, 0.48f, 0.2f),
+                        grassBandB = new Color(0.21f, 0.42f, 0.17f),
+                        sunColor = new Color(1f, 0.9f, 0.72f),
+                        sunEuler = new Vector3(42f, -25f, 0f),
+                        sunIntensity = 1.35f,
+                        ambientColor = new Color(0.55f, 0.6f, 0.68f),
+                        fogColor = new Color(0.72f, 0.79f, 0.86f),
+                        fogDensity = 0.0009f,
+                        skyboxExr = "Skyboxes/sky_forest.hdr",
+                    };
+                case TrackId.Principado: // Inspirada em Mônaco: rua estreita, 90° e um gancho
+                    return new TrackDefinition
+                    {
+                        id = TrackId.Principado,
+                        displayName = "Principado à Beira-Mar",
+                        sceneName = "Track_Principado",
+                        targetLength = 1500f,
+                        roadWidth = 10f,
+                        kerbWidth = 0.8f,
+                        runoffWidth = 3f,
+                        runoffSurface = SurfaceType.Sidewalk,
+                        controlPoints = new[]
+                        {
+                            new Vector3(0, 0, 0), new Vector3(-10, 0, 140), new Vector3(40, 0, 230), new Vector3(130, 0, 250),
+                            new Vector3(210, 0, 215), new Vector3(250, 0, 130), new Vector3(240, 0, 60), new Vector3(300, 0, 20),
+                            new Vector3(390, 0, 40), new Vector3(440, 0, 120), new Vector3(430, 0, 210), new Vector3(470, 0, 290),
+                            new Vector3(420, 0, 370), new Vector3(300, 0, 380), new Vector3(180, 0, 350), new Vector3(70, 0, 330),
+                            new Vector3(-30, 0, 280), new Vector3(-60, 0, 180), new Vector3(-55, 0, 80)
+                        },
+                        groundColor = new Color(0.32f, 0.34f, 0.38f),
+                        asphaltSmoothness = 0.55f,
+                        grassBandA = new Color(0.36f, 0.4f, 0.44f),
+                        grassBandB = new Color(0.32f, 0.36f, 0.4f),
+                        sunColor = new Color(1f, 0.88f, 0.7f),
+                        sunEuler = new Vector3(35f, -45f, 0f),
+                        sunIntensity = 1.3f,
+                        ambientColor = new Color(0.58f, 0.62f, 0.7f),
+                        fogColor = new Color(0.74f, 0.8f, 0.88f),
+                        fogDensity = 0.001f,
+                        skyboxExr = "Skyboxes/sky_city.hdr",
+                    };
+                case TrackId.Ardenne: // Inspirada em Spa: pista longa, curvas rápidas e um gancho
+                    return new TrackDefinition
+                    {
+                        id = TrackId.Ardenne,
+                        displayName = "Floresta de Ardenne",
+                        sceneName = "Track_Ardenne",
+                        targetLength = 2600f,
+                        roadWidth = 13f,
+                        controlPoints = new[]
+                        {
+                            new Vector3(0, 0, 0), new Vector3(0, 0, 180), new Vector3(35, 0, 330), new Vector3(120, 0, 430),
+                            new Vector3(250, 0, 470), new Vector3(370, 0, 430), new Vector3(430, 0, 330), new Vector3(560, 0, 300),
+                            new Vector3(690, 0, 340), new Vector3(760, 0, 250), new Vector3(700, 0, 140), new Vector3(590, 0, 110),
+                            new Vector3(560, 0, 20), new Vector3(640, 0, -60), new Vector3(560, 0, -160), new Vector3(420, 0, -180),
+                            new Vector3(300, 0, -150), new Vector3(180, 0, -170), new Vector3(60, 0, -140), new Vector3(-20, 0, -80)
+                        },
+                        groundColor = new Color(0.16f, 0.3f, 0.13f),
+                        grassBandA = new Color(0.2f, 0.4f, 0.17f),
+                        grassBandB = new Color(0.16f, 0.34f, 0.14f),
+                        sunColor = new Color(0.95f, 0.92f, 0.85f),
+                        sunEuler = new Vector3(38f, -20f, 0f),
+                        sunIntensity = 1.15f,
+                        ambientColor = new Color(0.5f, 0.56f, 0.62f),
+                        fogColor = new Color(0.68f, 0.74f, 0.8f),
+                        fogDensity = 0.0014f,
+                        skyboxExr = "Skyboxes/sky_forest.hdr",
+                    };
+                case TrackId.JardimDaBaia: // Inspirada em Singapura: urbana noturna em blocos
+                    return new TrackDefinition
+                    {
+                        id = TrackId.JardimDaBaia,
+                        displayName = "Jardim da Baía",
+                        sceneName = "Track_JardimDaBaia",
+                        targetLength = 1900f,
+                        roadWidth = 12f,
+                        runoffSurface = SurfaceType.Sidewalk,
+                        controlPoints = new[]
+                        {
+                            new Vector3(0, 0, 0), new Vector3(0, 0, 160), new Vector3(70, 0, 240), new Vector3(190, 0, 250),
+                            new Vector3(260, 0, 180), new Vector3(350, 0, 200), new Vector3(380, 0, 300), new Vector3(490, 0, 320),
+                            new Vector3(560, 0, 240), new Vector3(540, 0, 130), new Vector3(590, 0, 40), new Vector3(520, 0, -40),
+                            new Vector3(390, 0, -30), new Vector3(300, 0, -90), new Vector3(180, 0, -80), new Vector3(80, 0, -60)
+                        },
+                        groundColor = new Color(0.1f, 0.11f, 0.13f),
+                        asphaltColor = new Color(0.13f, 0.13f, 0.15f),
+                        asphaltSmoothness = 0.5f,
+                        grassBandA = new Color(0.3f, 0.32f, 0.35f),
+                        grassBandB = new Color(0.26f, 0.28f, 0.31f),
+                        sunColor = new Color(0.6f, 0.7f, 1f),
+                        sunEuler = new Vector3(36f, 145f, 0f),
+                        sunIntensity = 0.5f,
+                        ambientColor = new Color(0.18f, 0.2f, 0.3f),
+                        fogColor = new Color(0.03f, 0.05f, 0.09f),
+                        fogDensity = 0.0015f,
+                        skyboxExr = "Skyboxes/sky_city.hdr",
+                    };
+                case TrackId.GolfoReal: // Inspirada no Bahrain: deserto, freadas fortes
+                    return new TrackDefinition
+                    {
+                        id = TrackId.GolfoReal,
+                        displayName = "Golfo Real",
+                        sceneName = "Track_GolfoReal",
+                        targetLength = 2100f,
+                        roadWidth = 13f,
+                        runoffSurface = SurfaceType.SandDirt,
+                        controlPoints = new[]
+                        {
+                            new Vector3(0, 0, 0), new Vector3(0, 0, 170), new Vector3(60, 0, 280), new Vector3(170, 0, 310),
+                            new Vector3(280, 0, 260), new Vector3(320, 0, 150), new Vector3(300, 0, 60), new Vector3(380, 0, 0),
+                            new Vector3(490, 0, 30), new Vector3(560, 0, 120), new Vector3(660, 0, 90), new Vector3(700, 0, -10),
+                            new Vector3(640, 0, -110), new Vector3(510, 0, -140), new Vector3(380, 0, -120), new Vector3(240, 0, -140),
+                            new Vector3(110, 0, -110)
+                        },
+                        groundColor = new Color(0.72f, 0.52f, 0.3f),
+                        asphaltColor = new Color(0.26f, 0.22f, 0.19f),
+                        asphaltSmoothness = 0.2f,
+                        grassBandA = new Color(0.78f, 0.58f, 0.36f),
+                        grassBandB = new Color(0.7f, 0.5f, 0.3f),
+                        sunColor = new Color(1f, 0.83f, 0.58f),
+                        sunEuler = new Vector3(50f, -40f, 0f),
+                        sunIntensity = 1.5f,
+                        ambientColor = new Color(0.62f, 0.52f, 0.44f),
+                        fogColor = new Color(0.87f, 0.7f, 0.48f),
+                        fogDensity = 0.0012f,
+                        skyboxExr = "Skyboxes/sky_desert.hdr",
+                    };
+                case TrackId.SerraDoCafe: // Inspirada em Interlagos: compacta, anti-horária, S inicial
+                    return new TrackDefinition
+                    {
+                        id = TrackId.SerraDoCafe,
+                        displayName = "Serra do Café",
+                        sceneName = "Track_SerraDoCafe",
+                        targetLength = 1600f,
+                        roadWidth = 13f,
+                        controlPoints = new[]
+                        {
+                            new Vector3(0, 0, 0), new Vector3(-40, 0, 130), new Vector3(-120, 0, 190), new Vector3(-220, 0, 160),
+                            new Vector3(-260, 0, 60), new Vector3(-220, 0, -40), new Vector3(-240, 0, -140), new Vector3(-160, 0, -220),
+                            new Vector3(-40, 0, -210), new Vector3(60, 0, -250), new Vector3(170, 0, -220), new Vector3(220, 0, -120),
+                            new Vector3(180, 0, -20), new Vector3(220, 0, 80), new Vector3(150, 0, 160), new Vector3(60, 0, 190),
+                            new Vector3(20, 0, 100)
+                        },
+                        groundColor = new Color(0.2f, 0.42f, 0.16f),
+                        grassBandA = new Color(0.24f, 0.5f, 0.2f),
+                        grassBandB = new Color(0.2f, 0.44f, 0.17f),
+                        sunColor = new Color(1f, 0.88f, 0.66f),
+                        sunEuler = new Vector3(44f, -55f, 0f),
+                        sunIntensity = 1.4f,
+                        ambientColor = new Color(0.55f, 0.58f, 0.62f),
+                        fogColor = new Color(0.74f, 0.78f, 0.8f),
+                        fogDensity = 0.0011f,
+                        skyboxExr = "Skyboxes/sky_forest.hdr",
+                    };
+                case TrackId.CircuitoDoSol: // Inspirada em Suzuka (sem cruzamento): serpentário + alça longa
+                    return new TrackDefinition
+                    {
+                        id = TrackId.CircuitoDoSol,
+                        displayName = "Circuito do Sol",
+                        sceneName = "Track_CircuitoDoSol",
+                        targetLength = 2300f,
+                        roadWidth = 12f,
+                        controlPoints = new[]
+                        {
+                            new Vector3(0, 0, 0), new Vector3(0, 0, 150), new Vector3(50, 0, 250), new Vector3(140, 0, 280),
+                            new Vector3(220, 0, 240), new Vector3(250, 0, 150), new Vector3(320, 0, 110), new Vector3(410, 0, 140),
+                            new Vector3(450, 0, 230), new Vector3(540, 0, 260), new Vector3(630, 0, 220), new Vector3(670, 0, 120),
+                            new Vector3(740, 0, 60), new Vector3(830, 0, 90), new Vector3(860, 0, 0), new Vector3(790, 0, -110),
+                            new Vector3(650, 0, -160), new Vector3(500, 0, -130), new Vector3(360, 0, -170), new Vector3(220, 0, -150),
+                            new Vector3(90, 0, -100)
+                        },
+                        groundColor = new Color(0.24f, 0.4f, 0.18f),
+                        grassBandA = new Color(0.28f, 0.46f, 0.22f),
+                        grassBandB = new Color(0.24f, 0.4f, 0.19f),
+                        sunColor = new Color(1f, 0.92f, 0.75f),
+                        sunEuler = new Vector3(40f, -30f, 0f),
+                        sunIntensity = 1.3f,
+                        ambientColor = new Color(0.56f, 0.6f, 0.66f),
+                        fogColor = new Color(0.73f, 0.79f, 0.85f),
+                        fogDensity = 0.001f,
+                        skyboxExr = "Skyboxes/sky_forest.hdr",
+                    };
                 default:
+                    if (TrackLibraryExtra.TryGet(id, out var extra)) return extra;
                     return new TrackDefinition
                     {
                         id = TrackId.ForestCircuit,

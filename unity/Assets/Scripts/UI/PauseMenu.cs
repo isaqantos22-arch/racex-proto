@@ -119,9 +119,7 @@ namespace RaceX.UI
 
         void ChangeControlMode(int delta)
         {
-            int count = ControlNames.Length;
-            int next = ((int)SettingsManager.ControlMode + delta % count + count) % count;
-            SettingsManager.ControlMode = (ControlMode)next;
+            SettingsManager.ControlMode = SettingsManager.ControlMode == ControlMode.Buttons ? ControlMode.Joystick : ControlMode.Buttons;
             TouchControlsUI.ApplyModeToAll(SettingsManager.ControlMode);
             RefreshControlsLabel();
         }

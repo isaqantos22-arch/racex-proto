@@ -20,7 +20,13 @@ namespace RaceX.Core
         {
             Time.timeScale = 1f;
             GameManager.Instance.settings = settings;
-            Load(TrackLibrary.Get(settings.track).sceneName, typeof(RaceBootstrap));
+            var sceneName = TrackLibrary.Get(settings.track).sceneName;
+            if (Application.CanStreamedLevelBeLoaded(sceneName))
+            {
+                LoadingScreen.Show(sceneName, settings);
+                return;
+            }
+            Load(sceneName, typeof(RaceBootstrap));
         }
 
         public static void ReloadCurrent()

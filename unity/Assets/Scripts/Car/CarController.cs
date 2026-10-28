@@ -421,12 +421,49 @@ namespace RaceX.Car
                 rb.AddTorque(transform.up * (-Mathf.Sign(slip) * (Mathf.Abs(slip) - 16f) * 0.03f * spec.massKg * assistLevel * grip), ForceMode.Force);
         }
 
+        // ---- Vácuo (slipstream): físico, vale igual para jogador e IA ----
+        static readonly System.Collections.Generic.List<CarController> allCars = new System.Collections.Generic.List<CarController>();
+        void OnEnable() { if (!allCars.Contains(this)) allCars.Add(this); }
+        void OnDisable() { allCars.Remove(this); }
+        float slipTimer;
+        /// <summary>0 = sem vácuo, 1 = vácuo máximo (redução de arrasto de 35%).</summary>
+        public float Slipstream { get; private set; }
+        void UpdateSlipstream()
+        {
+            slipTimer -= Time.fixedDeltaTime;
+            if (slipTimer > 0f) return;
+            slipTimer = 0.1f; // 10 Hz basta
+            float best = 0f;
+            float mySpeed = ForwardSpeed;
+            if (mySpeed > 20f && GroundedWheels > 0)
+            {
+                Vector3 myPos = transform.position;
+                for (int i = 0; i < allCars.Count; i++)
+                {
+                    var o = allCars[i];
+                    if (o == null || o == this || o.ForwardSpeed < 20f) continue;
+                    Vector3 d = o.transform.position - myPos;
+                    if (d.sqrMagnitude > 900f) continue;
+                    Vector3 local = transform.InverseTransformDirection(d);
+                    if (local.z < 3f || local.z > 25f || Mathf.Abs(local.x) > 1.6f) continue;
+                    if (Vector3.Dot(o.transform.forward, transform.forward) < 0.9f) continue;
+                    // mais forte de perto (~5 m), some a 25 m
+                    float f = 1f - Mathf.Clamp01((local.z - 5f) / 20f);
+                    f *= 1f - Mathf.Abs(local.x) / 1.6f * 0.5f;
+                    if (f > best) best = f;
+                }
+            }
+            Slipstream = best;
+        }
+
         void ApplyDownforce()
         {
             Vector3 v = Velocity;
             float speedSq = v.sqrMagnitude;
             if (GroundedWheels > 0) rb.AddForce(-transform.up * spec.downforceCoefficient * speedSq, ForceMode.Force);
-            rb.AddForce(-v.normalized * 0.5f * 1.2f * spec.dragCoefficient * speedSq * 0.5f, ForceMode.Force);
+            UpdateSlipstream();
+            float dragMul = 1f - 0.35f * Slipstream;
+            rb.AddForce(-v.normalized * 0.5f * 1.2f * spec.dragCoefficient * speedSq * 0.5f * dragMul, ForceMode.Force);
         }
 
         void ApplyAntiRoll()

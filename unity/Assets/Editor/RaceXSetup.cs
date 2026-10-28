@@ -63,6 +63,12 @@ namespace RaceX.EditorTools
         {
             Setup();
             RaceXOptimize.OptimizeAll();
+            var jdk = System.Environment.GetEnvironmentVariable("RACEX_JDK");
+            var sdk = System.Environment.GetEnvironmentVariable("RACEX_SDK");
+            var ndk = System.Environment.GetEnvironmentVariable("RACEX_NDK");
+            if (!string.IsNullOrEmpty(jdk)) UnityEditor.Android.AndroidExternalToolsSettings.jdkRootPath = jdk;
+            if (!string.IsNullOrEmpty(sdk)) UnityEditor.Android.AndroidExternalToolsSettings.sdkRootPath = sdk;
+            if (!string.IsNullOrEmpty(ndk)) UnityEditor.Android.AndroidExternalToolsSettings.ndkRootPath = ndk;
             EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTarget.Android);
             try { EditorUserBuildSettings.androidBuildSubtarget = MobileTextureSubtarget.ASTC; }
             catch (System.Exception ex) { Debug.LogWarning("RaceX: não aplicou ASTC (" + ex.Message + ")."); }

@@ -78,6 +78,43 @@ namespace RaceX.EditorTools
             EditorApplication.Exit(0);
         }
 
+        public static void RenderDrivers()
+        {
+            var dir = Path.Combine(Application.dataPath, "../../shots_driver");
+            Directory.CreateDirectory(dir);
+            var light = new GameObject("L").AddComponent<Light>();
+            light.type = LightType.Directional;
+            light.intensity = 1.2f;
+            light.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+            RenderSettings.ambientLight = new Color(0.55f, 0.55f, 0.6f);
+            var ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
+            ground.transform.localScale = Vector3.one * 5f;
+            var camGo = new GameObject("Cam");
+            var cam = camGo.AddComponent<Camera>();
+            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.backgroundColor = new Color(0.3f, 0.35f, 0.45f);
+            cam.fieldOfView = 30f;
+            cam.nearClipPlane = 0.05f;
+            var rt = new RenderTexture(800, 500, 24);
+            cam.targetTexture = rt;
+            var models = new[] { CarModel.F1, CarModel.F2008, CarModel.F1Studio, CarModel.Ferrari, CarModel.Titan, CarModel.Mustang };
+            foreach (var m in models)
+            {
+                var spec = CarSpec.CreateDefault(m);
+                var car = CarFactory.Create(spec, 0, "Car_" + m, new Vector3(0f, spec.wheelRadius, 0f), Quaternion.identity);
+                var rb = car.GetComponent<Rigidbody>(); if (rb != null) rb.isKinematic = true;
+                var eye = car.GetComponent<CarVisuals>().eyeAnchor.position;
+                var drv = car.transform.Find("Driver");
+                Debug.Log("DRVDIAG " + m + " eye=" + eye.ToString("F2") + " driver=" + (drv != null ? drv.position.ToString("F2") + " active=" + drv.gameObject.activeInHierarchy : "NULL") + " head=" + (car.GetComponent<CarVisuals>().driverHead != null));
+                Shot(cam, rt, eye + new Vector3(1.6f, 0.9f, -2.4f), eye + new Vector3(0f, -0.15f, 0f), Path.Combine(dir, m + "_rear34.png"));
+                Shot(cam, rt, eye + new Vector3(2.6f, 0.25f, 0.2f), eye + new Vector3(0f, -0.15f, 0f), Path.Combine(dir, m + "_side.png"));
+                Shot(cam, rt, eye + new Vector3(-1.2f, 1.1f, 2.2f), eye + new Vector3(0f, -0.15f, 0f), Path.Combine(dir, m + "_front34.png"));
+                Shot(cam, rt, eye + new Vector3(0f, 0.8f, -6f), eye + new Vector3(0f, -0.1f, 0f), Path.Combine(dir, m + "_chase.png"));
+                Object.DestroyImmediate(car.gameObject);
+            }
+            EditorApplication.Exit(0);
+        }
+
         static void Shot(Camera cam, RenderTexture rt, Vector3 pos, Vector3 target, string path)
         {
             cam.transform.position = pos;

@@ -47,6 +47,7 @@ namespace RaceX.Core
             {
                 runner.playerModel = (CarModel)settings.players[0].car; // pré-carga o FBX do jogador AINDA no loading (barra real), nunca na ativação
                 runner.formulaOnly = settings.formulaOnly;
+                runner.npcCount = settings.mode == GameMode.Online ? 0 : Mathf.Max(0, settings.totalCars - settings.HumanCount);
             }
         }
     }
@@ -57,6 +58,7 @@ namespace RaceX.Core
         public CarModel playerModel = (CarModel)(-1);
         public bool formulaOnly;
         public bool realBar = true;
+        public int npcCount;
 
         Text dicaText, pctText;
         Image fill;
@@ -150,13 +152,13 @@ namespace RaceX.Core
             float phaseA0 = Time.unscaledTime;
             while (op.progress < 0.9f)
             {
-                SetProgress(op.progress / 0.9f * 0.55f);
+                SetProgress(op.progress / 0.9f * 0.15f);
                 float bucket = Mathf.Floor(op.progress / 0.9f / 0.15f);
                 if (bucket > lastBucket) { lastBucket = bucket; TrocaDica(); }
                 if (Time.unscaledTime - phaseA0 > 30f) break; // trava da cena: segue sem esperar
                 yield return null;
             }
-            SetProgress(0.55f);
+            SetProgress(0.15f);
             if (!op.isDone)
             {
                 var models = new List<CarModel>();
@@ -165,23 +167,22 @@ namespace RaceX.Core
                 {
                     if (!models.Contains(CarModel.F1)) models.Add(CarModel.F1);
                 }
-                else
+                else if (npcCount > 0)
                 {
-                    foreach (CarModel m in (CarModel[])System.Enum.GetValues(typeof(CarModel)))
-                        if ((m != CarModel.F1 || SettingsManager.AllowF1) && !models.Contains(m))
-                            models.Add(m);
+                    foreach (var m in RaceBootstrap.PlanNpcModels(npcCount, false))
+                        if (!models.Contains(m)) models.Add(m);
                 }
                 if (models.Count > 0)
                 {
                     if (dicaText != null) dicaText.text = "CARREGANDO CARROS...";
-                    float span = 0.35f / models.Count;
+                    float span = 0.75f / models.Count;
                     for (int i = 0; i < models.Count; i++)
                     {
                         // Pré-carga COM PRAZO (15 s por modelo): PrewarmAsync sempre termina, mas
                         // o prazo garante que nenhum LoadAsync lento pendure o loading inteiro.
                         int idx = i;
                         float m0 = Time.unscaledTime;
-                        var pre = ImportedCarModels.PrewarmAsync(models[idx], p => SetProgress(0.55f + (idx + Mathf.Clamp01(p)) * span));
+                        var pre = ImportedCarModels.PrewarmAsync(models[idx], p => SetProgress(0.15f + (idx + Mathf.Clamp01(p)) * span));
                         while (pre.MoveNext())
                         {
                             if (Time.unscaledTime - m0 > 15f) break;

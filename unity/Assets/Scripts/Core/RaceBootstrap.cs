@@ -25,6 +25,7 @@ namespace RaceX.Core
 
         void Start()
         {
+            var swBoot = System.Diagnostics.Stopwatch.StartNew();
             var settings = GameManager.Settings;
             bool split = settings.mode == GameMode.LocalSplitScreen;
             bool online = settings.mode == GameMode.Online;
@@ -35,6 +36,7 @@ namespace RaceX.Core
             var def = TrackLibrary.Get(settings.track);
             SetupEnvironment(def);
             var track = TrackBuilder.Build(def);
+            long msTrack = swBoot.ElapsedMilliseconds;
 
             var race = new GameObject("RaceManager").AddComponent<RaceManager>();
             race.Initialize(track, settings);
@@ -43,8 +45,11 @@ namespace RaceX.Core
             {
                 var pitGo = new GameObject("PitLaneSystem");
                 pit = pitGo.AddComponent<RaceX.Core.PitLaneSystem>();
+                // Um box POR CARRO (sem teto): com 24 carros em 16 boxes, os slots 16–23 nasciam
+                // SOBRE os boxes 0–7 (pares de carros colados). Tem que vir ANTES do Setup:
+                // o lane se dimensiona pelo nº de boxes.
+                pit.boxCount = Mathf.Max(settings.totalCars, 4);
                 pit.Setup(race);
-                pit.boxCount = Mathf.Clamp(settings.totalCars, 4, 24); // nº de boxes = nº de carros da sessão
             }
             // Treino livre da carreira (sex/sáb): todos NASEM no pit, saída em fila.
             bool pitStart = pit != null && settings.laps >= 900;
@@ -73,7 +78,10 @@ namespace RaceX.Core
                     int hSlot = careerGridNames.IndexOf(settings.players[0].name);
                     slots[0] = Mathf.Clamp(hSlot, 0, total - 1);
                 }
-                var models = PickNpcModels(total - settings.HumanCount, settings.formulaOnly, SettingsManager.AllowF1);
+                var models = (PlannedNpcModels != null && PlannedNpcModels.Count == total - settings.HumanCount)
+                    ? PlannedNpcModels
+                    : PickNpcModels(total - settings.HumanCount, settings.formulaOnly, SettingsManager.AllowF1);
+                PlannedNpcModels = null;
                 // Carreira: IAs recebem os nomes dos rivais da temporada (ordem fixa do roster),
                 // para que a classificação da corrida pontue a tabela real.
                 var names = (RaceX.Career.CareerData.raceActive && RaceX.Career.CareerMode.RaceRoster != null
@@ -98,6 +106,8 @@ namespace RaceX.Core
                         : (settings.formulaOnly ? CarModel.F1 : (!SettingsManager.AllowF1 && ps.car == CarModel.F1 ? CarModel.Titan : ps.car));
                     var hspec = CarSpec.CreateDefault(humanModel);
                     CareerStats.ApplyUpgrades(hspec);
+                    if (RaceX.Career.CareerData.raceActive && RaceX.Career.CareerMode.data != null)
+                        RaceX.Career.CareerMode.ApplyTeamPerformance(hspec, RaceX.Career.CareerMode.data.f2Team);
                     humans.Add(race.SpawnCar(hspec, ps.colorIndex, ps.name, slots[p], true, p, PitPose(slots[p])));
                 }
 
@@ -112,7 +122,10 @@ namespace RaceX.Core
                     var carModel = RaceX.Career.CareerData.raceActive
                         ? RaceX.Career.CareerMode.CarForDriver(names[npc % names.Count])
                         : models[npc];
-                    var entry = race.SpawnCar(CarSpec.CreateDefault(carModel), c, names[npc % names.Count], slot, false, -1, PitPose(slot));
+                    var nspec = CarSpec.CreateDefault(carModel);
+                    if (RaceX.Career.CareerData.raceActive)
+                        RaceX.Career.CareerMode.ApplyTeamPerformance(nspec, RaceX.Career.CareerMode.TeamOfDriver(names[npc % names.Count]));
+                    var entry = race.SpawnCar(nspec, c, names[npc % names.Count], slot, false, -1, PitPose(slot));
                     var ai = entry.car.gameObject.AddComponent<CarAI>();
                     ai.Initialize(track.Waypoints, race, settings.difficulty,
                         RaceX.Career.CareerData.raceActive ? RaceX.Career.CareerMode.SkillBiasFor(names[npc % names.Count]) : 0f);
@@ -124,6 +137,7 @@ namespace RaceX.Core
 
             foreach (var e in race.entries) EngineAudio.Attach(e.car, e.isHuman);
             foreach (var e in race.entries) VisualEffects.Attach(e.car);
+            Debug.Log("[BOOT] pista=" + msTrack + "ms total_ate_efeitos=" + swBoot.ElapsedMilliseconds + "ms carros=" + race.entries.Count);
             // SkidMarks desativado: Shader do material chega null no player (1673x ArgumentNullException quebra som/pause no deserto). Reativar apos fix do material.
             // foreach (var e in race.entries) RaceX.Track.SkidMarks.Attach(e.car);
 
@@ -258,6 +272,12 @@ namespace RaceX.Core
             var input = entry.car.gameObject.AddComponent<PlayerInputHandler>();
             input.car = entry.car;
             input.carCamera = carCam;
+            if (entry.playerIndex == 0 && race.Track != null && race.Track.Waypoints != null && race.Settings != null)
+            {
+                entry.car.gameObject.AddComponent<RaceX.Car.PlayerPaceRecorder>().Initialize(entry.car, race.Track.Waypoints, race, (int)race.Settings.track);
+                try { entry.car.gameObject.AddComponent<RaceX.Track.RacingLineGuide>().Initialize(entry.car, race); }
+                catch (System.Exception ex) { Debug.LogWarning("[RacingLine] " + ex.Message); }
+            }
             input.touch = touch;
 #if ENABLE_INPUT_SYSTEM
             if (split)
@@ -334,6 +354,14 @@ namespace RaceX.Core
         }
 
         /// <summary>Sorteia modelos sem que um modelo passe de 50% dos NPCs.</summary>
+        public static List<CarModel> PlannedNpcModels;
+
+        public static List<CarModel> PlanNpcModels(int count, bool formulaOnly)
+        {
+            PlannedNpcModels = PickNpcModels(count, formulaOnly, SettingsManager.AllowF1);
+            return PlannedNpcModels;
+        }
+
         static List<CarModel> PickNpcModels(int count, bool formulaOnly, bool allowF1)
         {
             var list = new List<CarModel>();
@@ -344,6 +372,7 @@ namespace RaceX.Core
             }
             var pool = new List<CarModel>((CarModel[])System.Enum.GetValues(typeof(CarModel)));
             if (!allowF1) pool.Remove(CarModel.F1);
+            while (pool.Count > 4) pool.RemoveAt(Random.Range(0, pool.Count));
             int cap = Mathf.Max(1, Mathf.CeilToInt(count * 0.5f));
             var counts = new int[pool.Count];
             for (int i = 0; i < count; i++)

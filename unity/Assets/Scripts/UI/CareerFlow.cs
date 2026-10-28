@@ -34,12 +34,14 @@ namespace RaceX.UI
                 if (old != null && old.gameObject.name == "CareerCanvas")
                     UnityEngine.Object.Destroy(old.gameObject);
             canvas = UIFactory.CreateCanvas("CareerCanvas", 50);
-            var bg = UIFactory.Panel("CareerBg", canvas.transform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero, MenuTheme.Bg);
+            BuildOffice(canvas.transform);
+            var bg = UIFactory.Panel("CareerBg", canvas.transform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero, new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.88f));
             bg.raycastTarget = true;
             var bgRt = (RectTransform)bg.transform;
             bgRt.anchorMin = Vector2.zero;
             bgRt.anchorMax = Vector2.one;
             bgRt.sizeDelta = Vector2.zero;
+            BuildBezel(canvas.transform);
             content = UIFactory.Stretch("CareerContent", canvas.transform);
             UIFactory.ApplySafeArea(content, new Rect(0f, 0f, 1f, 1f));
             // Esconde a UI do menu principal enquanto a carreira estiver aberta
@@ -55,6 +57,66 @@ namespace RaceX.UI
                 CareerMode.data = null; // descarta carreira parcial de um quiz interrompido
                 ShowCreate();
             }
+        }
+
+        static Image FullPanel(string name, Transform parent, Color col)
+        {
+            var img = UIFactory.Panel(name, parent, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero, col);
+            var rt = (RectTransform)img.transform;
+            rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one; rt.sizeDelta = Vector2.zero;
+            return img;
+        }
+
+        /// <summary>Fundo de "sala da equipe": parede, faixas de luz do box e silhuetas da equipe atrás do monitor.</summary>
+        static void BuildOffice(Transform parent)
+        {
+            var room = FullPanel("Office", parent, new Color(0.07f, 0.08f, 0.11f, 1f));
+            var rt = (RectTransform)room.transform;
+            var top = new Vector2(0.5f, 1f);
+            var bottom = new Vector2(0.5f, 0f);
+            UIFactory.Panel("WallUpper", rt, top, top, Vector2.zero, new Vector2(2400f, 420f), new Color(0.11f, 0.12f, 0.16f, 1f));
+            for (int i = 0; i < 4; i++)
+                UIFactory.Panel("LightStrip" + i, rt, top, top, new Vector2(-720f + i * 480f, -40f), new Vector2(320f, 10f), new Color(0.9f, 0.93f, 1f, 0.55f));
+            UIFactory.Panel("Floor", rt, bottom, bottom, Vector2.zero, new Vector2(2400f, 230f), new Color(0.045f, 0.05f, 0.065f, 1f));
+            UIFactory.Panel("FloorLine", rt, bottom, bottom, new Vector2(0f, 228f), new Vector2(2400f, 3f), new Color(MenuTheme.Accent.r, MenuTheme.Accent.g, MenuTheme.Accent.b, 0.35f));
+            float[] xs = { -760f, -470f, -150f, 180f, 500f, 790f };
+            float[] hs = { 520f, 600f, 560f, 620f, 540f, 580f };
+            var headSprite = MenuTheme.RoundedSprite(32, 32, 16);
+            var bodySprite = MenuTheme.RoundedSprite(60, 90, 26);
+            for (int i = 0; i < xs.Length; i++)
+            {
+                float h = hs[i];
+                var shirt = i % 2 == 0 ? new Color(0.16f, 0.17f, 0.22f, 1f) : new Color(MenuTheme.AccentDim.r * 0.55f, MenuTheme.AccentDim.g * 0.55f, MenuTheme.AccentDim.b * 0.55f, 1f);
+                var body = UIFactory.Panel("Crew" + i, rt, bottom, bottom, new Vector2(xs[i], 120f), new Vector2(190f, h - 140f), shirt);
+                body.sprite = bodySprite;
+                var head = UIFactory.Panel("CrewHead" + i, rt, bottom, bottom, new Vector2(xs[i], 120f + h - 150f), new Vector2(96f, 110f), new Color(0.13f, 0.12f, 0.12f, 1f));
+                head.sprite = headSprite;
+            }
+        }
+
+        /// <summary>Moldura do monitor por cima das bordas da tela (não move nenhum elemento do hub).</summary>
+        static void BuildBezel(Transform parent)
+        {
+            var frame = UIFactory.Stretch("Bezel", parent);
+            var col = new Color(0.02f, 0.02f, 0.025f, 1f);
+            const float t = 14f;
+            var specs = new[]
+            {
+                (new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, t)),
+                (new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, t + 8f)),
+                (new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(0f, 0.5f), new Vector2(t, 0f)),
+                (new Vector2(1f, 0f), new Vector2(1f, 1f), new Vector2(1f, 0.5f), new Vector2(t, 0f))
+            };
+            for (int i = 0; i < specs.Length; i++)
+            {
+                var s = specs[i];
+                var r = UIFactory.Rect("BezelSide" + i, frame, s.Item1, s.Item2, s.Item3, Vector2.zero, s.Item4);
+                var img = r.gameObject.AddComponent<Image>();
+                img.color = col;
+                img.raycastTarget = false;
+            }
+            var led = UIFactory.Panel("BezelLed", frame, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 8f), new Vector2(8f, 6f), new Color(0.3f, 1f, 0.45f, 0.9f));
+            led.sprite = MenuTheme.RoundedSprite(8, 6, 3);
         }
 
         static void Close()
@@ -173,21 +235,21 @@ namespace RaceX.UI
             var c = new Vector2(0.5f, 0.5f);
             var s = Screen();
             MenuTheme.Header(s, "SUA CARREIRA");
-            MenuTheme.SubHeader(s, "Onde você vai correr? Comece em baixo — ninguém começa na ponta.");
+            UIFactory.Label("PathSub", s, "ONDE VOCÊ VAI CORRER? COMECE EM BAIXO — NINGUÉM COMEÇA NA PONTA.", 30, TextAnchor.MiddleCenter, c, c, new Vector2(0f, 250f), new Vector2(1500f, 44f), MenuTheme.TextDim);
 
-            MenuTheme.StyledButton(s, "PathGT", "GT — CARROS DE RUA", c, c, new Vector2(0f, 40f), new Vector2(640f, 110f), 30, () =>
+            MenuTheme.StyledButton(s, "PathGT", "GT SÉRIE WORLD", c, c, new Vector2(0f, 130f), new Vector2(760f, 110f), 30, () =>
             {
                 pathChoiceOpen = false;
                 CareerMode.ChoosePath(true);
                 ShowQuiz();
             });
-            MenuTheme.StyledButton(s, "PathF1", "FÓRMULA — MONOPOSTO", c, c, new Vector2(0f, -90f), new Vector2(640f, 110f), 30, () =>
+            MenuTheme.StyledButton(s, "PathF1", "FÓRMULA F1 MUNDIAL", c, c, new Vector2(0f, -40f), new Vector2(760f, 110f), 30, () =>
             {
                 pathChoiceOpen = false;
                 CareerMode.ChoosePath(false);
                 ShowQuiz();
             });
-            var back = MenuTheme.StyledButton(s, "PathBack", "VOLTAR", c, c, new Vector2(0f, -210f), new Vector2(420f, 70f), 26, () =>
+            var back = MenuTheme.StyledButton(s, "PathBack", "VOLTAR", c, c, new Vector2(0f, -230f), new Vector2(420f, 70f), 26, () =>
             {
                 pathChoiceOpen = false;
                 ShowCreate();
@@ -215,13 +277,13 @@ namespace RaceX.UI
                 seg.raycastTarget = false;
             }
             UIFactory.Label("QuestionCount", s, "PERGUNTA " + (quizIndex + 1) + "/" + CareerQuizData.All.Length, 26, TextAnchor.MiddleCenter, top, top, new Vector2(0f, -224f), new Vector2(600f, 36f), MenuTheme.TextDim);
-            var promptT = UIFactory.Label("Prompt", s, q.prompt, 34, TextAnchor.MiddleCenter, top, top, new Vector2(0f, -310f), new Vector2(1720f, 170f), MenuTheme.Text);
+            var promptT = UIFactory.Label("Prompt", s, q.prompt, 34, TextAnchor.MiddleCenter, c, c, new Vector2(0f, 200f), new Vector2(1500f, 150f), MenuTheme.Text);
             promptT.horizontalOverflow = HorizontalWrapMode.Wrap;
 
             for (int i = 0; i < q.options.Length; i++)
             {
                 int opt = i;
-                var btn = MenuTheme.StyledButton(s, "Opt" + opt, q.options[opt].text, c, c, new Vector2(0f, -70f - opt * 104f), new Vector2(1400f, 90f), 22, () => Answer(opt));
+                var btn = MenuTheme.StyledButton(s, "Opt" + opt, q.options[opt].text, c, c, new Vector2(0f, 60f - opt * 104f), new Vector2(1400f, 90f), 22, () => Answer(opt));
                 var optT = btn.GetComponentInChildren<Text>();
                 if (optT != null) optT.horizontalOverflow = HorizontalWrapMode.Wrap;
             }
@@ -293,7 +355,7 @@ namespace RaceX.UI
             var d = CareerMode.data;
             var c = new Vector2(0.5f, 0.5f);
             var s = Screen();
-            MenuTheme.Header(s, "PROPOSTAS DE CONTRATO — " + (d.category == "F1" ? "FÓRMULA 1" : "FÓRMULA 2"));
+            MenuTheme.Header(s, "PROPOSTAS DE CONTRATO — " + (d.category == "F1" ? "FÓRMULA 1" : d.category == "GT" ? "GT" : "FÓRMULA 2"));
             UIFactory.Label("OffersIntro", s, d.category == "F1"
                 ? "VOCÊ SUBIU PARA A F1! AS EQUIPES QUE ACREDITAM EM VOCÊ OFERECEM:"
                 : "NINGUÉM TE CONHECE AINDA — SÓ AS EQUIPES DE FUNDO DE GRADE OFERECEM CONTRATO:", 28, TextAnchor.MiddleCenter, c, c, new Vector2(0f, 240f), new Vector2(1600f, 50f), MenuTheme.TextDim);
@@ -335,10 +397,13 @@ namespace RaceX.UI
             if (champPos >= 0)
                 UIFactory.Label("ChampPos", s, "VOCÊ É " + (champPos + 1) + "º NO CAMPEONATO (tabela da temporada) — a posição da SESSÃO atual aparece no resultado dela", 17, TextAnchor.MiddleCenter, top, top, new Vector2(0f, -218f), new Vector2(1700f, 26f), new Color(0.8f, 0.8f, 0.8f));
 
-            // Relógio REAL da sessão correndo (treino/quali): conta mesmo dentro do menu.
+            // Relógio REAL da sessão correndo (treino/quali): conta ao vivo mesmo dentro do menu.
             int sessLeft = CareerMode.SessionSecondsLeft();
             if (sessLeft > 0)
-                UIFactory.Label("SessionClock", s, "SESSÃO TERMINA EM  " + sessLeft / 60 + ":" + (sessLeft % 60).ToString("00"), 22, TextAnchor.MiddleCenter, top, top, new Vector2(0f, -244f), new Vector2(1400f, 34f), new Color(1f, 0.55f, 0.1f));
+            {
+                var clockLbl = UIFactory.Label("SessionClock", s, "SESSÃO TERMINA EM  " + sessLeft / 60 + ":" + (sessLeft % 60).ToString("00"), 22, TextAnchor.MiddleCenter, top, top, new Vector2(0f, -244f), new Vector2(1400f, 34f), new Color(1f, 0.55f, 0.1f));
+                clockLbl.gameObject.AddComponent<SessionClockTicker>().label = clockLbl;
+            }
 
             // 24 pilotos EM 2 COLUNAS (12 à esquerda + 12 à direita) — tudo numa tela, sem rolar.
             bool showTeams = showTeamsTab;
@@ -487,6 +552,24 @@ namespace RaceX.UI
         {
             CareerMode.Delete();
             ShowCreate();
+        }
+    }
+
+    internal class SessionClockTicker : MonoBehaviour
+    {
+        public Text label;
+        int lastSec = -1;
+
+        void Update()
+        {
+            if (label == null) return;
+            int sec = CareerMode.SessionSecondsLeft();
+            if (sec == lastSec) return;
+            lastSec = sec;
+            if (sec > 0)
+                label.text = "SESSÃO TERMINA EM  " + (sec / 60) + ":" + (sec % 60).ToString("00");
+            else
+                label.text = "SESSÃO ENCERRADA";
         }
     }
 }

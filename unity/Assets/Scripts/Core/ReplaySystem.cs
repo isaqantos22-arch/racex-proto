@@ -149,6 +149,14 @@ namespace RaceX.Core
                         pitch = 2f;
                         break;
                 }
+                bool insideView = camView == CameraView.FirstPerson || camView == CameraView.SteeringWheel;
+                for (int ci = 0; ci < carList.Length; ci++)
+                {
+                    var cv = carList[ci] != null ? carList[ci].GetComponent<CarVisuals>() : null;
+                    if (cv == null || cv.driverHead == null) continue;
+                    bool show = !(insideView && ci == target);
+                    if (cv.driverHead.activeSelf != show) cv.driverHead.SetActive(show);
+                }
                 if (camView == CameraView.ThirdPerson)
                 {
                     cam.transform.position = t.position - t.forward * 7.5f + Vector3.up * 2.8f;

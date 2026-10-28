@@ -57,6 +57,20 @@ namespace RaceX.Core
             set => PlayerPrefs.SetInt(Prefix + "NameTags", value ? 1 : 0);
         }
 
+        public static bool ShowFps
+        {
+            get => PlayerPrefs.GetInt(Prefix + "ShowFps", 1) == 1;
+            set => PlayerPrefs.SetInt(Prefix + "ShowFps", value ? 1 : 0);
+        }
+
+        public static readonly float[] PitRadioWear = { 0f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f };
+
+        public static int PitRadio
+        {
+            get => Mathf.Clamp(PlayerPrefs.GetInt(Prefix + "PitRadio", 3), 0, PitRadioWear.Length - 1);
+            set => PlayerPrefs.SetInt(Prefix + "PitRadio", Mathf.Clamp(value, 0, PitRadioWear.Length - 1));
+        }
+
         public static bool SfxOn
         {
             get => PlayerPrefs.GetInt(Prefix + "SfxOn", 1) == 1;
@@ -65,7 +79,7 @@ namespace RaceX.Core
 
         public static ControlMode ControlMode
         {
-            get => (ControlMode)PlayerPrefs.GetInt(Prefix + "ControlMode", (int)ControlMode.Buttons);
+            get { var m = (ControlMode)PlayerPrefs.GetInt(Prefix + "ControlMode", (int)ControlMode.Buttons); return m == ControlMode.Tilt ? ControlMode.Joystick : m; }
             set => PlayerPrefs.SetInt(Prefix + "ControlMode", (int)value);
         }
 
@@ -104,7 +118,19 @@ namespace RaceX.Core
         {
             if (splitScreen && tier > QualityTier.Low) tier--;
             int levels = QualitySettings.names.Length;
-            if (levels > 0) QualitySettings.SetQualityLevel(Mathf.Clamp(Mathf.RoundToInt((float)tier / 3f * (levels - 1)), 0, levels - 1), true);
+            if (levels > 0)
+            {
+                int lv = tier == QualityTier.Low ? 1 : Mathf.RoundToInt((float)tier / 3f * (levels - 1));
+                QualitySettings.SetQualityLevel(Mathf.Clamp(lv, 0, levels - 1), true);
+            }
+#if !UNITY_EDITOR
+            var urp = UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline as UnityEngine.Rendering.Universal.UniversalRenderPipelineAsset;
+            if (urp != null)
+            {
+                urp.renderScale = tier == QualityTier.Low ? 0.85f : 1f;
+                urp.msaaSampleCount = tier >= QualityTier.High ? 2 : 1;
+            }
+#endif
             switch (tier)
             {
                 case QualityTier.Low: QualitySettings.shadowDistance = 0f; break;

@@ -73,6 +73,7 @@ namespace RaceX.Input
         {
             if (!dragging) return;
             if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rt, e.position, e.pressEventCamera, out Vector2 local)) return;
+            local -= rt.rect.center;
             Vector2 clamped = Vector2.ClampMagnitude(local, radius);
             if (knob != null) knob.anchoredPosition = clamped;
             float raw = clamped.x / radius;
@@ -90,16 +91,11 @@ namespace RaceX.Input
 
     public class TouchControlsUI : MonoBehaviour
     {
-        public const float TiltDeadZone = 3f;
-        public const float TiltFullAngle = 30f;
-
         public ControlMode mode = ControlMode.Buttons;
-        public float tiltSensitivity = 1f;
 
         TouchButton left, right, brake, handbrake, accel;
         VirtualJoystick joystick;
         RectTransform rootRt;
-        bool allowTilt;
         static readonly System.Collections.Generic.List<TouchControlsUI> active = new System.Collections.Generic.List<TouchControlsUI>();
 
         public float Steer { get; private set; }
@@ -126,9 +122,7 @@ namespace RaceX.Input
             UIFactory.ApplySafeArea(root, viewport);
             var ui = root.gameObject.AddComponent<TouchControlsUI>();
             ui.rootRt = root;
-            ui.allowTilt = allowTilt;
-            ui.mode = mode == ControlMode.Tilt && !allowTilt ? ControlMode.Buttons : mode;
-            ui.tiltSensitivity = SettingsManager.TiltSensitivity;
+            ui.mode = mode == ControlMode.Tilt ? ControlMode.Joystick : mode;
             ui.Build(root);
             active.Add(ui);
             return ui;
@@ -140,7 +134,7 @@ namespace RaceX.Input
         /// <summary>Troca o tipo de controle ao vivo (chamado pelo menu de pausa), sem recriar a cena.</summary>
         public void SetMode(ControlMode newMode)
         {
-            newMode = newMode == ControlMode.Tilt && !allowTilt ? ControlMode.Buttons : newMode;
+            if (newMode == ControlMode.Tilt) newMode = ControlMode.Joystick;
             if (newMode == mode) return;
             mode = newMode;
             for (int i = rootRt.childCount - 1; i >= 0; i--) Destroy(rootRt.GetChild(i).gameObject);
@@ -164,7 +158,7 @@ namespace RaceX.Input
             if (mode == ControlMode.Buttons)
             {
                 left = MakeButton(root, "SteerLeft", "<", bl, bl, new Vector2(40f, 40f), big);
-                right = MakeButton(root, "SteerRight", ">", br, br, new Vector2(-40f, 40f), big);
+                right = MakeButton(root, "SteerRight", ">", bl, bl, new Vector2(280f, 40f), big);
             }
             else if (mode == ControlMode.Joystick)
             {
@@ -180,16 +174,13 @@ namespace RaceX.Input
             // F. MÃO fica na parte de BAIXO, no lugar onde antigamente era o freio (troca de lugares).
             accel = MakeButton(root, "Throttle", "ACEL", br, br, new Vector2(-40f, 40f), big);
             brake = MakeButton(root, "Brake", "FREIO", br, br, new Vector2(-270f, 40f), small);
-            Vector2 hbPos = mode == ControlMode.Buttons ? new Vector2(280f, 40f)
+            Vector2 hbPos = mode == ControlMode.Buttons ? new Vector2(520f, 40f)
                           : mode == ControlMode.Joystick ? new Vector2(380f, 40f)
                           : new Vector2(40f, 40f);
             handbrake = MakeButton(root, "Handbrake", "F. MÃO", bl, bl, hbPos, small);
 
             // Aceleração automática mudou de lugar: agora é opção em CONFIGURAÇÕES (não há toggle em corrida).
 
-#if ENABLE_INPUT_SYSTEM
-            if (mode == ControlMode.Tilt && Accelerometer.current != null) InputSystem.EnableDevice(Accelerometer.current);
-#endif
         }
 
         static TouchButton MakeButton(Transform parent, string name, string label, Vector2 anchor, Vector2 pivot, Vector2 pos, Vector2 size)
@@ -211,9 +202,6 @@ namespace RaceX.Input
                 case ControlMode.Joystick:
                     steer = joystick != null ? joystick.Horizontal : 0f;
                     break;
-                case ControlMode.Tilt:
-                    steer = ReadTilt();
-                    break;
             }
             Steer = steer;
             Brake = brake != null && brake.IsPressed ? 1f : 0f;
@@ -223,22 +211,5 @@ namespace RaceX.Input
                 : (accel != null && accel.IsPressed ? 1f : 0f);
         }
 
-        float ReadTilt()
-        {
-#if ENABLE_INPUT_SYSTEM
-            var acc = Accelerometer.current;
-            if (acc == null || !acc.enabled) return 0f;
-            Vector3 g = acc.acceleration.ReadValue();
-            float angle = Screen.orientation == ScreenOrientation.LandscapeRight
-                ? Mathf.Atan2(-g.y, g.x) * Mathf.Rad2Deg
-                : Mathf.Atan2(g.y, -g.x) * Mathf.Rad2Deg;
-            float abs = Mathf.Abs(angle);
-            if (abs < TiltDeadZone) return 0f;
-            float v = (abs - TiltDeadZone) / (TiltFullAngle - TiltDeadZone) * tiltSensitivity;
-            return Mathf.Clamp(Mathf.Sign(angle) * v, -1f, 1f);
-#else
-            return 0f;
-#endif
-        }
     }
 }

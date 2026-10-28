@@ -92,6 +92,8 @@ namespace RaceX.Car
             if (persistSelection) SettingsManager.LastCamera = (int)view;
             if (visuals != null && visuals.steeringWheel != null)
                 visuals.steeringWheel.gameObject.SetActive(view == CameraView.SteeringWheel || view == CameraView.FirstPerson);
+            if (visuals != null && visuals.driverHead != null)
+                visuals.driverHead.SetActive(view != CameraView.SteeringWheel && view != CameraView.FirstPerson);
             Snap();
         }
 
@@ -106,8 +108,11 @@ namespace RaceX.Car
         {
             Vector3 fwd = Vector3.ProjectOnPlane(car.transform.forward, Vector3.up).normalized;
             if (fwd.sqrMagnitude < 0.01f) fwd = car.transform.forward;
-            pos = car.transform.position - fwd * distance + Vector3.up * height;
-            Vector3 look = car.transform.position + Vector3.up * 1.0f + fwd * 6f;
+            bool inGarage = RaceX.Core.PitLaneSystem.IsInGarageView(car);
+            float d = inGarage ? 3.8f : distance;
+            float h = inGarage ? 1.85f : height;
+            pos = car.transform.position - fwd * d + Vector3.up * h;
+            Vector3 look = car.transform.position + Vector3.up * (inGarage ? 0.85f : 1.0f) + fwd * (inGarage ? 4.5f : 6f);
             rot = Quaternion.LookRotation(look - pos, Vector3.up);
         }
 

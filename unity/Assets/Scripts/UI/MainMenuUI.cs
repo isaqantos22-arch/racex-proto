@@ -1046,9 +1046,41 @@ namespace RaceX.UI
             return options[Step(i, delta, options.Length)];
         }
 
+        RectTransform SetupCard(RectTransform parent, string title, float x, int rows)
+        {
+            var c = new Vector2(0.5f, 0.5f);
+            var card = UIFactory.Panel("Card_" + title, parent, c, new Vector2(0.5f, 1f), new Vector2(x, 350f), new Vector2(700f, 96f + rows * 76f), new Color(0.05f, 0.06f, 0.09f, 0.94f));
+            card.sprite = MenuTheme.RoundedSprite(140, 100, 16);
+            var rt = (RectTransform)card.transform;
+            var tl = new Vector2(0f, 1f);
+            UIFactory.Label("CardTitle", rt, title, 30, TextAnchor.MiddleLeft, tl, tl, new Vector2(28f, -14f), new Vector2(640f, 44f), MenuTheme.Accent);
+            UIFactory.Panel("CardLine", rt, tl, tl, new Vector2(28f, -62f), new Vector2(644f, 2f), MenuTheme.AccentDim);
+            return rt;
+        }
+
+        void CardRow(RectTransform card, string label, int row, Func<string> value, Action<int> change)
+        {
+            var tl = new Vector2(0f, 1f);
+            var ml = new Vector2(0f, 0.5f);
+            float y = -84f - row * 76f;
+            var line = UIFactory.Panel(label + "_Row", card, tl, tl, new Vector2(16f, y), new Vector2(668f, 68f), new Color(1f, 1f, 1f, row % 2 == 0 ? 0.05f : 0.025f));
+            var lr = (RectTransform)line.transform;
+            UIFactory.Label(label, lr, label.ToUpperInvariant(), 22, TextAnchor.MiddleLeft, ml, ml, new Vector2(16f, 0f), new Vector2(210f, 60f), MenuTheme.TextDim);
+            var text = UIFactory.Label(label + "_Value", lr, value(), 26, TextAnchor.MiddleCenter, ml, ml, new Vector2(306f, 0f), new Vector2(286f, 60f), MenuTheme.Text);
+            MenuTheme.StyledButton(lr, label + "_Prev", "<", ml, ml, new Vector2(234f, 0f), new Vector2(66f, 56f), 32, () => { change(-1); text.text = value(); });
+            MenuTheme.StyledButton(lr, label + "_Next", ">", ml, ml, new Vector2(596f, 0f), new Vector2(66f, 56f), 32, () => { change(1); text.text = value(); });
+        }
+
         internal void ShowRaceSetup()
         {
             back = ShowPlay;
+            if (settings.careerPhase >= 0 || settings.players == null || settings.players.Length < 2)
+            {
+                var mode = settings.mode;
+                settings = new RaceSettings { mode = mode };
+                settings.players[0].startCamera = (CameraView)SettingsManager.LastCamera;
+                GameManager.Instance.settings = settings;
+            }
             settings.careerPhase = -1;
             settings.careerGrid = -1;
             settings.sessionTimeLimit = 0f;
@@ -1059,36 +1091,40 @@ namespace RaceX.UI
             SetShowroomCam(split ? new Vector3(0f, 3.6f, -12.5f) : new Vector3(0f, 3.4f, -10.5f), 26f);
             var s = NewScreen(split ? "CORRIDA — TELA DIVIDIDA" : "CONFIGURAÇÕES DA CORRIDA");
             ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.82f);
+            int players = split ? 2 : 1;
+            var raceCard = SetupCard(s, "CORRIDA", ContentX - 365f, 5);
+            var carCard = SetupCard(s, split ? "PILOTOS E CARROS" : "PILOTO E CARRO", ContentX + 365f, split ? 5 : 4);
             int row = 0;
-            OptionRow(s, "Pista", row++, () => TrackNames[(int)settings.track], d => settings.track = (TrackId)Step((int)settings.track, d, TrackNames.Length));
-            OptionRow(s, "Voltas", row++, () => settings.laps <= 0 ? "REAIS (" + TrackLibrary.RealLaps(settings.track) + ")" : settings.laps.ToString(), d => settings.laps = StepIn(RaceSettings.LapOptions, settings.laps, d));
-            OptionRow(s, "Adversários", row++, () => settings.totalCars == RaceSettings.ClassicCarCount ? "Clássico (8)" : settings.totalCars.ToString(),
+            CardRow(raceCard, "Pista", row++, () => TrackNames[(int)settings.track], d => settings.track = (TrackId)Step((int)settings.track, d, TrackNames.Length));
+            CardRow(raceCard, "Voltas", row++, () => settings.laps <= 0 ? "REAIS (" + TrackLibrary.RealLaps(settings.track) + ")" : settings.laps.ToString(), d => settings.laps = StepIn(RaceSettings.LapOptions, settings.laps, d));
+            CardRow(raceCard, "Adversários", row++, () => settings.totalCars == RaceSettings.ClassicCarCount ? "Clássico (8)" : settings.totalCars.ToString(),
                 d => settings.totalCars = StepIn(RaceSettings.CarCountOptions, settings.totalCars, d));
-            OptionRow(s, "Dificuldade", row++, () => DifficultyNames[(int)settings.difficulty], d => settings.difficulty = (Difficulty)Step((int)settings.difficulty, d, 4));
-            OptionRow(s, "Pit Stop", row++, () => settings.pitStops ? "LIGADO (com estratégia)" : "DESLIGADO", d => settings.pitStops = !settings.pitStops);
-            OptionRow(s, "Categoria", row++, () => settings.formulaOnly ? "F1" : "GT",
+            CardRow(raceCard, "Dificuldade", row++, () => DifficultyNames[(int)settings.difficulty], d => settings.difficulty = (Difficulty)Step((int)settings.difficulty, d, 4));
+            CardRow(raceCard, "Pit Stop", row++, () => settings.pitStops ? "LIGADO" : "DESLIGADO", d => settings.pitStops = !settings.pitStops);
+            row = 0;
+            CardRow(carCard, "Categoria", row++, () => settings.formulaOnly ? "F1" : "GT",
                 d =>
                 {
                     settings.formulaOnly = !settings.formulaOnly;
                     if (settings.formulaOnly) { settings.players[0].car = CarModel.F1; settings.players[1].car = CarModel.F1; }
                     else { settings.players[0].car = CarModel.Titan; settings.players[1].car = CarModel.Titan; }
                     RefreshShowroomCarAsync();
+                    ShowRaceSetup();
                 });
 
-            if (!split) OptionRow(s, "Câmera", row++, () => CameraNames[(int)settings.players[0].startCamera], d => settings.players[0].startCamera = (CameraView)Step((int)settings.players[0].startCamera, d, 4));
+            if (!split) CardRow(carCard, "Câmera", row++, () => CameraNames[(int)settings.players[0].startCamera], d => settings.players[0].startCamera = (CameraView)Step((int)settings.players[0].startCamera, d, 4));
 
-            int players = split ? 2 : 1;
             for (int p = 0; p < players; p++)
             {
                 var ps = settings.players[p];
                 string tag = split ? $"J{p + 1} " : "";
-                OptionRow(s, tag + "Carro", row++, () => CarLabel(ps.car), d =>
+                CardRow(carCard, tag + "Carro", row++, () => CarLabel(ps.car), d =>
                 {
                     if (settings.formulaOnly) { ps.car = CarModel.F1; RefreshShowroomCarAsync(); return; }
                     ps.car = (CarModel)Step((int)ps.car, d, ModelCount(settings));
                     RefreshShowroomCarAsync();
                 });
-                OptionRow(s, tag + "Cor", row++, () => CarPalette.Names[ps.colorIndex], d =>
+                CardRow(carCard, tag + "Cor", row++, () => CarPalette.Names[ps.colorIndex], d =>
                 {
                     ps.colorIndex = Step(ps.colorIndex, d, CarPalette.Colors.Length);
                     if (split && settings.players[0].colorIndex == settings.players[1].colorIndex) ps.colorIndex = Step(ps.colorIndex, d, CarPalette.Colors.Length);

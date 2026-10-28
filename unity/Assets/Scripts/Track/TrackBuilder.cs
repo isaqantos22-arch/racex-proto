@@ -7,7 +7,7 @@ namespace RaceX.Track
 {
     public class TrackBuilder : MonoBehaviour
     {
-        public const int GridSlots = 16;
+        public const int GridSlots = 24;
         public const float CheckpointSpacing = 150f;
         public const float WaypointSpacing = 10f;
 
@@ -61,11 +61,58 @@ namespace RaceX.Track
 
             switch (def.id)
             {
-                case TrackId.DesertCanyon: DesertDecoration.Build(this, wallOffset); break;
-                case TrackId.NightCity: CityDecoration.Build(this, wallOffset); break;
+                case TrackId.DesertCanyon:
+                case TrackId.GolfoReal: DesertDecoration.Build(this, wallOffset); break;
+                case TrackId.NightCity:
+                case TrackId.Principado:
+                case TrackId.JardimDaBaia:
+                case TrackId.CornicheDaNoite:
+                case TrackId.PortoSul:
+                case TrackId.IlhaDasCascatas:
+                case TrackId.Fortaleza:
+                case TrackId.EstadioCentral:
+                case TrackId.NeonStrip: CityDecoration.Build(this, wallOffset); break;
                 default: ForestDecoration.Build(this, wallOffset); break;
             }
+            try { CombineDecoration(); }
+            catch (System.Exception ex) { Debug.LogWarning("[Track] combinar decoracao ignorado: " + ex.Message); }
         }
+
+        // Decoração sem collider (árvores, arbustos, montanhas) vira poucas malhas por material e
+        // célula de 150 m: de ~2.500 objetos/draw calls para algumas dezenas, mantendo o culling.
+        void CombineDecoration()
+        {
+            var roots = new List<Transform>();
+            foreach (Transform t in transform) if (t.name == "Decoration") roots.Add(t);
+            foreach (var root in roots)
+            {
+                var groups = new Dictionary<(Material, int, int), List<CombineInstance>>();
+                var old = new List<GameObject>();
+                var toLocal = root.worldToLocalMatrix;
+                foreach (var mf in root.GetComponentsInChildren<MeshFilter>())
+                {
+                    var mr = mf.GetComponent<MeshRenderer>();
+                    if (mr == null || mf.sharedMesh == null || mr.sharedMaterial == null || mf.GetComponent<Collider>() != null) continue;
+                    Vector3 wp = mf.transform.position;
+                    var key = (mr.sharedMaterial, Mathf.FloorToInt(wp.x / 150f), Mathf.FloorToInt(wp.z / 150f));
+                    if (!groups.TryGetValue(key, out var list)) groups[key] = list = new List<CombineInstance>();
+                    list.Add(new CombineInstance { mesh = mf.sharedMesh, transform = toLocal * mf.transform.localToWorldMatrix });
+                    old.Add(mf.gameObject);
+                }
+                foreach (var kv in groups)
+                {
+                    var m = new Mesh { name = "DecoCombined", indexFormat = IndexFormat.UInt32 };
+                    m.CombineMeshes(kv.Value.ToArray(), true, true);
+                    var go = new GameObject("DecoCombined");
+                    go.transform.SetParent(root, false);
+                    go.AddComponent<MeshFilter>().sharedMesh = m;
+                    go.AddComponent<MeshRenderer>().sharedMaterial = kv.Key.Item1;
+                    go.isStatic = true;
+                }
+                foreach (var g in old) Destroy(g);
+            }
+        }
+
 
         void BuildGround(Material mat)
         {
@@ -219,6 +266,28 @@ namespace RaceX.Track
             CreateMeshObject(name + "_White", whiteV, null, whiteT, white, SurfaceType.Kerb, true);
         }
 
+        /// <summary>Abre um VÃO no guard-rail de um lado da pista no trecho [fromDist, fromDist+span]
+        /// ao longo do spline (com wrap). O pit usa isso porque a cerca contínua (~16,7 m do centro)
+        /// atravessava a faixa do pit (−8 a −20 m) — não havia caminho da garagem até a pista.</summary>
+        public void OpenWallGap(float fromDist, float span, bool leftSide)
+        {
+            string side = leftSide ? "BarrierL" : "BarrierR";
+            var kill = new List<GameObject>();
+            foreach (Transform child in transform)
+            {
+                if (!child.name.StartsWith(side, System.StringComparison.Ordinal)) continue;
+                // Nomes reais: "<side>_Post<k>" e "<side>_Plank<k>" (AddWall). Antes tentava
+                // int.TryParse("Post120") — falava SEMPRE e o VÃO nunca abria (cerca bloqueava o pit).
+                string tag = child.name.Substring(child.name.LastIndexOf('_') + 1);
+                int d0 = tag.Length;
+                while (d0 > 0 && tag[d0 - 1] >= '0' && tag[d0 - 1] <= '9') d0--;
+                if (d0 >= tag.Length || !int.TryParse(tag.Substring(d0), out int k)) continue;
+                float rel = Mathf.Repeat(k * Spline.spacing - fromDist, Spline.Length);
+                if (rel <= span) kill.Add(child.gameObject);
+            }
+            foreach (var g in kill) Destroy(g);
+        }
+
         void AddWall(string name, float offset, Material mat)
         {
             var post = MaterialLibrary.GetPbr("ArmcoPost", new Color(0.24f, 0.25f, 0.27f), 0.6f, 0.4f);
@@ -274,7 +343,7 @@ namespace RaceX.Track
         {
             var go = GameObject.CreatePrimitive(type);
             go.name = name;
-            if (!keepCollider) Destroy(go.GetComponent<Collider>());
+            if (!keepCollider) DestroyImmediate(go.GetComponent<Collider>());
             go.transform.SetParent(transform, false);
             go.transform.SetPositionAndRotation(pos, rot);
             go.transform.localScale = scale;
