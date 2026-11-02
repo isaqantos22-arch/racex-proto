@@ -45,6 +45,9 @@ class GameSession {
       laps: settings.laps,
       totalCars,
       difficulty: settings.difficulty,
+      category: settings.category || 'gt',
+      pitStops: !!settings.pitStops,
+      weather: settings.weather || '',
       startPositions,
       startAt: this.startAt,
     });
@@ -96,7 +99,7 @@ class GameSession {
 
   onAiPositions(list) {
     if (!Array.isArray(list)) return;
-    for (const entry of list.slice(0, 16)) {
+    for (const entry of list.slice(0, 24)) {
       if (!entry || typeof entry.id !== 'string') continue;
       const s = this.states.get(entry.id);
       if (!s || !s.isAI) continue;

@@ -6,7 +6,7 @@ const {
   generateId,
   normalizeRoomCode,
   sanitizeName,
-  sanitizeSettings,
+  sanitizeSettingsDetailed,
   sanitizeCar,
   isFiniteNumber,
 } = require('./utils');
@@ -170,7 +170,9 @@ class RoomManager {
     const { room, player } = ctx;
     if (player.id !== room.hostId) return this.error(socket, 'Somente o host altera as configurações');
     if (room.phase !== 'lobby') return;
-    room.settings = sanitizeSettings(data, room.settings);
+    const { settings, rejected } = sanitizeSettingsDetailed(data, room.settings);
+    room.settings = settings;
+    if (rejected.length > 0) socket.emit('room:warning', { message: `Servidor recusou: ${rejected.join(', ')}` });
     this.broadcastRoom(room);
   }
 
@@ -182,6 +184,8 @@ class RoomManager {
     if (room.phase !== 'lobby') return this.error(socket, 'Corrida em andamento');
     const players = [...room.players.values()];
     if (players.length < this.minPlayers) return this.error(socket, `São necessários pelo menos ${this.minPlayers} jogadores`);
+    // O anfitrião inicia: começar já é o "pronto" dele — só os CONVIDADOS precisam marcar pronto.
+    player.ready = true;
     if (!players.every((p) => p.ready)) return this.error(socket, 'Nem todos estão prontos');
 
     room.session = new GameSession(room, (event, payload) => this.io.to(room.code).emit(event, payload), this.sessionOptions);
