@@ -182,5 +182,42 @@ namespace RaceX.Core
             Debug.Log("[GAMESOUND] ambience ready " + track);
             return clip;
         }
+
+        // ---------------- Luzes da largada ----------------
+        static AudioSource sfx;
+        static AudioClip beepShort, beepLong;
+
+        /// <summary>Bipe das luzes da largada: curto (0,15 s, 880 Hz) a cada luz vermelha; longo (0,7 s, 1320 Hz) na largada.
+        /// Sintetizado (seno com ataque/saída suaves para não estalar); o volume geral vem do AudioListener.</summary>
+        public static void StartBeep(bool go)
+        {
+            try
+            {
+                Ensure();
+                if (sfx == null) { sfx = owner.AddComponent<AudioSource>(); sfx.playOnAwake = false; sfx.spatialBlend = 0f; sfx.ignoreListenerPause = true; }
+                if (beepShort == null) beepShort = Tone("StartBeepRed", 880f, 0.15f);
+                if (beepLong == null) beepLong = Tone("StartBeepGo", 1320f, 0.7f);
+                sfx.PlayOneShot(go ? beepLong : beepShort, 0.7f);
+            }
+            catch (System.Exception ex) { Debug.LogWarning("[GAMESOUND] bipe ignorado: " + ex.Message); }
+        }
+
+        static AudioClip Tone(string name, float hz, float seconds)
+        {
+            const int rate = 44100;
+            int n = Mathf.Max(1, (int)(rate * seconds));
+            var data = new float[n];
+            float attack = 0.008f * rate, release = Mathf.Min(0.06f, seconds * 0.4f) * rate;
+            for (int i = 0; i < n; i++)
+            {
+                float env = Mathf.Min(1f, i / attack) * Mathf.Min(1f, (n - i) / release);
+                float t = (float)i / rate;
+                // fundamental + um pouco de 2º harmônico (soa como o bipe eletrônico do painel)
+                data[i] = env * (0.8f * Mathf.Sin(2f * Mathf.PI * hz * t) + 0.2f * Mathf.Sin(4f * Mathf.PI * hz * t));
+            }
+            var clip = AudioClip.Create(name, n, 1, rate, false);
+            clip.SetData(data, 0);
+            return clip;
+        }
     }
 }

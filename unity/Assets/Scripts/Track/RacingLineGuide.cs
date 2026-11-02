@@ -24,11 +24,14 @@ namespace RaceX.Track
         int hint = -1;
         float timer;
         bool shown;
+        Camera ownerCam; // tela dividida: só esta câmera desenha estes traços (null = todas)
 
-        public void Initialize(CarController car, RaceManager race)
+        public void Initialize(CarController car, RaceManager race, Camera ownerCamera = null)
         {
             this.car = car;
             this.race = race;
+            ownerCam = ownerCamera;
+            if (ownerCam != null) UnityEngine.Rendering.RenderPipelineManager.beginCameraRendering += OnBeginCamera;
             try
             {
                 if (!Enabled || race == null || race.Track == null || race.Track.Waypoints == null) { enabled = false; return; }
@@ -65,9 +68,10 @@ namespace RaceX.Track
                       ?? Shader.Find("Sprites/Default")
                       ?? Shader.Find("Unlit/Color");
             if (shader == null) return false;
-            var colors = new[] { new Color(0.15f, 0.95f, 0.3f), new Color(1f, 0.85f, 0.1f), new Color(1f, 0.15f, 0.1f) };
-            mats = new Material[3];
-            for (int i = 0; i < 3; i++)
+            // 4ª cor: AZUL do caminho até o box (pit pedido/chamado)
+            var colors = new[] { new Color(0.15f, 0.95f, 0.3f), new Color(1f, 0.85f, 0.1f), new Color(1f, 0.15f, 0.1f), new Color(0.1f, 0.42f, 1f) };
+            mats = new Material[4];
+            for (int i = 0; i < 4; i++)
             {
                 var m = new Material(shader);
                 if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", colors[i]);
@@ -99,8 +103,17 @@ namespace RaceX.Track
             return true;
         }
 
+        /// <summary>URP chama antes de cada câmera: liga os traços só na câmera do dono.</summary>
+        void OnBeginCamera(UnityEngine.Rendering.ScriptableRenderContext ctx, Camera cam)
+        {
+            if (renderers == null || ownerCam == null) return;
+            bool on = shown && cam == ownerCam;
+            for (int i = 0; i < DashCount; i++) if (renderers[i] != null) renderers[i].enabled = on;
+        }
+
         void OnDestroy()
         {
+            UnityEngine.Rendering.RenderPipelineManager.beginCameraRendering -= OnBeginCamera;
             if (dashes != null && dashes.Length > 0 && dashes[0] != null) Destroy(dashes[0].parent.gameObject);
         }
 
@@ -123,13 +136,26 @@ namespace RaceX.Track
             float L = spline.Length;
             float dist = race.Track.Waypoints.DistanceAlong(car.transform.position, ref hint);
             float speed = car.SpeedKmh / 3.6f;
+            bool human = car.GetComponent<RaceX.Input.PlayerInputHandler>() != null || RaceX.Core.SafetyCar.AutopilotOn(car);
             for (int i = 0; i < DashCount; i++)
             {
                 float d = Mathf.Repeat(dist + 8f + i * DashSpacing, L);
-                var pose = spline.PoseAtDistance(d);
-                dashes[i].SetPositionAndRotation(pose.position + Vector3.up * 0.04f, pose.rotation);
+                // CAMINHO DO BOX: o próprio tracejado fica AZUL e mais largo, em cima da linha principal, e só desvia na
+                // entrada do pit (antes era uma faixa fina separada, correndo ao lado da principal).
+                bool blue = human && RaceX.Core.PitLaneSystem.EntryGuideBlueAt(d);
+                float lat = blue ? RaceX.Core.PitLaneSystem.EntryGuideLat(d) : 0f;
+                var pose = spline.PoseAtDistance(d, lat);
+                Quaternion rot = pose.rotation;
+                if (blue && lat != 0f)
+                {
+                    var ahead = spline.PoseAtDistance(Mathf.Repeat(d + 2f, L), RaceX.Core.PitLaneSystem.EntryGuideLat(d + 2f));
+                    Vector3 dir = ahead.position - pose.position; dir.y = 0f;
+                    if (dir.sqrMagnitude > 0.01f) rot = Quaternion.LookRotation(dir.normalized, Vector3.up);
+                }
+                dashes[i].SetPositionAndRotation(pose.position + Vector3.up * (blue ? 0.045f : 0.04f), rot);
+                dashes[i].localScale = blue ? new Vector3(2.0f, 1f, 1.25f) : Vector3.one;
                 float v = profile[Mathf.Clamp(Mathf.RoundToInt(d / SampleStep), 0, profile.Length - 1) % profile.Length];
-                int c = speed > v * 1.04f ? 2 : speed > v * 0.9f ? 1 : 0;
+                int c = blue ? 3 : speed > v * 1.04f ? 2 : speed > v * 0.9f ? 1 : 0;
                 if (c != dashColor[i] || renderers[i].sharedMaterial != mats[c])
                 {
                     dashColor[i] = c;

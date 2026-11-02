@@ -64,6 +64,7 @@ namespace RaceX.Core
 
         void Update()
         {
+            if (RaceX.Core.ReplaySystem.IsPlaying) return; // replay na tela: mundo congelado, nada reage às posições reproduzidas
             if (race == null || race.State != RaceState.Racing) return;
             float L = LapLength;
             if (L <= 1f) return;
@@ -102,7 +103,7 @@ namespace RaceX.Core
                 {
                     RaceX.Career.CareerMode.RecordSessionLap(s.lap[0], s.lap[1], s.lap[2], lapTime,
                         s.lap[0] > 0f ? (int)s.color[0] : 0, s.lap[1] > 0f ? (int)s.color[1] : 0, s.lap[2] > 0f ? (int)s.color[2] : 0,
-                        !s.dirty);
+                        !s.dirty, RaceX.Core.PitLaneSystem.CompoundOf(e.car));
                 }
                 catch (System.Exception ex) { Debug.LogWarning("[SectorTimer] volta não registrada: " + ex.Message); }
             }
@@ -171,9 +172,15 @@ namespace RaceX.Core
         {
             if (ahead == null || behind == null) return 0f;
             int bb = Mathf.FloorToInt(behind.raceDistance / Bucket);
-            if (states.TryGetValue(ahead, out var sa) && sa.bucket[bb & (Ring - 1)] == bb)
+            // Só vale a passagem registrada DEPOIS da largada: antes o registro do spawn/carregamento
+            // entrava na conta e a torre mostrava -131 s com 26 s de prova (carro parado no grid).
+            float raceStart = race != null ? Time.time - race.RaceTime : 0f;
+            if (states.TryGetValue(ahead, out var sa) && sa.bucket[bb & (Ring - 1)] == bb && sa.time[bb & (Ring - 1)] >= raceStart)
                 return Mathf.Max(0f, Time.time - sa.time[bb & (Ring - 1)]);
-            float v = behind.car != null ? Mathf.Max(behind.car.SpeedKmh / 3.6f, 5f) : 5f;
+            // Estimativa pela distância: maior velocidade dos dois (mín. 25 m/s) — carro parado não explode o número.
+            float va = ahead.car != null ? ahead.car.SpeedKmh / 3.6f : 0f;
+            float vb = behind.car != null ? behind.car.SpeedKmh / 3.6f : 0f;
+            float v = Mathf.Max(25f, Mathf.Max(va, vb));
             return Mathf.Max(0f, (ahead.raceDistance - behind.raceDistance) / v);
         }
     }

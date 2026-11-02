@@ -20,7 +20,8 @@ namespace RaceX.Core
     [System.Serializable]
     public class RaceSettings
     {
-        public static readonly int[] LapOptions = { 0, 1, 2, 3, 5, 7, 10 }; // 0 = voltas REAIS (regra F1: 305 km / pista)
+        // Opções prontas de voltas (o jogador também pode DIGITAR de 1 a 200). 0 = voltas REAIS (regra F1: 305 km / pista).
+        public static readonly int[] LapOptions = { 0, 1, 2, 3, 5, 7, 10, 12, 15, 20, 25, 30, 40, 50 };
         public static readonly int[] CarCountOptions = { 4, 6, 8, 10, 12, 16 };
         public const int ClassicCarCount = 8;
 
@@ -34,6 +35,12 @@ namespace RaceX.Core
         public int careerGrid = -1;    // slot 0-based do humano definido pela classificação (-1 = sorteio)
         public float sessionTimeLimit; // limite REAL de tempo da sessão em segundos (0 = por distância)
         public bool pitStops;          // pit lane + desgaste de pneu + compostos
+        /// <summary>Clima escolhido fora da carreira: "" = seco, dry/cloudy/light/heavy/mixed (WeatherSystem.Forced).</summary>
+        public string weather = "";
+        /// <summary>Regra: batida forte tira o carro da corrida (perda total/abandono). Desligada = o dano aparece mas o carro segue.</summary>
+        public bool totalLoss = true;
+        /// <summary>Regra: penalidades da direção de prova (limites de pista, devolver posição, azul, colisão, desclassificação).</summary>
+        public bool penalties = true;
         public PlayerSetup[] players = { new PlayerSetup(), new PlayerSetup { name = "Jogador 2", colorIndex = 1 } };
 
         public int HumanCount => mode == GameMode.LocalSplitScreen ? 2 : 1;

@@ -30,25 +30,37 @@ namespace RaceX.Car
     public static class CarFactory
     {
         const float GroundClearance = 0.12f;
+        public const int CarBodyLayer = 21;
+        public const int WheelLayer = 22;
+        public const int DebrisLayer = 23;
 
         public static CarController Create(CarSpec spec, int colorIndex, string name, Vector3 position, Quaternion rotation)
         {
             var root = new GameObject(name);
             root.transform.SetPositionAndRotation(position, rotation);
-            root.layer = LayerMask.NameToLayer("Default");
+            // CAMADAS FÍSICAS (carro em cima de carro, print do usuário): a suspensão (raio da WheelCollider) usava a
+            // CARROCERIA de outro carro como chão e a roda "subia" nele. Carroceria na camada CarBodyLayer e rodas na
+            // WheelLayer, que não se enxergam (Physics.IgnoreLayerCollision). Pista, zebras, muros e destroços continuam
+            // em Default. Camadas 21/22 não são usadas por mais nada no projeto.
+            root.layer = CarBodyLayer;
+            Physics.IgnoreLayerCollision(WheelLayer, CarBodyLayer, true);
 
             var rb = root.AddComponent<Rigidbody>();
             rb.mass = spec.massKg;
 
             var visuals = root.AddComponent<CarVisuals>();
             var paint = MaterialLibrary.Get("CarPaint", Color.white, 0.88f, 0.55f);
-            var black = MaterialLibrary.Get("CarBlack", new Color(0.05f, 0.05f, 0.06f), 0.4f);
+            // Peças escuras = acabamento de carbono/plástico com BRILHO (antes preto fosco 0,05 apagava a
+            // geometria: entradas de ar, asas e frisos sumiam). Aros/retrovisores/cromados em metal médio
+            // (antes cinza 0,1 quase preto) e pneu levemente acinzentado para o flanco aparecer na luz.
+            var black = MaterialLibrary.Get("CarBlack", new Color(0.075f, 0.078f, 0.085f), 0.62f, 0.15f);
             var glass = MaterialLibrary.Get("CarGlass", new Color(0.08f, 0.1f, 0.13f), 0.95f, 0.2f);
-            var tire = MaterialLibrary.Get("Tire", new Color(0.07f, 0.07f, 0.07f), 0.15f);
-            var rim = MaterialLibrary.Get("Rim", new Color(0.1f, 0.1f, 0.11f), 0.8f, 0.85f);
+            // Borracha limpa: escura e neutra (no vídeo de referência o pneu limpo mede RGB ~5/4/6; o tom quente era terra).
+            var tire = MaterialLibrary.Get("Tire", new Color(0.095f, 0.095f, 0.1f), 0.22f);
+            var rim = MaterialLibrary.Get("Rim", new Color(0.42f, 0.43f, 0.45f), 0.78f, 0.9f);
             var headlight = MaterialLibrary.Get("Headlight", Color.white, 0.9f, 0f, new Color(2f, 2f, 1.8f));
             var taillight = MaterialLibrary.Get("Taillight", new Color(0.6f, 0f, 0f), 0.9f, 0f, new Color(1.5f, 0f, 0f));
-            var glassDark = MaterialLibrary.Get("CarGlassTint", new Color(0.25f, 0.32f, 0.4f, 0.3f), 0.92f, 0.1f);
+            var glassDark = MaterialLibrary.Get("CarGlassTint", new Color(0.25f, 0.32f, 0.4f, 0.34f), 0.97f, 0.1f); // vidro com reflexo mais nítido
             glassDark.SetFloat("_Surface", 1f);
             glassDark.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
             glassDark.renderQueue = 3000;
@@ -178,6 +190,7 @@ namespace RaceX.Car
                 float x = anchors != null && anchors.Length == 4 ? anchors[i].x : (i % 2 == 0 ? -1f : 1f) * spec.trackWidth * 0.5f;
                 float z = anchors != null && anchors.Length == 4 ? anchors[i].z : (front ? 1f : -1f) * spec.wheelbase * 0.5f;
                 var wcGo = new GameObject(names[i]);
+                wcGo.layer = WheelLayer;
                 wcGo.transform.SetParent(wcRoot, false);
                 wcGo.transform.localPosition = new Vector3(x, spec.suspensionDistance * 0.5f, z);
                 var wc = wcGo.AddComponent<WheelCollider>();
@@ -194,6 +207,12 @@ namespace RaceX.Car
                 tireT.name = "Tire";
                 controller.wheelMeshes[i] = meshPivot;
             }
+            var bandOffsets = AttachModelWheels(imported, controller, tire, wr, out var bandRadii);
+            if (bandOffsets == null) bandOffsets = new[] { wheelWidth * 0.5f, wheelWidth * 0.5f, wheelWidth * 0.5f, wheelWidth * 0.5f };
+            if (CarSpec.IsFormula(spec.model))
+                TyreCompoundMarker.Attach(controller, bandRadii ?? new[] { wr, wr, wr, wr }, bandOffsets,
+                    imported != null && bandRadii != null ? imported.bandFace : Vector2.one);
+            TyreDirt.Attach(controller, tire);
 
             bool closed = spec.model == CarModel.Falcon || spec.model == CarModel.Titan;
             Vector3 eyePos;
@@ -246,9 +265,17 @@ namespace RaceX.Car
                 swGo.transform.localRotation = Quaternion.Euler(-20f, 0f, 0f);
                 var sw = swGo.AddComponent<SteeringWheelView>();
                 sw.car = controller;
-                bool openWheel = spec.model == CarModel.F1 || spec.model == CarModel.F2008 || spec.model == CarModel.F1Studio;
+                bool openWheel = CarSpec.IsFormula(spec.model);
                 if (openWheel) swGo.transform.localScale = Vector3.one * 0.62f;
                 sw.Build(spec.rectangularSteeringWheel, black, spec);
+                if (openWheel && sw.usesModel)
+                {
+                    // Volante do FP04 no tamanho real (o 0,62 era do volante antigo de cubos — deixava o modelo com
+                    // 13 cm e as mãos do piloto fora das pegadas) e na posição medida em relação ao capacete.
+                    float k = spec.bodySize.z / Fp04CarLength;
+                    swGo.transform.localScale = Vector3.one;
+                    swGo.transform.localPosition = eyePos + new Vector3(0f, FormulaDriverLift(spec), -0.05f) + new Vector3(0f, -Fp04WheelBelow * k, Fp04WheelAhead * k);
+                }
                 visuals.steeringWheel = sw;
             }
 
@@ -259,7 +286,78 @@ namespace RaceX.Car
                 || spec.model == CarModel.Mustang || spec.model == CarModel.R8 || spec.model == CarModel.GtrNismo
                 || spec.model == CarModel.McLarenP1 || spec.model == CarModel.Bugatti)
                 visuals.HideProceduralWheel();
+            // Dano por zona (peças que se soltam, perda total) — depois das rodas do modelo presas nos eixos.
+            controller.damage = CarDamage.Attach(controller, bodyRoot, spec.bodySize);
             return controller;
+        }
+
+        /// <summary>Rodas DO MODELO (aro com raios, pneu com flanco, disco) no lugar do cilindro procedural:
+        /// as peças vão para o eixo de cada roda centradas nele — giram, esterçam e acompanham a suspensão.
+        /// Sem as 4 rodas reconhecidas, mantém o cilindro (como antes).</summary>
+        /// <returns>Distância do eixo até a face externa de cada PNEU (para a faixa do composto), ou null.</returns>
+        static float[] AttachModelWheels(ImportedBodyResult imported, CarController controller, Material tireMat, float wheelRadius, out float[] radii)
+        {
+            radii = null;
+            if (imported == null) return null;
+            if (!imported.HasModelWheels)
+            {
+                // Rodas do modelo incompletas: esconde as que achou e fica o cilindro (comportamento antigo).
+                foreach (var list in imported.wheelParts) foreach (var r in list) if (r != null) r.enabled = false;
+                return null;
+            }
+            var half = new float[4];
+            radii = new[] { wheelRadius, wheelRadius, wheelRadius, wheelRadius };
+            float gapSum = 0f; int gapN = 0;
+            for (int i = 0; i < 4; i++)
+            {
+                var pivot = controller.wheelMeshes[i];
+                if (pivot == null) continue;
+                // Limites no espaço do pivô pela malha (o carro pode estar girado no mundo, ex.: plataforma da garagem).
+                Bounds b = ImportedCarModels.LocalBounds(imported.wheelParts[i][0], pivot);
+                foreach (var r in imported.wheelParts[i]) b.Encapsulate(ImportedCarModels.LocalBounds(r, pivot));
+                // PNEU principal do grupo (maior malha com material de pneu): é ele que define centro, raio e a face
+                // externa — o grupo inclui duto de freio/cubo e deslocava a roda e a faixa (faixa flutuando ou sumida).
+                Bounds tyre = b; float best = 0f;
+                foreach (var r in imported.wheelParts[i])
+                {
+                    if (System.Array.IndexOf(r.sharedMaterials, tireMat) < 0) continue;
+                    var lb = ImportedCarModels.LocalBounds(r, pivot);
+                    float d = Mathf.Max(lb.size.y, lb.size.z);
+                    if (d > best) { best = d; tyre = lb; }
+                }
+                if (best < wheelRadius * 1.2f) tyre = b; // pneu feito de pedaços (bloco da banda): usa o grupo
+                float R = Mathf.Max(tyre.size.y, tyre.size.z) * 0.5f;
+                // Roda no raio FÍSICO (WheelCollider) para tocar o chão. Nos modelos medidos o pneu fica entre 0,30 e
+                // 0,38 m na escala do jogo (raio físico 0,34–0,35): ajuste limitado a ±10% para não deformar a roda (o
+                // FP04, de pneu 0,26 m, cresce só 10%).
+                float s = R > 0.05f ? Mathf.Clamp(wheelRadius / R, 0.9f, 1.1f) : 1f;
+                half[i] = tyre.extents.x * s;
+                radii[i] = R * s;
+                // o que faltar (ou sobrar) depois da escala vira descida visual: o pneu encosta no chão
+                float gap = wheelRadius - R * s;
+                controller.wheelVisualDrop[i] = gap;
+                gapSum += gap; gapN++;
+                var spin = new GameObject("ModelWheel").transform;
+                spin.SetParent(pivot, false);
+                foreach (var r in imported.wheelParts[i]) r.transform.SetParent(spin, true);
+                // Centro do pneu no eixo da roda (o pivô gira em torno da própria origem).
+                spin.localScale = Vector3.one * s;
+                spin.localPosition = -tyre.center * s;
+                foreach (Transform t in pivot)
+                {
+                    if (t == spin) continue;
+                    var pr = t.GetComponent<Renderer>();
+                    if (pr != null) pr.enabled = false;
+                }
+            }
+            if (gapN > 0 && imported.root != null)
+            {
+                // carroceria acompanha a descida média das rodas (eixo do modelo continua no eixo da roda)
+                float g = gapSum / gapN;
+                imported.root.localPosition -= new Vector3(0f, g, 0f);
+                var lb = imported.localBounds; lb.center -= new Vector3(0f, g, 0f); imported.localBounds = lb;
+            }
+            return half;
         }
 
         public static Renderer Part(Transform parent, string name, Vector3 localPos, Vector3 scale, Material mat, Vector3? euler = null, PrimitiveType type = PrimitiveType.Cube)
@@ -310,11 +408,55 @@ namespace RaceX.Car
         /// <summary>Piloto procedural no cockpit REAL (eyePos): capacete com viseira, queixeira e faixa,
         /// colar HANS, ombros, braços até o volante e luvas; macacão na cor do carro. Peças sem sombra
         /// (custo mobile) e nenhuma peça filha de objeto escalado. Retorna a cabeça (some na câmera interna).</summary>
+        /// <summary>Tamanhos reais das peças do FP04 exportadas para um carro de 5,2 m (convert_f1_batch.py, log).</summary>
+        // Medido no .blend original do FP04 (piloto + volante modelados juntos): o FBX do piloto saiu na escala
+        // 0,756 (capacete 0,152 m × 0,201 m no original) — no jogo ficava ~23% menor que o carro pede.
+        // Comprimento real capacete→sapato 1,155 m num carro de 5,6 m; volante 0,578 m à frente e 0,136 m
+        // abaixo do centro do capacete (é onde as mãos do piloto seguram as pegadas).
+        const float Fp04DriverLength = 1.155f, Fp04CarLength = 5.6f;
+        public const float Fp04WheelAhead = 0.578f, Fp04WheelBelow = 0.136f;
+
+        /// <summary>Altura extra do piloto no cockpit por modelo (mesma no piloto e no volante).</summary>
+        public static float FormulaDriverLift(CarSpec spec) => spec.model == CarModel.F1Studio ? -0.06f : spec.model == CarModel.F1Legacy ? 0.25f : 0.08f;
+
+        /// <summary>Monopostos: piloto modelado do FP04 (macacão/capacete na cor da equipe, viseira escura),
+        /// centro do capacete no olho do piloto. Retorna a cabeça (some na câmera interna) ou null.</summary>
+        static GameObject BuildFp04Driver(CarSpec spec, Transform root, Vector3 eye, int colorIndex, float lift)
+        {
+            Color team = CarPalette.Get(colorIndex);
+            var mats = new Dictionary<ModelMaterialRole, Material>
+            {
+                { ModelMaterialRole.Paint, MaterialLibrary.Get("DriverSuit_" + colorIndex, Color.Lerp(team, Color.black, 0.15f), 0.45f) },
+                { ModelMaterialRole.Black, MaterialLibrary.Get("DriverBlack", new Color(0.07f, 0.07f, 0.08f), 0.35f) },
+                { ModelMaterialRole.Glass, MaterialLibrary.Get("HelmetVisorDark", new Color(0.02f, 0.02f, 0.03f), 0.95f, 0.6f) },
+                { ModelMaterialRole.Metal, MaterialLibrary.Get("DriverMetal", new Color(0.5f, 0.5f, 0.52f), 0.75f, 0.9f) },
+            };
+            float length = Fp04DriverLength * spec.bodySize.z / Fp04CarLength;
+            var driver = ImportedCarModels.InstantiatePart("FP04_Driver", root, 2, length, mats);
+            if (driver == null) return null;
+            driver.name = "Driver";
+            driver.localPosition = eye + new Vector3(0f, lift, -0.05f);
+            // Capacete (helmet/shell) num grupo próprio: é o que a câmera interna esconde.
+            var head = new GameObject("DriverHead").transform;
+            head.SetParent(driver, false);
+            foreach (var r in driver.GetComponentsInChildren<Renderer>(true))
+            {
+                string n = r.name.ToLowerInvariant();
+                if (n.StartsWith("helmet") || n.StartsWith("shell")) r.transform.SetParent(head, true);
+            }
+            return head.gameObject;
+        }
+
         static GameObject BuildDriver(CarSpec spec, Transform root, Vector3 eye, int colorIndex, bool closed)
         {
             if (spec == null) return null;
             try
             {
+                if (CarSpec.IsFormula(spec.model))
+                {
+                    var fp = BuildFp04Driver(spec, root, eye, colorIndex, FormulaDriverLift(spec));
+                    if (fp != null) return fp;
+                }
                 Color team = CarPalette.Get(colorIndex);
                 var suit = MaterialLibrary.Get("DriverSuit_" + colorIndex, Color.Lerp(team, Color.black, 0.2f), 0.35f);
                 var suitTrim = MaterialLibrary.Get("DriverSuitTrim", new Color(0.92f, 0.92f, 0.94f), 0.35f);
@@ -326,7 +468,8 @@ namespace RaceX.Car
 
                 var driver = new GameObject("Driver").transform;
                 driver.SetParent(root, false);
-                float lift = spec.model == CarModel.F1 ? 0.25f : spec.model == CarModel.F2008 ? 0.08f : spec.model == CarModel.F1Studio ? -0.06f : 0f;
+                // F1 agora é o RB18 (mesmo pipeline do F2008): mesma altura de piloto do F2008 (era 0,25 no F1_2022 antigo).
+                float lift = spec.model == CarModel.F1Studio ? -0.06f : spec.model == CarModel.F1Legacy ? 0.25f : CarSpec.IsFormula(spec.model) ? 0.08f : 0f;
                 driver.localPosition = eye + new Vector3(0f, lift, 0f);
                 var head = new GameObject("DriverHead").transform;
                 head.SetParent(driver, false);
@@ -386,11 +529,8 @@ namespace RaceX.Car
             {
                 case CarModel.Ferrari: return new Color(0.75f, 0.05f, 0.05f);
                 case CarModel.Bugatti: return new Color(0.08f, 0.1f, 0.45f);
-                case CarModel.F1:
-                case CarModel.F2008:
-                case CarModel.F1Studio: return new Color(0.75f, 0.05f, 0.05f);
                 case CarModel.Mustang: return new Color(0.02f, 0.15f, 0.5f);
-                default: return new Color(0.1f, 0.3f, 0.65f);
+                default: return CarSpec.IsFormula(spec.model) ? new Color(0.75f, 0.05f, 0.05f) : new Color(0.1f, 0.3f, 0.65f);
             }
         }
     }

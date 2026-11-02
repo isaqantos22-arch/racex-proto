@@ -20,6 +20,8 @@ namespace RaceX.Core
         public int lap;
         public int checkpoint;
         public float timestamp;
+        /// <summary>0 = correndo, 1 = cruzou a linha final, 2 = abandonou (perda total/quebra/desclassificado).</summary>
+        public int status;
     }
 
     public class StartSlotInfo
@@ -38,7 +40,16 @@ namespace RaceX.Core
         public int laps;
         public int totalCars;
         public string difficulty;
+        public string category = "gt";
+        public bool pitStops;
+        public string weather = "";
+        public bool totalLoss = true;
+        public bool penalties = true;
         public long startAt;
+        /// <summary>Servidor com largada sincronizada: esperar o game:go (todos carregados) antes das luzes.</summary>
+        public bool sync;
+        /// <summary>Número da corrida na sala (1ª, reinício, nova partida...).</summary>
+        public int round;
         public readonly List<StartSlotInfo> startPositions = new List<StartSlotInfo>();
     }
 
@@ -60,9 +71,26 @@ namespace RaceX.Core
         public bool isAI;
         public string name;
         public bool finished;
+        public bool retired;
         public float totalTime;
         public float bestLap;
+        public float penalty;
         public int lap;
+    }
+
+    /// <summary>Votação da sala: "restart" (reiniciar a corrida — todos precisam aceitar) ou "rematch" (jogar novamente).</summary>
+    public class VoteInfo
+    {
+        public string id;
+        public string kind;
+        public string byId;
+        public string byName;
+        /// <summary>Relógio real (Time.realtimeSinceStartup) em que a votação fecha.</summary>
+        public float deadline;
+        /// <summary>Fui eu que pedi (não respondo — só espero).</summary>
+        public bool mine;
+        public bool answered;
+        public int yes = 1, no, total;
     }
 
     public static class OnlineClient
@@ -89,10 +117,43 @@ namespace RaceX.Core
         public static Action<string> OnRoomCreated;
         public static Action<string> OnRoomJoined;
         public static Action<string> OnError;
+        public static Action<string> OnWarning;
         public static Action OnLobbyUpdate;
         public static Action<GameStartInfo> OnGameStart;
         public static Action OnStateUpdate;
         public static Action OnFinished;
+
+        // ---------- Largada sincronizada ----------
+        /// <summary>Nomes de quem ainda está carregando a pista (game:waiting). WaitingKnown = já veio a 1ª lista.</summary>
+        public static readonly List<string> WaitingFor = new List<string>();
+        public static bool WaitingKnown;
+        /// <summary>"Vai" recebido (game:go): relógio real em que as luzes começam e a espera com as 5 acesas (a MESMA para todos).</summary>
+        public static float GoAtRealtime = -1f;
+        public static float GoHoldSeconds = -1f;
+        public static int Round;
+        public static Action OnWaiting;
+        public static Action OnGo;
+
+        // ---------- Votação (reiniciar / jogar novamente) ----------
+        public static VoteInfo Vote;
+        public static Action OnVoteChanged;
+        /// <summary>(aceito, tipo, texto para a tela).</summary>
+        public static Action<bool, string, string> OnVoteResult;
+        /// <summary>Tirado da sala (recusou a nova partida) — volta ao menu.</summary>
+        public static Action<string> OnKicked;
+
+        // ---------- Queda de conexão na corrida ----------
+        /// <summary>Senha de volta à sala (vem só para mim no room:joined): reconectar e retomar o MEU carro.</summary>
+        public static string MyToken;
+        /// <summary>Jogadores fora do ar agora (id → ritmo deles nesta pista): o anfitrião pilota esses carros.</summary>
+        public static readonly Dictionary<string, string> Dropped = new Dictionary<string, string>();
+        public static Action<string> OnDropped;
+        public static Action<string> OnBack;
+        public static Action OnHostChanged;
+        public static Action OnRejoined;
+        /// <summary>Janela para voltar à corrida depois de cair (s).</summary>
+        const float RejoinWindow = 120f;
+        static bool rejoining;
 
         public static string ServerUrl
         {
@@ -124,28 +185,52 @@ namespace RaceX.Core
         public static bool VerboseLogs = false;
         static void Log(string msg) { if (VerboseLogs) Debug.Log("[Online] " + msg); }
 
-        public static CarModel CarModelFromServer(string name) => name switch
+        /// <summary>Nome do carro no servidor = nome do enum em minúsculo (server/utils.js CAR_MODELS).
+        /// Antes só existiam falcon/titan/storm: o F1 ia como "storm" e o resto virava Porsche.</summary>
+        public static CarModel CarModelFromServer(string name)
         {
-            "falcon" => CarModel.Falcon,
-            "storm" => CarModel.Storm,
-            "f1" => CarModel.F1,
-            _ => CarModel.Titan
-        };
+            if (!string.IsNullOrEmpty(name) && Enum.TryParse(name, true, out CarModel m) && Enum.IsDefined(typeof(CarModel), m)) return m;
+            return CarModel.Titan;
+        }
 
-        public static string CarModelToServer(CarModel model) => model switch
-        {
-            CarModel.Falcon => "falcon",
-            CarModel.Storm => "storm",
-            CarModel.F1 => "storm",
-            _ => "titan"
-        };
+        public static string CarModelToServer(CarModel model) => model.ToString().ToLowerInvariant();
 
         public static RemoteState GetRemote(string id) => id != null && RemoteStates.TryGetValue(id, out var s) ? s : null;
 
+        // ---------- Servidor dormindo (Render Free) ----------
+        // O plano gratuito desliga o servidor parado; a 1ª conexão leva até ~1 min para ACORDAR.
+        // Antes o cliente desistia em 10 s ("Tempo esgotado") — era o erro antes de criar a sala.
+        // Agora: cada tentativa espera 20 s e reconecta sozinho até 90 s no total.
+        const float AttemptTimeout = 20f;
+        const float WakeWindow = 90f;
+        const float RetryDelay = 3f;
+        static float connectWindowEnd;
+        static float retryAt = -1f;
+        static int attempt;
+
+        /// <summary>Texto de estado da conexão para a UI (vazio quando conectado).</summary>
+        public static string ConnectionStatus { get; private set; } = "";
+
         public static void Connect(string serverUrl)
+        {
+            attempt = 0;
+            connectWindowEnd = Time.realtimeSinceStartup + WakeWindow;
+            retryAt = -1f;
+            ConnectionStatus = "Conectando ao servidor...";
+            ConnectAttempt(serverUrl, true);
+        }
+
+        static void ConnectAttempt(string serverUrl, bool resetRoom)
         {
             EnsurePump();
             StopSocket();
+            attempt++;
+            if (resetRoom) ResetRoomState();
+            OpenSocket(serverUrl);
+        }
+
+        static void ResetRoomState()
+        {
             Connected = false;
             RoomCode = null;
             IsHost = false;
@@ -157,6 +242,21 @@ namespace RaceX.Core
             Rankings.Clear();
             StateCorrection = null;
             pending = null;
+            ClearRaceSync();
+        }
+
+        static void ClearRaceSync()
+        {
+            WaitingFor.Clear();
+            WaitingKnown = false;
+            GoAtRealtime = -1f;
+            GoHoldSeconds = -1f;
+            Vote = null;
+            Dropped.Clear();
+        }
+
+        static void OpenSocket(string serverUrl)
+        {
             lastUrl = NormalizeServerUrl(serverUrl);
             Log("Conectando em " + lastUrl);
             connectFailed = false;
@@ -177,8 +277,24 @@ namespace RaceX.Core
             }
         }
 
+        /// <summary>Falhou esta tentativa: tenta de novo se ainda estiver na janela de "acordar".</summary>
+        static bool ScheduleRetry(string why)
+        {
+            if (Time.realtimeSinceStartup + RetryDelay >= connectWindowEnd) return false;
+            retryAt = Time.realtimeSinceStartup + RetryDelay;
+            connectStartedAt = 0f;
+            ConnectionStatus = "Acordando o servidor (plano gratuito leva até 1 min)... tentativa " + (attempt + 1);
+            Log("Tentativa " + attempt + " falhou (" + why + "), nova em " + RetryDelay + " s");
+            return true;
+        }
+
         public static void Disconnect()
         {
+            rejoining = false;
+            MyToken = null;
+            retryAt = -1f;
+            connectWindowEnd = 0f;
+            ConnectionStatus = "";
             pending = null;
             Connected = false;
             connectFailed = false;
@@ -193,6 +309,7 @@ namespace RaceX.Core
             RemoteStates.Clear();
             Rankings.Clear();
             StateCorrection = null;
+            ClearRaceSync();
         }
 
         static void StopSocket()
@@ -214,12 +331,14 @@ namespace RaceX.Core
 
         public static void CreateRoom(string hostName)
         {
+            IsHost = true; // papel pretendido: a tela de anfitrião já aparece enquanto conecta
             pending = new PendingAction { kind = 0, name = hostName };
             DrainPending();
         }
 
         public static void JoinRoom(string code, string name)
         {
+            IsHost = false;
             pending = new PendingAction { kind = 1, code = code, name = name };
             DrainPending();
         }
@@ -239,36 +358,89 @@ namespace RaceX.Core
             Emit("room:start", "{}");
         }
 
+        /// <summary>Pista montada neste aparelho: o servidor só dá a largada quando TODOS mandarem isto. Vai junto o RITMO do
+        /// jogador nesta pista (perfil "v;v;..." do PlayerPaceLearner): se ele cair, o anfitrião pilota o carro nesse ritmo.</summary>
+        public static void SendLoaded(string pace = "") => Emit("player:loaded", "{\"pace\":" + JsonString(pace ?? "") + "}");
+
+        /// <summary>Pede votação: "restart" (reiniciar a corrida) ou "rematch" (jogar novamente, na mesma sala).</summary>
+        public static void RequestVote(string kind) => Emit("vote:request", "{\"kind\":" + JsonString(kind) + "}");
+
+        public static void AnswerVote(bool yes)
+        {
+            var v = Vote;
+            if (v == null || v.mine || v.answered) return;
+            v.answered = true;
+            Emit("vote:answer", "{\"voteId\":" + JsonString(v.id) + ",\"yes\":" + (yes ? "true" : "false") + "}");
+            OnVoteChanged?.Invoke();
+        }
+
+        /// <summary>Abandono do jogador (perda total, quebra, desclassificado): fecha a corrida dele no servidor.</summary>
+        public static void SendRetired() => Emit("player:finished", "{\"retired\":true}");
+
         /// <summary>Pista escolhida na sala (atualizada pelo broadcast do servidor).</summary>
         public static string RoomTrackId = "forest";
         public static int RoomLaps = 3;
         public static int RoomTotalCars = 8;
         public static string RoomDifficulty = "medium";
+        public static string RoomCategory = "gt";
+        public static bool RoomPitStops;
+        public static string RoomWeather = "";
+        public static bool RoomTotalLoss = true;
+        public static bool RoomPenalties = true;
 
-        /// <summary>Host altera as configurações da sala — o servidor sanitiza, aplica e re-transmite no lobby.</summary>
-        public static void SendRoomSettings(string trackId, int laps, int totalCars, string difficulty)
+        /// <summary>Host altera as configurações da sala — o servidor valida, aplica e re-transmite no lobby
+        /// (o que ele recusar volta como aviso "room:warning").</summary>
+        public static void SendRoomSettings(string trackId, int laps, int totalCars, string difficulty, string category, bool pitStops, string weather, bool totalLoss, bool penalties)
         {
             if (!IsHost) return;
             Emit("room:settings", "{\"trackId\":" + JsonString(trackId) +
                  ",\"laps\":" + laps + ",\"totalCars\":" + totalCars +
-                 ",\"difficulty\":" + JsonString(difficulty) + "}");
+                 ",\"difficulty\":" + JsonString(difficulty) +
+                 ",\"category\":" + JsonString(category) +
+                 ",\"pitStops\":" + (pitStops ? "true" : "false") +
+                 ",\"weather\":" + JsonString(weather ?? "") +
+                 ",\"totalLoss\":" + (totalLoss ? "true" : "false") +
+                 ",\"penalties\":" + (penalties ? "true" : "false") + "}");
         }
 
-        public static void SetRoomTrack(string trackId) => SendRoomSettings(trackId, RoomLaps, RoomTotalCars, RoomDifficulty);
+        /// <summary>Anfitrião: posições dos NPCs (ele pilota a IA; os convidados só exibem).</summary>
+        public static void SendAiPositions(List<string> items)
+        {
+            if (items == null || items.Count == 0) return;
+            Emit("ai:positions", "[" + string.Join(",", items) + "]");
+        }
 
-        public static void SendPosition(float x, float y, float z, float rot, float speed, int lap, int checkpoint)
+        /// <summary>dist = distância de corrida percorrida (m) — desempata quem ainda não terminou no placar oficial.
+        /// status 0 correndo / 2 abandonou. penalty = segundos de penalidade (já somados no finishedTime).</summary>
+        public static string AiStateJson(string id, Vector3 p, float rot, float speed, int lap, int checkpoint, float finishedTime, float bestLap, float dist = 0f, int status = 0, float penalty = 0f)
+        {
+            var f = CultureInfo.InvariantCulture;
+            var sb = new StringBuilder(200);
+            sb.Append("{\"id\":").Append(JsonString(id))
+              .Append(",\"x\":").Append(p.x.ToString(f)).Append(",\"y\":").Append(p.y.ToString(f)).Append(",\"z\":").Append(p.z.ToString(f))
+              .Append(",\"rotation\":").Append(rot.ToString(f)).Append(",\"speed\":").Append(speed.ToString(f))
+              .Append(",\"lap\":").Append(lap).Append(",\"checkpoint\":").Append(checkpoint)
+              .Append(",\"dist\":").Append(dist.ToString("0.0", f)).Append(",\"st\":").Append(status);
+            if (finishedTime > 0f) sb.Append(",\"finishedTime\":").Append(finishedTime.ToString(f)).Append(",\"bestLap\":").Append(bestLap.ToString(f))
+                                    .Append(",\"penalty\":").Append(penalty.ToString(f));
+            return sb.Append('}').ToString();
+        }
+
+        public static void SendPosition(float x, float y, float z, float rot, float speed, int lap, int checkpoint, float dist = 0f, int status = 0)
         {
             var f = CultureInfo.InvariantCulture;
             Emit("player:position",
                 "{\"x\":" + x.ToString(f) + ",\"y\":" + y.ToString(f) + ",\"z\":" + z.ToString(f) +
                 ",\"rotation\":" + rot.ToString(f) + ",\"speed\":" + speed.ToString(f) +
-                ",\"lap\":" + lap + ",\"checkpoint\":" + checkpoint + "}");
+                ",\"lap\":" + lap + ",\"checkpoint\":" + checkpoint +
+                ",\"dist\":" + dist.ToString("0.0", f) + ",\"st\":" + status + "}");
         }
 
-        public static void SendFinished(float totalTime = 0f, float bestLap = 0f)
+        /// <summary>Fim da corrida do jogador: tempo total (já com penalidades), melhor volta e penalidade (s).</summary>
+        public static void SendFinished(float totalTime = 0f, float bestLap = 0f, float penalty = 0f)
         {
             var f = CultureInfo.InvariantCulture;
-            Emit("player:finished", "{\"totalTime\":" + totalTime.ToString(f) + ",\"bestLap\":" + bestLap.ToString(f) + "}");
+            Emit("player:finished", "{\"totalTime\":" + totalTime.ToString(f) + ",\"bestLap\":" + bestLap.ToString(f) + ",\"penalty\":" + penalty.ToString(f) + "}");
         }
 
         static readonly ConcurrentQueue<SocketEvent> Received = new ConcurrentQueue<SocketEvent>();
@@ -279,6 +451,25 @@ namespace RaceX.Core
         static CancellationTokenSource cts;
         static Thread socketThread;
         static SemaphoreSlim sendLock = new SemaphoreSlim(1, 1);
+        /// <summary>Acorda o envio assim que algo entra na fila.</summary>
+        static readonly SemaphoreSlim outgoingSignal = new SemaphoreSlim(0, 1);
+
+        /// <summary>Envio em laço PRÓPRIO: antes a fila só era esvaziada antes de cada ReceiveAsync (que bloqueia
+        /// até o servidor mandar algo). No lobby o servidor fica ~25 s calado (só ping) — as mudanças do anfitrião
+        /// saíam atrasadas e em bloco, cada uma com o estado antigo, e uma desfazia a outra (pista voltava).</summary>
+        static void SendLoop(CancellationToken token)
+        {
+            try
+            {
+                while (socketRunning && !token.IsCancellationRequested && ws != null && ws.State == WebSocketState.Open)
+                {
+                    DrainOutgoing(token);
+                    outgoingSignal.Wait(100, token);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { Debug.LogWarning("[Online] envio parou: " + ex.Message); }
+        }
         static PendingAction? pending;
 
         struct SocketEvent
@@ -313,6 +504,7 @@ namespace RaceX.Core
             {
                 ws = new ClientWebSocket();
                 ws.ConnectAsync(uri, token).Wait(token);
+                System.Threading.Tasks.Task.Run(() => SendLoop(token));
                 var buffer = new byte[65536];
                 var sb = new StringBuilder();
                 while (socketRunning && !token.IsCancellationRequested && ws.State == WebSocketState.Open)
@@ -438,6 +630,7 @@ namespace RaceX.Core
         {
             if (!socketIoConnected) return;
             Outgoing.Enqueue("42[\"" + name + "\"," + payload + "]");
+            try { outgoingSignal.Release(); } catch (SemaphoreFullException) { }
         }
 
         static void DrainPending()
@@ -447,19 +640,32 @@ namespace RaceX.Core
             pending = null;
             if (p.kind == 0)
                 Emit("room:create", "{\"hostName\":" + JsonString(p.name) + "}");
+            else if (p.kind == 2)
+                Emit("room:rejoin", "{\"roomCode\":" + JsonString(p.code) + ",\"token\":" + JsonString(p.name) + "}");   // volta à corrida
             else
                 Emit("room:join", "{\"roomCode\":" + JsonString(p.code) + ",\"playerName\":" + JsonString(p.name) + "}");
         }
 
         public static void DrainEvents()
         {
-            if (!Connected && !connectFailed && connectStartedAt > 0f && Time.realtimeSinceStartup - connectStartedAt > 10f)
+            if (retryAt > 0f && Time.realtimeSinceStartup >= retryAt)
+            {
+                retryAt = -1f;
+                var keep = pending;
+                ConnectAttempt(lastUrl, false);
+                pending = keep; // a ação (criar/entrar) continua na fila até conectar
+            }
+            if (!Connected && !connectFailed && connectStartedAt > 0f && Time.realtimeSinceStartup - connectStartedAt > AttemptTimeout)
             {
                 connectStartedAt = 0f;
-                connectFailed = true;
-                LastError = "timeout";
-                OnError?.Invoke("Tempo esgotado ao conectar ao servidor (" + lastUrl + ")");
-                Log("Tempo esgotado ao conectar ao servidor (" + lastUrl + ")");
+                if (!ScheduleRetry("timeout"))
+                {
+                    connectFailed = true;
+                    LastError = "timeout";
+                    ConnectionStatus = "O servidor não respondeu em " + WakeWindow.ToString("0") + " s";
+                    OnError?.Invoke("O servidor não respondeu. Confira a internet e tente de novo");
+                    Log("Tempo esgotado ao conectar ao servidor (" + lastUrl + ")");
+                }
             }
             DrainPending();
             while (Received.TryDequeue(out var ev))
@@ -470,11 +676,15 @@ namespace RaceX.Core
                     Connected = true;
                     connectFailed = false;
                     connectStartedAt = 0f;
+                    retryAt = -1f;
+                    ConnectionStatus = "";
                     Log("Conectado ao servidor");
                     DrainPending();
                     break;
                 case "__connect_error":
+                    if (!Connected && ScheduleRetry(ev.data)) break;
                     connectFailed = true;
+                    ConnectionStatus = "Falha de conexão";
                     connectStartedAt = 0f;
                     LastError = ev.data;
                     LastServerMessage = "Falha de conexão: " + ev.data;
@@ -483,10 +693,25 @@ namespace RaceX.Core
                     break;
                 case "__disconnect":
                     Log("Desconectado do servidor");
+                    // CAIU NO MEIO DA CORRIDA: tenta voltar sozinho (até 2 min) e retoma o PRÓPRIO carro na sala (room:rejoin
+                    // com a senha). Enquanto isso o anfitrião pilota o carro no ritmo deste jogador; o jogo aqui segue normal.
+                    if (Connected && StartInfo != null && !string.IsNullOrEmpty(RoomCode) && !string.IsNullOrEmpty(MyToken))
+                    {
+                        Connected = false;
+                        rejoining = true;
+                        pending = new PendingAction { kind = 2, code = RoomCode, name = MyToken };
+                        connectWindowEnd = Time.realtimeSinceStartup + RejoinWindow;
+                        ScheduleRetry("queda na corrida");
+                        ConnectionStatus = "Conexão perdida — reconectando...";
+                        OnError?.Invoke("CONEXÃO PERDIDA — reconectando...");
+                        break;
+                    }
                     if (!Connected)
                     {
+                        if (retryAt > 0f || ScheduleRetry("desconectado")) break;
                         connectFailed = true;
                         connectStartedAt = 0f;
+                        if (rejoining) { rejoining = false; OnError?.Invoke("Não foi possível voltar à sala"); break; }
                     }
                     Connected = false;
                     if (!string.IsNullOrEmpty(RoomCode)) OnError?.Invoke("Conexão perdida com o servidor");
@@ -497,10 +722,51 @@ namespace RaceX.Core
                     Log("Sala criada: " + RoomCode);
                     break;
                 case "room:joined":
+                {
+                    bool wasHost = IsHost;
                     ParseRoomJoined(ev.data);
                     OnRoomJoined?.Invoke(RoomCode);
                     OnLobbyUpdate?.Invoke();
                     Log("Entrou na sala " + RoomCode + " como " + MyPlayerId + (IsHost ? " (anfitrião)" : ""));
+                    if (rejoining && ExtractString(ev.data, "token").Length > 0)
+                    {
+                        rejoining = false;
+                        OnRejoined?.Invoke();
+                    }
+                    if (StartInfo != null && wasHost != IsHost) OnHostChanged?.Invoke();   // voltei e a sala já tem outro anfitrião
+                    break;
+                }
+                case "player:dropped":
+                {
+                    string id = ExtractString(ev.data, "playerId");
+                    if (id.Length == 0 || id == MyPlayerId) break;
+                    Dropped[id] = ExtractString(ev.data, "pace");
+                    OnDropped?.Invoke(id);
+                    break;
+                }
+                case "player:back":
+                {
+                    string id = ExtractString(ev.data, "playerId");
+                    if (id.Length == 0 || id == MyPlayerId) break;
+                    Dropped.Remove(id);
+                    OnBack?.Invoke(id);
+                    break;
+                }
+                case "room:warning":
+                    LastServerMessage = ExtractString(ev.data, "message");
+                    OnWarning?.Invoke(LastServerMessage);
+                    break;
+                case "room:host":
+                {
+                    bool wasHost = IsHost;
+                    IsHost = ExtractString(ev.data, "hostId") == MyPlayerId;
+                    OnLobbyUpdate?.Invoke();
+                    if (wasHost != IsHost) OnHostChanged?.Invoke();   // na corrida: o novo anfitrião passa a pilotar a IA
+                    break;
+                }
+                case "room:full":
+                    LastError = "Sala cheia (máximo de 8 jogadores)";
+                    OnError?.Invoke(LastError);
                     break;
                 case "room:error":
                     LastError = ExtractString(ev.data, "message");
@@ -510,7 +776,67 @@ namespace RaceX.Core
                     break;
                 case "game:start":
                     StartInfo = ParseGameStart(ev.data);
+                    // Nova corrida (1ª, reinício ou nova partida): placar e espera da anterior não valem mais.
+                    Rankings.Clear();
+                    RemoteStates.Clear();
+                    ClearRaceSync();
+                    Round = StartInfo.round;
                     OnGameStart?.Invoke(StartInfo);
+                    break;
+                case "game:waiting":
+                    WaitingFor.Clear();
+                    WaitingFor.AddRange(ExtractStringArray(ev.data, "waiting"));
+                    WaitingKnown = true;
+                    OnWaiting?.Invoke();
+                    break;
+                case "game:go":
+                    GoHoldSeconds = Mathf.Clamp(ExtractInt(ev.data, "holdMs"), 0, 5000) / 1000f;
+                    GoAtRealtime = Time.realtimeSinceStartup + Mathf.Clamp(ExtractInt(ev.data, "inMs"), 0, 10000) / 1000f;
+                    WaitingFor.Clear();
+                    WaitingKnown = true;
+                    OnGo?.Invoke();
+                    break;
+                case "vote:start":
+                {
+                    int secs = Mathf.Clamp(ExtractInt(ev.data, "seconds"), 3, 30);
+                    Vote = new VoteInfo
+                    {
+                        id = ExtractString(ev.data, "voteId"),
+                        kind = ExtractString(ev.data, "kind"),
+                        byId = ExtractString(ev.data, "byId"),
+                        byName = ExtractString(ev.data, "byName"),
+                        deadline = Time.realtimeSinceStartup + secs,
+                        total = Mathf.Max(1, LobbyPlayers.Count)
+                    };
+                    Vote.mine = Vote.byId == MyPlayerId;
+                    OnVoteChanged?.Invoke();
+                    break;
+                }
+                case "vote:update":
+                    if (Vote != null && ExtractString(ev.data, "voteId") == Vote.id)
+                    {
+                        Vote.yes = ExtractInt(ev.data, "yes");
+                        Vote.no = ExtractInt(ev.data, "no");
+                        Vote.total = Mathf.Max(1, ExtractInt(ev.data, "total"));
+                        OnVoteChanged?.Invoke();
+                    }
+                    break;
+                case "vote:result":
+                {
+                    bool accepted = ExtractBool(ev.data, "accepted");
+                    string kind = ExtractString(ev.data, "kind");
+                    var no = ExtractStringArray(ev.data, "no");
+                    Vote = null;
+                    string text = accepted
+                        ? (kind == "restart" ? "REINICIANDO A CORRIDA..." : "NOVA PARTIDA — CARREGANDO...")
+                        : (kind == "restart" ? "REINÍCIO RECUSADO" : "NOVA PARTIDA RECUSADA") + (no.Count > 0 ? " — " + string.Join(", ", no) : "");
+                    OnVoteChanged?.Invoke();
+                    OnVoteResult?.Invoke(accepted, kind, text);
+                    break;
+                }
+                case "room:kicked":
+                    LastError = ExtractString(ev.data, "message");
+                    OnKicked?.Invoke(LastError);
                     break;
                 case "game:update":
                     ParseGameUpdate(ev.data);
@@ -535,16 +861,22 @@ namespace RaceX.Core
             string code = ExtractString(json, "roomCode");
             string hostId = ExtractString(json, "hostId");
             string pid = ExtractString(json, "playerId");
+            string tok = ExtractString(json, "token");
             if (code.Length > 0) RoomCode = code;
-            if (pid.Length == 0) Debug.LogWarning("[Online] room:joined sem playerId");
             if (pid.Length > 0) MyPlayerId = pid;
+            if (tok.Length > 0) MyToken = tok;
             IsHost = hostId.Length > 0 && hostId == MyPlayerId;
             string roomTrack = ExtractString(json, "trackId"); // settings do lobby (vem antes dos players no payload)
             if (roomTrack.Length > 0) RoomTrackId = roomTrack;
-            RoomLaps = Mathf.Clamp(ExtractInt(json, "laps"), 1, 20);
-            RoomTotalCars = Mathf.Clamp(ExtractInt(json, "totalCars"), 1, 16);
+            RoomLaps = Mathf.Clamp(ExtractInt(json, "laps"), 0, 200);
+            RoomTotalCars = Mathf.Clamp(ExtractInt(json, "totalCars"), 2, 24);
             string roomDiff = ExtractString(json, "difficulty");
             if (roomDiff.Length > 0) RoomDifficulty = roomDiff;
+            RoomCategory = ExtractString(json, "category") == "f1" ? "f1" : "gt";
+            RoomPitStops = ExtractBool(json, "pitStops");
+            RoomWeather = ExtractString(json, "weather");
+            RoomTotalLoss = ExtractBoolOr(json, "totalLoss", true);
+            RoomPenalties = ExtractBoolOr(json, "penalties", true);
             LobbyPlayers.Clear();
             string arr = ExtractArray(json, "players");
             if (arr != null)
@@ -573,7 +905,14 @@ namespace RaceX.Core
                 laps = ExtractInt(json, "laps"),
                 totalCars = ExtractInt(json, "totalCars"),
                 difficulty = ExtractString(json, "difficulty"),
-                startAt = ExtractLong(json, "startAt")
+                category = ExtractString(json, "category") == "f1" ? "f1" : "gt",
+                pitStops = ExtractBool(json, "pitStops"),
+                weather = ExtractString(json, "weather"),
+                totalLoss = ExtractBoolOr(json, "totalLoss", true),
+                penalties = ExtractBoolOr(json, "penalties", true),
+                startAt = ExtractLong(json, "startAt"),
+                sync = ExtractBool(json, "sync"),
+                round = ExtractInt(json, "round")
             };
             string arr = ExtractArray(json, "startPositions");
             if (arr != null)
@@ -594,8 +933,9 @@ namespace RaceX.Core
             return info;
         }
 
+        // "st" (estado: correndo/terminou/abandonou) vem logo depois de "lap" no servidor novo — opcional (servidor antigo não manda).
         static readonly Regex ArrayState = new Regex(
-            "\"id\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"x\"\\s*:\\s*(-?[\\d.]+(?:[eE][+-]?\\d+)?)\\s*,\\s*\"y\"\\s*:\\s*(-?[\\d.]+(?:[eE][+-]?\\d+)?)\\s*,\\s*\"z\"\\s*:\\s*(-?[\\d.]+(?:[eE][+-]?\\d+)?)\\s*,\\s*\"rotation\"\\s*:\\s*(-?[\\d.]+(?:[eE][+-]?\\d+)?)\\s*,\\s*\"speed\"\\s*:\\s*(-?[\\d.]+(?:[eE][+-]?\\d+)?)\\s*,\\s*\"lap\"\\s*:\\s*(\\d+)",
+            "\"id\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"x\"\\s*:\\s*(-?[\\d.]+(?:[eE][+-]?\\d+)?)\\s*,\\s*\"y\"\\s*:\\s*(-?[\\d.]+(?:[eE][+-]?\\d+)?)\\s*,\\s*\"z\"\\s*:\\s*(-?[\\d.]+(?:[eE][+-]?\\d+)?)\\s*,\\s*\"rotation\"\\s*:\\s*(-?[\\d.]+(?:[eE][+-]?\\d+)?)\\s*,\\s*\"speed\"\\s*:\\s*(-?[\\d.]+(?:[eE][+-]?\\d+)?)\\s*,\\s*\"lap\"\\s*:\\s*(\\d+)(?:\\s*,\\s*\"st\"\\s*:\\s*(\\d+))?",
             RegexOptions.Compiled);
 
         static readonly Regex DictState = new Regex(
@@ -637,6 +977,7 @@ namespace RaceX.Core
                 lap = int.Parse(m.Groups[g + 5].Value, inv),
                 timestamp = now
             };
+            if (m.Groups.Count > g + 6 && m.Groups[g + 6].Success) state.status = int.Parse(m.Groups[g + 6].Value, inv);
             return state;
         }
 
@@ -654,11 +995,29 @@ namespace RaceX.Core
                     isAI = ExtractBool(obj, "isAI"),
                     name = ExtractString(obj, "name"),
                     finished = ExtractBool(obj, "finished"),
+                    retired = ExtractBool(obj, "retired"),
                     totalTime = ExtractFloat(obj, "totalTime"),
                     bestLap = ExtractFloat(obj, "bestLap"),
+                    penalty = ExtractFloat(obj, "penalty"),
                     lap = ExtractInt(obj, "lap")
                 });
             }
+        }
+
+        /// <summary>["a","b"] → lista de textos (nomes da espera/votação).</summary>
+        static List<string> ExtractStringArray(string json, string key)
+        {
+            var list = new List<string>();
+            string arr = ExtractArray(json, key);
+            if (arr == null) return list;
+            foreach (Match m in Regex.Matches(arr, "\"((?:[^\"\\\\]|\\\\.)*)\"")) list.Add(Unescape(m.Groups[1].Value));
+            return list;
+        }
+
+        static bool ExtractBoolOr(string json, string key, bool fallback)
+        {
+            var m = Regex.Match(json, "\"" + key + "\"\\s*:\\s*(true|false)");
+            return m.Success ? m.Groups[1].Value == "true" : fallback;
         }
 
         static List<string> SplitObjects(string arr)
@@ -791,29 +1150,47 @@ namespace RaceX.Core
     public class OnlineGhost : MonoBehaviour
     {
         public string playerId;
+        /// <summary>Corrida e entrada deste carro aqui (para o abandono feito no aparelho dono valer também aqui).</summary>
+        public RaceManager race;
+        public RaceEntry entry;
 
         CarController car;
+        bool retiredHere;
 
         void Awake()
         {
             car = GetComponent<CarController>();
+            if (car != null) car.IsRemote = true;
         }
 
         void LateUpdate()
         {
+            if (RaceX.Core.ReplaySystem.IsPlaying) return; // replay usa as posições gravadas
             if (playerId == null || car == null) return;
             var st = OnlineClient.GetRemote(playerId);
-            if (st == null) return;
+            if (st == null) { car.RemoteVelocity = Vector3.zero; return; }
+            var rot = Quaternion.Euler(0f, st.rotation, 0f);
+            // Velocidade REAL do carro remoto (direção × velocidade enviadas pelo dono): sem isso ele valia 0 km/h aqui.
+            Vector3 vel = st.status == 0 ? rot * Vector3.forward * (Mathf.Max(0f, st.speed) / 3.6f) : Vector3.zero;
+            car.RemoteVelocity = vel;
+            if (st.status == 2 && !retiredHere && race != null && entry != null && !entry.finished)
+            {
+                retiredHere = true;
+                race.Retire(entry, "ABANDONO");
+            }
             float age = Time.realtimeSinceStartup - st.timestamp;
             if (age > 2f)
             {
-                car.transform.SetPositionAndRotation(st.position, Quaternion.Euler(0f, st.rotation, 0f));
+                car.transform.SetPositionAndRotation(st.position, rot);
                 return;
             }
+            // O pacote chega ~0,1–0,25 s atrasado: projeta pela velocidade até 0,35 s (antes o carro remoto andava sempre
+            // atrás de onde estava de verdade).
+            Vector3 target = st.position + vel * Mathf.Min(age, 0.35f);
             float dt = Mathf.Max(0f, Time.deltaTime);
             float k = 1f - Mathf.Exp(-12f * dt);
-            car.transform.position = Vector3.Lerp(car.transform.position, st.position, k);
-            car.transform.rotation = Quaternion.Slerp(car.transform.rotation, Quaternion.Euler(0f, st.rotation, 0f), 1f - Mathf.Exp(-10f * dt));
+            car.transform.position = Vector3.Lerp(car.transform.position, target, k);
+            car.transform.rotation = Quaternion.Slerp(car.transform.rotation, rot, 1f - Mathf.Exp(-10f * dt));
         }
     }
 }

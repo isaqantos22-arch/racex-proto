@@ -65,6 +65,13 @@ namespace RaceX.Core
 
         /// <summary>Rádio do pit: 0 = Desligado, 1 = Ligado. A chave do PlayerPrefs é a MESMA de antes
         /// (valores antigos 1..5 de limiar viram "Ligado" automaticamente — cliente compatível).</summary>
+        /// <summary>Volta de apresentação antes das corridas (pode ser pulada no HUD).</summary>
+        public static bool FormationLap
+        {
+            get => PlayerPrefs.GetInt(Prefix + "FormationLap", 1) != 0;
+            set => PlayerPrefs.SetInt(Prefix + "FormationLap", value ? 1 : 0);
+        }
+
         public static int PitRadio
         {
             get => PlayerPrefs.GetInt(Prefix + "PitRadio", 3) == 0 ? 0 : 1;
@@ -158,6 +165,8 @@ namespace RaceX.Core
             int fps = TargetFps;
             if (fps <= 0)
             {
+                // AUTO no PC = V-Sync de volta (o limite manual desliga o V-Sync; sem religar, voltar ao AUTO deixava o FPS sem teto).
+                if (!Application.isMobilePlatform) QualitySettings.vSyncCount = 1;
                 Application.targetFrameRate = Application.isMobilePlatform ? (tier >= QualityTier.High ? 60 : 30) : -1;
                 return;
             }

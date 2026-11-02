@@ -302,6 +302,42 @@ namespace RaceX.Track
             foreach (var g in kill) Destroy(g);
         }
 
+        /// <summary>Tira a GRAMA da faixa de escape do lado do pit no trecho [fromDist, fromDist+span]: ali o chão é o corredor
+        /// do pit (asfalto), as rampas e a laje do paddock. Corredor e grama ficavam na MESMA altura (+0,02 m) e brigavam no
+        /// desenho — listras verdes atravessando o asfalto do pit lane (print do usuário, 02/11). O colisor da grama sai junto
+        /// (o corredor e as rampas têm colisor de asfalto próprio).</summary>
+        public void OpenRunoffGap(float fromDist, float span, bool leftSide)
+        {
+            string prefix = leftSide ? "RunoffL" : "RunoffR";
+            float L = Spline.Length;
+            float width = Mathf.Max(1f, Definition.runoffWidth);   // v da UV = distância ao longo ÷ largura (AddStripBanded)
+            var uvs = new List<Vector2>();
+            foreach (Transform child in transform)
+            {
+                if (!child.name.StartsWith(prefix, System.StringComparison.Ordinal)) continue;
+                var mf = child.GetComponent<MeshFilter>();
+                if (mf == null || mf.sharedMesh == null) continue;
+                var mesh = mf.sharedMesh;
+                uvs.Clear();
+                mesh.GetUVs(0, uvs);
+                if (uvs.Count != mesh.vertexCount) continue;
+                var tris = mesh.triangles;
+                var keep = new List<int>(tris.Length);
+                for (int t = 0; t + 2 < tris.Length; t += 3)
+                {
+                    bool inGap = false;
+                    for (int k = 0; k < 3 && !inGap; k++)
+                        if (Mathf.Repeat(uvs[tris[t + k]].y * width - fromDist, L) <= span) inGap = true;
+                    if (!inGap) { keep.Add(tris[t]); keep.Add(tris[t + 1]); keep.Add(tris[t + 2]); }
+                }
+                if (keep.Count == tris.Length) continue;
+                mesh.SetTriangles(keep, 0);
+                mesh.RecalculateBounds();
+                var mc = child.GetComponent<MeshCollider>();
+                if (mc != null) { mc.sharedMesh = null; mc.sharedMesh = mesh; }
+            }
+        }
+
         /// <summary>Escolhe a reta do pit ANTES da decoração: mesma busca de retas do PitLaneSystem
         /// (maior trecho de baixa curvatura), mas só aceita a reta se o corredor + garagens (lado
         /// esquerdo, 6,5–40 m) não invadirem outro trecho da pista nem a própria pista numa curva.

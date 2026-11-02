@@ -18,6 +18,8 @@ namespace RaceX.Input
 
         public event Action PausePressed;
 
+        float brakeRamp;   // freio progressivo (botão/tecla)
+
         float touchSteer;
 
 #if ENABLE_INPUT_SYSTEM
@@ -104,9 +106,15 @@ namespace RaceX.Input
                 hb |= touch.Handbrake;
             }
 
+            // FREIO PROGRESSIVO (pedido do usuário: "o freio trava o carro; deve frear de acordo com o toque e com o tempo
+            // que estamos freando"): botão/tecla (0 ou 1) não manda 100% na hora — começa em 35% e chega a 100% em 0,6 s
+            // segurando; soltou, solta na hora. Gatilho analógico (controle) continua com o valor real.
+            if (br >= 0.99f) brakeRamp = brakeRamp < 0.35f ? 0.35f : Mathf.MoveTowards(brakeRamp, 1f, Time.deltaTime / 0.6f);
+            else brakeRamp = 0f;
+            float brOut = br >= 0.99f ? brakeRamp : br;
             car.steerInput = Mathf.Clamp(s, -1f, 1f);
             car.throttleInput = Mathf.Clamp01(th);
-            car.brakeInput = Mathf.Clamp01(br);
+            car.brakeInput = Mathf.Clamp01(brOut);
             // Piloto automático do pit (entrada/box/saída): o freio de mão do jogador NÃO interfere —
             // segurar F. MÃO travava as rodas traseiras e o carro não saía do box.
             car.handbrake = hb && !car.pitControlled;

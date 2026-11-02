@@ -43,8 +43,9 @@ namespace RaceX.UI
             {
                 var canvas = UIFactory.CreateCanvas("SaveToastCanvas", 500);
                 DontDestroyOnLoad(canvas.gameObject);
-                bg = UIFactory.Panel("SaveToastBg", canvas.transform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
-                    new Vector2(0f, 30f), new Vector2(480f, 44f), new Color(0f, 0f, 0f, 0.6f));
+                // No TOPO da tela (antes embaixo, por cima da fileira de botões do hub da carreira).
+                bg = UIFactory.Panel("SaveToastBg", canvas.transform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
+                    new Vector2(0f, -8f), new Vector2(480f, 44f), new Color(0f, 0f, 0f, 0.72f));
                 bg.raycastTarget = false;
                 label = UIFactory.Label("SaveToastLabel", bg.transform, "", 26, TextAnchor.MiddleCenter,
                     new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(480f, 44f), Color.white);

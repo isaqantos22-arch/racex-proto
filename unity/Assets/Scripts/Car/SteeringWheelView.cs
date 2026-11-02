@@ -14,11 +14,32 @@ namespace RaceX.Car
         float leverX;
         float current;
 
+        /// <summary>Largura real do volante do FP04 num carro de 5,2 m (convert_f1_batch.py, log).</summary>
+        const float Fp04WheelWidth = 0.276f; // largura real medida no .blend do FP04 (carro de 5,6 m)
+        /// <summary>true = volante modelado do FP04 (tamanho real; o CarFactory não aplica o 0,62).</summary>
+        public bool usesModel;
+
         public void Build(bool rectangular, Material mat, CarSpec spec = null)
         {
-            BuildLever(mat, spec);
             wheelPivot = new GameObject("WheelPivot").transform;
             wheelPivot.SetParent(transform, false);
+            // Monopostos: volante modelado do FP04 (botões, borboletas, LEDs) — as mãos já vêm no piloto.
+            if (spec != null && CarSpec.IsFormula(spec.model))
+            {
+                var mats = new System.Collections.Generic.Dictionary<ModelMaterialRole, Material>
+                {
+                    { ModelMaterialRole.Black, MaterialLibrary.Get("WheelDark", new Color(0.055f, 0.055f, 0.075f), 0.45f) },
+                    { ModelMaterialRole.Metal, MaterialLibrary.Get("WheelMetal", new Color(0.55f, 0.55f, 0.58f), 0.75f, 0.9f) },
+                    { ModelMaterialRole.Taillight, MaterialLibrary.Get("WheelLed", new Color(0.6f, 0.05f, 0.05f), 0.9f, 0f, new Color(1.6f, 0.15f, 0.1f)) },
+                    { ModelMaterialRole.Paint, MaterialLibrary.Get("WheelWhite", new Color(0.85f, 0.85f, 0.87f), 0.5f) },
+                };
+                if (ImportedCarModels.InstantiatePart("FP04_Wheel", wheelPivot, 0, Fp04WheelWidth * spec.bodySize.z / 5.6f, mats) != null)
+                {
+                    usesModel = true;
+                    return;
+                }
+            }
+            BuildLever(mat, spec);
             var skin = MaterialLibrary.Get("HandPlaceholder", new Color(0.12f, 0.12f, 0.14f), 0.3f);
             var rimMat = MaterialLibrary.Get("WheelDark", new Color(0.055f, 0.055f, 0.075f), 0.45f);
             var markMat = MaterialLibrary.Get("WheelTopMark", new Color(0.75f, 0.08f, 0.08f), 0.5f);

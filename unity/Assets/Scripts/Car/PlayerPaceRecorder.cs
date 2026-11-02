@@ -70,6 +70,45 @@ namespace RaceX.Car
             return Get(trackId)[Seg(along, length)];
         }
 
+        /// <summary>Perfil do jogador nesta pista (cópia, m/s por trecho) — null se tiver menos da metade dos trechos (sem
+        /// volta limpa suficiente). ONLINE: é o "ritmo do próprio jogador" que o piloto automático usa.</summary>
+        public static float[] Profile(int trackId)
+        {
+            var arr = Get(trackId);
+            int filled = 0;
+            foreach (float v in arr) if (v > 5f) filled++;
+            if (filled < Segments / 2) return null;
+            return (float[])arr.Clone();
+        }
+
+        /// <summary>Perfil desta pista em texto ("v;v;...") para mandar ao servidor ao carregar a corrida online ("" = sem perfil).</summary>
+        public static string ExportTrack(int trackId)
+        {
+            var arr = Profile(trackId);
+            if (arr == null) return "";
+            var sb = new System.Text.StringBuilder(Segments * 5);
+            for (int i = 0; i < Segments; i++)
+            {
+                if (i > 0) sb.Append(';');
+                sb.Append(arr[i].ToString("0.0", System.Globalization.CultureInfo.InvariantCulture));
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>Lê o perfil vindo de outro jogador (online). null se vazio/inválido.</summary>
+        public static float[] ParseProfile(string raw)
+        {
+            if (string.IsNullOrEmpty(raw)) return null;
+            var parts = raw.Split(';');
+            if (parts.Length < Segments / 2) return null;
+            var arr = new float[Segments];
+            int filled = 0;
+            for (int i = 0; i < parts.Length && i < Segments; i++)
+                if (float.TryParse(parts[i], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float v) && v > 5f && v < 120f)
+                { arr[i] = v; filled++; }
+            return filled >= Segments / 2 ? arr : null;
+        }
+
         public static void Flush()
         {
             if (dirty.Count == 0) return;
@@ -143,6 +182,7 @@ namespace RaceX.Car
         readonly float[] lapBuf = new float[PlayerPaceLearner.Segments];
         bool lapDirty = true; // primeira volta (largada/saída do box) nunca conta
         int lastLap = -1;
+        CarAI aiPilot;
 
         public void Initialize(CarController c, WaypointSystem wp, RaceManager rm, int track)
         {
@@ -189,6 +229,7 @@ namespace RaceX.Car
 
         void Update()
         {
+            if (RaceX.Core.ReplaySystem.IsPlaying) return; // replay na tela: mundo congelado, nada reage às posições reproduzidas
             if (car == null || waypoints == null || waypoints.Spline == null) return;
             if (race != null && entry != null)
             {
@@ -202,6 +243,9 @@ namespace RaceX.Car
             if (sampleTimer > 0f) return;
             sampleTimer = 0.1f;
             if (race != null && race.State != RaceState.Racing) return;
+            // Piloto automático (autoteste) no carro do jogador: NÃO é pilotagem do jogador — não grava.
+            if (aiPilot == null) aiPilot = car.GetComponent<CarAI>();
+            if (aiPilot != null && aiPilot.enabled) { lapDirty = true; return; }
             if (RaceX.Core.PitLaneSystem.IsInPitFlow(car) || car.pitControlled) { lapDirty = true; return; }
             if (car.IsOffTrack || car.IsReversing) { lapDirty = true; return; }
             if (car.GroundedWheels < 4) return;

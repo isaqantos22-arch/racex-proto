@@ -31,10 +31,13 @@ namespace RaceX.Track
         public float asphaltSmoothness = 0.25f;
         public Color grassBandA = new Color(0.22f, 0.5f, 0.18f);
         public Color grassBandB = new Color(0.18f, 0.44f, 0.15f);
-        public Color sunColor;
+        // Padrão = sol de DIA. Sem isto a cor ficava (0,0,0): 5 pistas extras que não definem o sol (Parque Real, Dragão
+        // Oriental, Ilha das Cascatas, Colinas Verdes, Campo do Norte) rodavam com SOL PRETO — grama e árvores pretas, tracejado
+        // cinza, só o céu claro (print do usuário 01/11). Pistas de noite/entardecer definem a própria cor.
+        public Color sunColor = new Color(1f, 0.95f, 0.88f);
         public Vector3 sunEuler;
         public float sunIntensity = 1.2f;
-        public Color ambientColor;
+        public Color ambientColor = new Color(0.5f, 0.55f, 0.62f);
         public Color fogColor;
         public float fogDensity;
         public string skyboxExr;
@@ -528,6 +531,20 @@ namespace RaceX.Track
             int i = Wrap(Mathf.FloorToInt(distance / spacing));
             Vector3 pos = points[i] + rights[i] * lateral;
             return new Pose(pos, Quaternion.LookRotation(tangents[i], Vector3.up));
+        }
+
+        /// <summary>Pose INTERPOLADA entre os pontos da spline (posição, lateral e rumo). <see cref="PoseAtDistance"/>
+        /// devolve o ponto ANTERIOR (degraus de ~2 m) — bom para consultas, mas quem MOVE carro por posição a cada quadro
+        /// (volta de apresentação, safety car) andava aos saltos: parado 1–3 quadros e pulando 2 m.</summary>
+        public Pose PoseAtDistanceSmooth(float distance, float lateral = 0f)
+        {
+            float f = distance / spacing;
+            int fi = Mathf.FloorToInt(f);
+            float u = f - fi;
+            int i = Wrap(fi), j = Wrap(fi + 1);
+            Vector3 pos = Vector3.Lerp(points[i] + rights[i] * lateral, points[j] + rights[j] * lateral, u);
+            Vector3 tan = Vector3.Slerp(tangents[i], tangents[j], u);
+            return new Pose(pos, Quaternion.LookRotation(tan.sqrMagnitude > 1e-6f ? tan : tangents[i], Vector3.up));
         }
 
         public int ClosestIndex(Vector3 position, int hint = -1, int window = 40)

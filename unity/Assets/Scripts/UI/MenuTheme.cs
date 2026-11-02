@@ -28,8 +28,9 @@ namespace RaceX.UI
 
             var lineImg = UIFactory.Panel(name + "_Line", img.transform, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(2f, 2f), new Vector2(size.x - 4f, 3f), Accent);
             lineImg.raycastTarget = false;
-            var labelT = UIFactory.Label(name + "_Label", img.transform, Spaced(label), font, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 2f), size, Text);
+            var labelT = UIFactory.Label(name + "_Label", img.transform, Spaced(label), font, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 2f), new Vector2(Mathf.Max(10f, size.x - 14f), size.y), Text);
             labelT.raycastTarget = false;
+            FitText(labelT, font);
 
             var trig = img.gameObject.AddComponent<EventTrigger>();
             var enter = new EventTrigger.Entry { eventID = EventTriggerType.PointerEnter };
@@ -90,10 +91,24 @@ namespace RaceX.UI
             return Sprite.Create(tex, new Rect(0, 0, w, h), new Vector2(0.5f, 0.5f), 100f);
         }
 
-        static string Spaced(string s)
+        /// <summary>Rótulo de botão: MAIÚSCULAS com espaço fino entre letras em TODOS os botões (antes só até
+        /// 10 letras — "MODO CARREIRA"/"CONFIGURAÇÕES" ficavam diferentes). Espaço fino SEM quebra (U+202F):
+        /// a palavra nunca parte em duas linhas; se não couber, FitText diminui a fonte.</summary>
+        public static string Spaced(string s)
         {
             s = s.ToUpperInvariant();
-            return s.Length <= 10 ? string.Join("\u2009", s.ToCharArray()) : s;
+            return s.Length <= 18 ? string.Join("\u202F", s.ToCharArray()) : s;
+        }
+
+        /// <summary>Texto que DIMINUI até caber (nunca vaza da caixa/botão): fonte de maxSize até ~55%.</summary>
+        public static void FitText(UnityEngine.UI.Text t, int maxSize)
+        {
+            if (t == null) return;
+            t.horizontalOverflow = HorizontalWrapMode.Wrap;
+            t.verticalOverflow = VerticalWrapMode.Truncate;
+            t.resizeTextForBestFit = true;
+            t.resizeTextMaxSize = maxSize;
+            t.resizeTextMinSize = Mathf.Max(9, Mathf.RoundToInt(maxSize * 0.55f));
         }
     }
 }

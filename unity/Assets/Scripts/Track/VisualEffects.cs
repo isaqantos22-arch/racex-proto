@@ -80,8 +80,10 @@ namespace RaceX.Track
 
         static readonly Color SmokeColor = new Color(0.78f, 0.78f, 0.78f, 0.55f);
         static readonly Color DustColor = new Color(0.45f, 0.36f, 0.25f, 0.85f);
+        static readonly Color SprayColor = new Color(0.82f, 0.85f, 0.9f, 0.36f);
+        float sprayAcc;
 
-        static void EmitAt(ParticleSystem ps, Vector3 vel, float life, Color color)
+        static void EmitAt(ParticleSystem ps, Vector3 vel, float life, Color color, float size = 0.5f)
         {
             var p = new ParticleSystem.EmitParams
             {
@@ -89,7 +91,7 @@ namespace RaceX.Track
                 velocity = vel,
                 startLifetime = life,
                 startColor = color,
-                startSize = 0.5f,
+                startSize = size,
             };
             ps.Emit(p, 1);
         }
@@ -97,7 +99,23 @@ namespace RaceX.Track
         void LateUpdate()
         {
             if (car == null || car.spec == null) return;
-            if (smoke != null && car.MaxWheelSlip > 0.4f && car.GroundedWheels > 0)
+            float wet = WeatherSystem.Wetness;
+            // SPRAY de chuva: pneu de chuva/inter joga água para trás e para cima (cresce com velocidade e água).
+            if (smoke != null && wet > 0.25f && car.SpeedKmh > 50f && car.GroundedWheels > 0 && !car.IsOffTrack)
+            {
+                // Chuva forte = cortina de água (o carro de trás quase não enxerga — como na F1).
+                sprayAcc += Time.deltaTime * 70f * wet * Mathf.Clamp01((car.SpeedKmh - 50f) / 160f);
+                int n = 0;
+                while (sprayAcc >= 1f && n < 6)
+                {
+                    sprayAcc -= 1f; n++;
+                    var sv = -car.transform.forward * Random.Range(3f, 8f) + new Vector3(Random.Range(-1.4f, 1.4f), Random.Range(0.8f, 2.6f), Random.Range(-1.4f, 1.4f));
+                    EmitAt(smoke, sv, Mathf.Lerp(0.9f, 1.3f, wet), SprayColor, Random.Range(1.1f, 2.0f + wet * 0.6f));
+                }
+            }
+            else sprayAcc = 0f;
+            // Fumaça de pneu só no seco (na água o pneu não queima borracha).
+            if (smoke != null && wet < 0.4f && car.MaxWheelSlip > 0.4f && car.GroundedWheels > 0)
             {
                 var vel = -car.transform.forward * 0.4f + new Vector3(Random.Range(-0.3f, 0.3f), Random.Range(0.1f, 0.4f), Random.Range(-0.3f, 0.3f));
                 EmitAt(smoke, vel, 0.6f, SmokeColor);

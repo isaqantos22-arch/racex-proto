@@ -2,7 +2,14 @@ using UnityEngine;
 
 namespace RaceX.Car
 {
-    public enum CarModel { Falcon = 0, Titan = 1, Storm = 2, F1 = 3, Ferrari = 4, R8 = 5, Mustang = 6, Revuelto = 7, GtrNismo = 8, McLarenP1 = 9, Bugatti = 10, F2008 = 11, F1Studio = 12 }
+    // Novos modelos SEMPRE no fim (o número é salvo na garagem/carreira/servidor).
+    public enum CarModel
+    {
+        Falcon = 0, Titan = 1, Storm = 2, F1 = 3, Ferrari = 4, R8 = 5, Mustang = 6, Revuelto = 7, GtrNismo = 8, McLarenP1 = 9, Bugatti = 10, F2008 = 11, F1Studio = 12,
+        F1Legacy = 13, F1Basic = 14, F1Concept26 = 15, F1Custom22 = 16, McLarenF1 = 17, FerrariF60 = 18,
+        F1Sponsor = 19, Lotus77 = 20, FP04 = 21, F4British = 22, McLarenMP45 = 23,
+        F1Photo22 = 24, F1CarConcept = 25, F1Y2026 = 26, FormulaC1 = 27, FormulaC2 = 28
+    }
     public enum Drivetrain { FWD, RWD, AWD }
 
     [CreateAssetMenu(fileName = "CarSpec", menuName = "RaceX/Car Spec")]
@@ -97,6 +104,135 @@ namespace RaceX.Car
             return ratios;
         }
 
+        /// <summary>Carro de fórmula (monoposto) — única lista do jogo; menus, HUD, IA e carreira consultam aqui.</summary>
+        public static bool IsFormula(CarModel m) =>
+            m == CarModel.F1 || m == CarModel.F2008 || m == CarModel.F1Studio || m == CarModel.F1Legacy || m == CarModel.F1Basic
+            || m == CarModel.F1Concept26 || m == CarModel.F1Custom22 || m == CarModel.McLarenF1 || m == CarModel.FerrariF60
+            || m == CarModel.F1Sponsor || m == CarModel.Lotus77 || m == CarModel.FP04 || m == CarModel.F4British || m == CarModel.McLarenMP45
+            || m == CarModel.F1Photo22 || m == CarModel.F1CarConcept || m == CarModel.F1Y2026 || m == CarModel.FormulaC1 || m == CarModel.FormulaC2;
+
+        /// <summary>Grid da F1: 12 carros, um por equipe, do MAIS FRACO (índice 0) ao mais forte (11).
+        /// Os mais antigos/menos potentes (Lotus 77, F2008, F60) desceram para a F2 em 29/10.</summary>
+        public static readonly CarModel[] F1Lineup =
+        {
+            CarModel.F1Basic, CarModel.F1Legacy, CarModel.F1Sponsor, CarModel.F1Custom22,
+            CarModel.F1Studio, CarModel.F1Photo22, CarModel.McLarenF1, CarModel.FP04,
+            CarModel.F1Concept26, CarModel.F1Y2026, CarModel.F1, CarModel.F1CarConcept
+        };
+
+        /// <summary>Grid da F2 (12 equipes, mais fraca -> mais forte): 7 modelos, os 5 mais fortes repetem.</summary>
+        public static readonly CarModel[] F2Lineup =
+        {
+            CarModel.F4British, CarModel.FormulaC1, CarModel.FormulaC2, CarModel.Lotus77,
+            CarModel.Lotus77, CarModel.McLarenMP45, CarModel.McLarenMP45, CarModel.F2008,
+            CarModel.F2008, CarModel.FerrariF60, CarModel.FerrariF60, CarModel.FerrariF60
+        };
+
+        /// <summary>Monopostos do grid da categoria F1 do Single Player.</summary>
+        public static readonly CarModel[] FormulaModels = F1Lineup;
+
+        /// <summary>Dados de cada monoposto: potência (cv), peso com piloto (kg), velocidade máxima (km/h),
+        /// carga aerodinâmica relativa e o nome. Fontes na pesquisa de 29/10 (Claude outputs/PESQUISA_racex_v80.md):
+        /// Lotus 77 465–500 bhp e 575 kg; McLaren MP4/5 685 ps (Honda) e 500 kg sem piloto; RB18 798 kg (Honda),
+        /// ~1050 cv e 354 km/h só em agregador (não oficial); F2008/F60 605 kg (f1technical), ~750 bhp só em fórum;
+        /// Tatuus F4-T421 175 bhp e 605 kg (British F4 / FIA F4). ESTIMATIVA (sem fonte): velocidades máximas,
+        /// potência dos modelos genéricos (2022 = 1000 cv), KERS do F60 (+30 cv) e o peso do MP4/5 com piloto.</summary>
+        struct FormulaData { public string name; public float hp, mass, top, downforce; }
+
+        static FormulaData DataFor(CarModel m) => m switch
+        {
+            CarModel.F1 => new FormulaData { name = "Red Bull RB18 (2022)", hp = 1050f, mass = 798f, top = 350f, downforce = 4.1f },
+            CarModel.F1Concept26 => new FormulaData { name = "F1 Concept 2026", hp = 1000f, mass = 768f, top = 345f, downforce = 3.8f },
+            CarModel.FP04 => new FormulaData { name = "FP04 Protótipo", hp = 1000f, mass = 798f, top = 345f, downforce = 4.0f },
+            CarModel.McLarenF1 => new FormulaData { name = "McLaren F1", hp = 1000f, mass = 798f, top = 340f, downforce = 4.0f },
+            CarModel.F1Studio => new FormulaData { name = "Fórmula 1 (2022)", hp = 1000f, mass = 798f, top = 340f, downforce = 4.0f },
+            CarModel.F1Custom22 => new FormulaData { name = "F1 Custom 2022", hp = 1000f, mass = 798f, top = 340f, downforce = 4.0f },
+            CarModel.F1Sponsor => new FormulaData { name = "F1 Patrocínios", hp = 1000f, mass = 798f, top = 340f, downforce = 4.0f },
+            CarModel.F1Legacy => new FormulaData { name = "Fórmula 1 2022 (pintura)", hp = 1000f, mass = 798f, top = 340f, downforce = 4.0f },
+            CarModel.FerrariF60 => new FormulaData { name = "Ferrari F60 (2009)", hp = 780f, mass = 605f, top = 325f, downforce = 3.6f },
+            CarModel.F2008 => new FormulaData { name = "Ferrari F2008", hp = 750f, mass = 605f, top = 325f, downforce = 3.8f },
+            CarModel.F1Basic => new FormulaData { name = "Fórmula 1 Clássico", hp = 850f, mass = 700f, top = 320f, downforce = 3.4f },
+            CarModel.McLarenMP45 => new FormulaData { name = "McLaren MP4/5 (1989)", hp = 675f, mass = 580f, top = 320f, downforce = 3.0f },
+            CarModel.Lotus77 => new FormulaData { name = "Lotus 77 (1976)", hp = 480f, mass = 575f, top = 290f, downforce = 2.4f },
+            CarModel.F4British => new FormulaData { name = "Tatuus F4-T421 (F4 britânico)", hp = 175f, mass = 605f, top = 235f, downforce = 1.6f },
+            // 29/10: F1 2022 (regra 2022, ~1000 cv estimado, 798 kg); F1 2026 (regra 2026: ~400 kW a combustão +
+            // 350 kW elétricos ≈ 1000 cv, 768 kg, menos carga — Honda/F1.com); F1 Car Concept é FICTÍCIO (conceito
+            // do Blender): posto como o mais rápido e estável da F1 por pedido do usuário. C1/C2: carro desconhecido,
+            // ESTIMATIVA de fórmula de acesso (~380 cv, 550 kg).
+            CarModel.F1Photo22 => new FormulaData { name = "F1 2022", hp = 1000f, mass = 798f, top = 340f, downforce = 4.0f },
+            CarModel.F1Y2026 => new FormulaData { name = "F1 2026", hp = 1005f, mass = 768f, top = 345f, downforce = 3.7f },
+            CarModel.F1CarConcept => new FormulaData { name = "F1 Car Concept", hp = 1060f, mass = 780f, top = 352f, downforce = 4.4f },
+            CarModel.FormulaC1 => new FormulaData { name = "Fórmula C1", hp = 380f, mass = 550f, top = 270f, downforce = 2.6f },
+            CarModel.FormulaC2 => new FormulaData { name = "Fórmula C2", hp = 390f, mass = 550f, top = 272f, downforce = 2.6f },
+            _ => new FormulaData { name = m.ToString(), hp = 1000f, mass = 798f, top = 340f, downforce = 4.0f }
+        };
+
+        /// <summary>Física do monoposto a partir dos dados reais. O jogo foi calibrado no F1 2022 (340 Nm
+        /// "de jogo" ≈ 1000 cv): a potência entra em PROPORÇÃO a ele; peso e velocidade máxima são diretos.</summary>
+        void ApplyFormulaData(CarModel m)
+        {
+            var d = DataFor(m);
+            displayName = d.name;
+            // Potência COMPRIMIDA dentro da categoria (pedido do usuário, 29/10): o carro mais fraco do grid
+            // fica com 85% da potência do mais forte — continua o pior, mas sem ser gritante. A ORDEM real
+            // (dados de DataFor) se mantém. Fora dos grids (GT/F1 em GT) usa a potência real.
+            maxTorqueNm = 340f * CompressedHp(m, d.hp) / 1000f;
+            massKg = d.mass;
+            topSpeedKmh = d.top;
+            downforceCoefficient = d.downforce;
+            gearRatios = ComputeGearRatios(8, topSpeedKmh, rpmLimit, wheelRadius, 3.2f);
+            zeroToHundredSeconds = Mathf.Clamp(2.6f * (d.mass / 798f) / (d.hp / 1000f), 2.4f, 4.5f); // estimativa (relação peso/potência)
+        }
+
+        // F2 = CARRO ÚNICO (pedido do usuário 01/11; como na F2 real): Dallara F2 2024 — 620 cv (462 kW) a 8.750 rpm e
+        // 795 kg com o piloto (FIA F2, revelação do carro em Monza 31/08/2023 via Wikipedia "Dallara F2 2024"; o
+        // combustível o jogo soma à parte, como faz com os 798 kg da F1). Velocidade máxima ~335 km/h em configuração de
+        // pouco arrasto (fontes secundárias, sem ficha oficial). Carga aerodinâmica: ESTIMATIVA de projeto (~80% da F1
+        // 2022 do jogo; o F2 2024 usa efeito-solo derivado da F1 2022) — não há número público. A diferença entre equipes
+        // fica só no ajuste de equipe (CareerMode.TeamPerformanceFor: 1,00–1,06).
+        public const float F2Hp = 620f, F2MassKg = 795f, F2TopKmh = 335f, F2Downforce = 3.2f;
+        public const string F2Name = "Dallara F2 2024";
+
+        /// <summary>Carreira na F2: troca potência/peso/velocidade/carga do modelo pelo carro único da categoria (o modelo
+        /// 3D de cada equipe continua o mesmo). Antes cada equipe tinha um carro de 175 a 780 cv.</summary>
+        public void ApplyF2Spec()
+        {
+            if (!IsFormula(model)) return;
+            displayName = F2Name;
+            maxTorqueNm = 340f * F2Hp / 1000f;
+            massKg = F2MassKg;
+            topSpeedKmh = F2TopKmh;
+            downforceCoefficient = F2Downforce;
+            gearRatios = ComputeGearRatios(8, topSpeedKmh, rpmLimit, wheelRadius, 3.2f);
+            zeroToHundredSeconds = Mathf.Clamp(2.6f * (F2MassKg / 798f) / (F2Hp / 1000f), 2.4f, 4.5f); // estimativa (peso/potência)
+        }
+
+        const float WeakestShare = 0.85f;
+
+        static float CompressedHp(CarModel m, float hp)
+        {
+            var grid = System.Array.IndexOf(F1Lineup, m) >= 0 ? F1Lineup : System.Array.IndexOf(F2Lineup, m) >= 0 ? F2Lineup : null;
+            if (grid == null) return hp;
+            float lo = float.MaxValue, hi = 0f;
+            foreach (var g in grid) { float h = DataFor(g).hp; lo = Mathf.Min(lo, h); hi = Mathf.Max(hi, h); }
+            if (hi - lo < 1f) return hp;
+            return hi * (WeakestShare + (1f - WeakestShare) * (hp - lo) / (hi - lo));
+        }
+
+        static string FormulaName(CarModel m) => m switch
+        {
+            CarModel.F1Legacy => "Fórmula 1 2022 (pintura)",
+            CarModel.F1Basic => "Fórmula 1 Clássico",
+            CarModel.F1Concept26 => "F1 Concept 2026",
+            CarModel.F1Custom22 => "F1 Custom 2022",
+            CarModel.McLarenF1 => "McLaren F1",
+            CarModel.FerrariF60 => "Ferrari F60 (2009)",
+            CarModel.F1Sponsor => "F1 Patrocínios",
+            CarModel.Lotus77 => "Lotus 77 (1976)",
+            CarModel.FP04 => "FP04 Protótipo",
+            _ => m.ToString()
+        };
+
         public static CarSpec CreateDefault(CarModel model)
         {
             var s = CreateInstance<CarSpec>();
@@ -106,6 +242,15 @@ namespace RaceX.Car
 
         public void Apply(CarModel m)
         {
+            // Monopostos novos: mesma física do F1 2022 (F1Studio); só o modelo 3D e o nome mudam.
+            // Monopostos: base do F1 2022 (F1Studio) + potência/peso/velocidade de cada carro real.
+            if (IsFormula(m) && m != CarModel.F1Studio)
+            {
+                Apply(CarModel.F1Studio);
+                model = m;
+                ApplyFormulaData(m);
+                return;
+            }
             model = m;
             switch (m)
             {
@@ -338,6 +483,7 @@ namespace RaceX.Car
                     rectangularSteeringWheel = true;
                     manualShifter = false;
                     torqueCurve = MakeCurve(new[] { 4000f, 6500f, 8500f, 10500f, 12000f, 12500f }, new[] { 0.5f, 0.7f, 0.88f, 1f, 0.95f, 0.88f });
+                    if (model == CarModel.F1Studio) ApplyFormulaData(CarModel.F1Studio);
                     break;
                 case CarModel.Bugatti:
                     displayName = "Bugatti Veyron 16.4";
@@ -435,5 +581,36 @@ namespace RaceX.Car
             : Colors[((index % Colors.Length) + Colors.Length) % Colors.Length];
 
         public static int TeamColorOf(int teamIndex) => TeamBase + ((teamIndex % TeamColors.Length) + TeamColors.Length) % TeamColors.Length;
+
+        // ---------- MÁXIMO 2 CARROS POR COR (pedido do usuário: Single Player, tela dividida e online) ----------
+        // Conta por FAMÍLIA visual: o "Vermelho Corsa" do jogador (paleta de escolha) e o vermelho de equipe são índices
+        // diferentes mas a mesma cor na pista. 13 famílias × 2 = 26 carros (o grid tem 24).
+        // 0 vermelho · 1 azul · 2 branco · 3 preto · 4 amarelo · 5 verde · 6 laranja · 7 prata · 8 roxo · 9 ciano ·
+        // 10 rosa · 11 lima · 12 azul-petróleo
+        public const int FamilyCount = 13;
+        static readonly int[] ColorsFamily = { 0, 1, 2, 3, 4, 5, 6, 7 };
+        static readonly int[] TeamFamily = { 0, 1, 5, 4, 6, 8, 9, 10, 11, 2, 7, 12 };
+
+        public static int FamilyOf(int index) => index >= TeamBase
+            ? TeamFamily[(index - TeamBase) % TeamColors.Length]
+            : ColorsFamily[((index % Colors.Length) + Colors.Length) % Colors.Length];
+
+        /// <summary>Uma cor da família (prefere a cor de equipe; preto só existe na paleta de escolha).</summary>
+        public static int ColorOfFamily(int fam)
+        {
+            for (int i = 0; i < TeamColors.Length; i++) if (TeamFamily[i] == fam) return TeamBase + i;
+            for (int i = 0; i < Colors.Length; i++) if (ColorsFamily[i] == fam) return i;
+            return 0;
+        }
+
+        /// <summary>Cor para <paramref name="need"/> carros (1 ou a dupla): a preferida se a família ainda tem lugar; senão a
+        /// primeira família VAZIA; senão a primeira com lugar. famCount = carros por família já distribuídos.</summary>
+        public static int FreeColor(int[] famCount, int need, int preferred)
+        {
+            if (famCount[FamilyOf(preferred)] + need <= 2) return preferred;
+            for (int f = 0; f < FamilyCount; f++) if (famCount[f] == 0) return ColorOfFamily(f);
+            for (int f = 0; f < FamilyCount; f++) if (famCount[f] + need <= 2) return ColorOfFamily(f);
+            return preferred;
+        }
     }
 }

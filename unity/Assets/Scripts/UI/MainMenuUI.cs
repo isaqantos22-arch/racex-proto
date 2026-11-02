@@ -48,12 +48,8 @@ namespace RaceX.UI
         Transform lobbyList;
         Text onlineSetupStatus;
         Text lobbyStatus;
-        Text lobbyTrackLabel;
-        Text lobbyLapsLabel, lobbyCarsLabel, lobbyDiffLabel;
         Button lobbyReadyBtn;
         Button lobbyStartBtn;
-        Button lobbyTrackPrev, lobbyTrackNext;
-        Button[] lobbyOptButtons;
         bool carSentForRoom;
         InputField serverUrlField;
         float lobbyPollTimer;
@@ -74,6 +70,8 @@ namespace RaceX.UI
             canvas = UIFactory.CreateCanvas("MenuCanvas");
             GameAudio.EnterMenu();
             AccountClient.RestoreSession();
+            // Teste automático (autotest.txt no persistentDataPath): vai direto para a corrida.
+            if (RaceX.Core.AutoTest.TryLaunchFromMenu(this)) return;
             StartCoroutine(StartupFlow());
         }
 
@@ -296,74 +294,159 @@ namespace RaceX.UI
         {
             back = ShowMain;
             var s = NewScreen("JOGAR");
-            MenuButton(s, "SINGLE PLAYER", 0, () => { settings.mode = GameMode.SinglePlayer; ShowRaceSetup(); });
-            if (Application.isMobilePlatform)
-            {
-                MenuButton(s, "ONLINE", 1, ShowOnlineSetup);
-                MenuButton(s, "VOLTAR", 2, ShowMain);
-            }
-            else
-            {
-                MenuButton(s, "MULTIPLAYER LOCAL", 1, () => { settings.mode = GameMode.LocalSplitScreen; ShowRaceSetup(); });
-                MenuButton(s, "ONLINE", 2, ShowOnlineSetup);
-                MenuButton(s, "VOLTAR", 4, ShowMain);
-            }
+            // Mesmo lugar/tamanho dos botões do menu principal (barra lateral) — antes ficavam soltos no
+            // meio da tela, por cima do carro do expositor.
+            var top = new Vector2(0.5f, 1f);
+            var bsize = new Vector2(360f, 62f);
+            int row = 0;
+            Action<string, Action> side = (label, act) => MenuTheme.StyledButton(s, "Play_" + label, label, top, top, new Vector2(-745f, -150f - 84f * row++), bsize, 26, act);
+            side("SINGLE PLAYER", () => { settings.mode = GameMode.SinglePlayer; ShowRaceSetup(); });
+            if (!Application.isMobilePlatform) side("MULTIPLAYER LOCAL", () => { settings.mode = GameMode.LocalSplitScreen; ShowRaceSetup(); });
+            side("ONLINE", ShowOnlineSetup);
+            row++;
+            side("VOLTAR", ShowMain);
         }
+
+        // ---------- ONLINE (v80): hub com dois cartões (CRIAR x ENTRAR) e sala com papéis ----------
+        static readonly Color HostColor = MenuTheme.Accent;                    // laranja = anfitrião
+        static readonly Color GuestColor = new Color(0.27f, 0.62f, 1f);        // azul = convidado
+        static readonly Color OkColor = new Color(0.32f, 0.86f, 0.46f);
+        static readonly Color WarnColor = new Color(1f, 0.78f, 0.22f);
+        static readonly Color BadColor = new Color(1f, 0.36f, 0.3f);
+        static readonly Color CardColor = new Color(0.05f, 0.06f, 0.09f, 0.95f);
+
+        Text serverPill;
+        Coroutine healthRoutine;
 
         internal void ShowOnlineSetup()
         {
-            back = () => { UnbindOnline(); ShowMain(); };
+            back = () => { UnbindOnline(); ShowPlay(); };
             lobbyScreen = null;
             if (AccountClient.IsLoggedIn && !string.IsNullOrWhiteSpace(AccountClient.Name)) onlineName = AccountClient.Name;
-            var s = NewScreen("ONLINE");
-            ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.86f);
-            int row = 0;
-            NameRow(s, row++);
-            ServerUrlRow(s, row++);
-            OptionRow(s, "Carros IA", row++, () => SettingsManager.OnlineAiCount + " NPCs", d => SettingsManager.OnlineAiCount = Mathf.Clamp(SettingsManager.OnlineAiCount + d * 2, 0, 8));
-            ActionRow(s, "CRIAR SALA", row++, CreateOnlineRoom);
-            CodeRow(s, row++);
-            ActionRow(s, "ENTRAR", row++, JoinOnlineRoom);
-            ActionRow(s, "VOLTAR", row++, () => { UnbindOnline(); ShowMain(); });
-            onlineSetupStatus = UIFactory.Label("OnlineStatus", s, "", 28, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(ContentX + 50f, 160f - row * 84f), new Vector2(1000f, 50f), MenuTheme.Accent);
+            var s = NewScreen("JOGAR ONLINE");
+            ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.9f);
+            var c = new Vector2(0.5f, 0.5f);
+
+            // Linha do piloto (nome) + estado do servidor (o teste /health também ACORDA o Render).
+            UIFactory.Label("NameLabel", s, "SEU NOME", 22, TextAnchor.MiddleRight, c, new Vector2(1f, 0.5f), new Vector2(ContentX - 380f, 318f), new Vector2(200f, 40f), MenuTheme.TextDim);
+            var nameField = MakeField(s, "NameField", c, new Vector2(ContentX - 150f, 318f), new Vector2(420f, 66f), onlineName, "Seu nome", 32);
+            nameField.characterLimit = 14;
+            nameField.onValueChanged.AddListener(v => onlineName = string.IsNullOrWhiteSpace(v) ? "Jogador" : v);
+            serverPill = UIFactory.Label("ServerPill", s, "●  VERIFICANDO SERVIDOR...", 24, TextAnchor.MiddleRight, c, new Vector2(1f, 0.5f), new Vector2(ContentX + 720f, 318f), new Vector2(620f, 40f), MenuTheme.TextDim);
+
+            // Cartão ANFITRIÃO
+            var host = OnlineCard(s, "HostCard", ContentX - 370f, HostColor, "CRIAR SALA", "VOCÊ SERÁ O ANFITRIÃO");
+            CardBullet(host, 0, "Escolhe pista, voltas, carros e regras");
+            CardBullet(host, 1, "Recebe um código para passar aos amigos");
+            CardBullet(host, 2, "Inicia a corrida quando todos estiverem prontos");
+            var bc = new Vector2(0.5f, 0f);
+            MenuTheme.StyledButton(host, "CreateRoom", "CRIAR SALA", bc, bc, new Vector2(0f, 34f), new Vector2(600f, 96f), 36, CreateOnlineRoom);
+
+            // Cartão CONVIDADO
+            var guest = OnlineCard(s, "GuestCard", ContentX + 370f, GuestColor, "ENTRAR EM SALA", "VOCÊ SERÁ CONVIDADO");
+            var tl = new Vector2(0f, 1f);
+            UIFactory.Label("CodeLabel", guest, "CÓDIGO DA SALA", 22, TextAnchor.MiddleLeft, tl, tl, new Vector2(40f, -128f), new Vector2(400f, 34f), MenuTheme.TextDim);
+            var code = MakeField(guest, "CodeField", new Vector2(0.5f, 1f), new Vector2(0f, -210f), new Vector2(600f, 100f), onlineCode, "EX.: 7NKUVQ", 52);
+            code.characterLimit = 6;
+            code.contentType = InputField.ContentType.Alphanumeric;
+            code.onValueChanged.AddListener(v => { onlineCode = NormalizeCode(v); if (code.text != onlineCode) { code.text = onlineCode; code.MoveTextEnd(false); } });
+            codeInput = code;
+            UIFactory.Label("CodeHint", guest, "Peça ao anfitrião o código de 6 letras", 22, TextAnchor.MiddleCenter, new Vector2(0.5f, 1f), new Vector2(0.5f, 0.5f), new Vector2(0f, -290f), new Vector2(600f, 32f), MenuTheme.TextDim);
+            Tint(MenuTheme.StyledButton(guest, "JoinRoom", "ENTRAR", bc, bc, new Vector2(0f, 34f), new Vector2(600f, 96f), 36, JoinOnlineRoom), GuestColor);
+
+            // Avançado: servidor (só para quem roda um servidor próprio na rede).
+            UIFactory.Label("ServerLabel", s, "SERVIDOR", 20, TextAnchor.MiddleRight, c, new Vector2(1f, 0.5f), new Vector2(ContentX - 470f, -262f), new Vector2(200f, 34f), MenuTheme.TextDim);
+            string savedUrl = PlayerPrefs.GetString(OnlineClient.ServerUrlKey, "");
+            serverUrlField = MakeField(s, "ServerField", c, new Vector2(ContentX + 40f, -262f), new Vector2(980f, 50f), savedUrl.Length > 0 ? savedUrl : OnlineClient.DefaultServerUrl, "ws://ip:3000", 20);
+            MenuTheme.StyledButton(s, "ServerSave", "SALVAR", c, c, new Vector2(ContentX + 620f, -262f), new Vector2(150f, 50f), 22, () => { ApplyServerUrl(); CheckServer(); });
+            UIFactory.Label("ServerHint", s, "Só altere se for usar um servidor próprio na sua rede (ex.: 192.168.0.10:3000)", 18, TextAnchor.MiddleCenter, c, c, new Vector2(ContentX, -300f), new Vector2(1200f, 28f), MenuTheme.TextDim);
+
+            onlineSetupStatus = UIFactory.Label("OnlineStatus", s, "", 26, TextAnchor.MiddleCenter, c, c, new Vector2(ContentX, -350f), new Vector2(1300f, 40f), WarnColor);
+            var b = new Vector2(0.5f, 0f);
+            MenuTheme.StyledButton(s, "OnlineBack", "VOLTAR", b, b, new Vector2(ContentX, 40f), new Vector2(380f, 96f), 34, () => { UnbindOnline(); ShowPlay(); });
             BindOnline();
+            CheckServer();
         }
 
-        void InfoRow(RectTransform parent, string label, int row, Func<string> value)
+        /// <summary>Cartão do hub online: barra colorida no topo, título e o papel (anfitrião/convidado).</summary>
+        RectTransform OnlineCard(RectTransform parent, string name, float x, Color accent, string title, string role)
         {
-            float y = 330f - row * 84f;
             var c = new Vector2(0.5f, 0.5f);
-            UIFactory.Label(label, parent, label, 32, TextAnchor.MiddleRight, c, new Vector2(1f, 0.5f), new Vector2(ContentX - 250f, y), new Vector2(380f, 72f));
-            UIFactory.Label(label + "_Value", parent, value(), 34, TextAnchor.MiddleCenter, c, c, new Vector2(ContentX + 50f, y), new Vector2(820f, 72f), MenuTheme.Text);
+            var card = UIFactory.Panel(name, parent, c, c, new Vector2(x, 20f), new Vector2(700f, 460f), CardColor);
+            card.sprite = MenuTheme.RoundedSprite(140, 100, 16);
+            var rt = (RectTransform)card.transform;
+            var tl = new Vector2(0f, 1f);
+            UIFactory.Panel(name + "_Bar", rt, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, 0f), new Vector2(700f, 8f), accent);
+            UIFactory.Label(name + "_Title", rt, title, 42, TextAnchor.MiddleLeft, tl, tl, new Vector2(40f, -26f), new Vector2(620f, 56f), MenuTheme.Text);
+            UIFactory.Label(name + "_Role", rt, role, 22, TextAnchor.MiddleLeft, tl, tl, new Vector2(40f, -84f), new Vector2(620f, 30f), accent);
+            return rt;
         }
 
-        void ServerUrlRow(RectTransform parent, int row)
+        void CardBullet(RectTransform card, int i, string text)
         {
-            float y = 330f - row * 84f;
+            var tl = new Vector2(0f, 1f);
+            UIFactory.Label("Bullet" + i, card, "•  " + text, 24, TextAnchor.MiddleLeft, tl, tl, new Vector2(40f, -146f - i * 52f), new Vector2(640f, 40f), new Color(0.8f, 0.82f, 0.86f));
+        }
+
+        /// <summary>Troca a cor da linha de destaque do botão (convidado = azul).</summary>
+        static void Tint(Button b, Color col)
+        {
+            if (b == null) return;
+            var line = b.transform.Find(b.name + "_Line");
+            if (line != null) line.GetComponent<Image>().color = col;
+        }
+
+        InputField MakeField(RectTransform parent, string name, Vector2 anchor, Vector2 pos, Vector2 size, string value, string placeholder, int font)
+        {
+            var bg = UIFactory.Panel(name, parent, anchor, new Vector2(0.5f, 0.5f), pos, size, new Color(1f, 1f, 1f, 0.07f));
+            bg.sprite = MenuTheme.RoundedSprite(140, 60, 12);
+            bg.raycastTarget = true;
             var c = new Vector2(0.5f, 0.5f);
-            UIFactory.Label("SERVIDOR", parent, "SERVIDOR", 32, TextAnchor.MiddleRight, c, new Vector2(1f, 0.5f), new Vector2(ContentX - 250f, y), new Vector2(380f, 72f));
-            var bg = UIFactory.Panel("ServerFieldBg", parent, c, c, new Vector2(ContentX + 50f, y), new Vector2(820f, 72f), new Color(1f, 1f, 1f, 0.06f));
-            var ph = UIFactory.Label("ServerFieldPh", bg.transform, "ws://ip:3000", 28, TextAnchor.MiddleCenter, new Vector2(0f, 0f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero, MenuTheme.TextDim);
-            var phRt = (RectTransform)ph.transform;
-            phRt.anchorMin = Vector2.zero;
-            phRt.anchorMax = Vector2.one;
-            phRt.offsetMin = Vector2.zero;
-            phRt.offsetMax = Vector2.zero;
-            var txt = UIFactory.Label("ServerFieldText", bg.transform, "", 28, TextAnchor.MiddleCenter, new Vector2(0f, 0f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero, MenuTheme.Text);
-            var txtRt = (RectTransform)txt.transform;
-            txtRt.anchorMin = Vector2.zero;
-            txtRt.anchorMax = Vector2.one;
-            txtRt.offsetMin = Vector2.zero;
-            txtRt.offsetMax = Vector2.zero;
+            var inner = new Vector2(size.x - 24f, size.y - 8f);
+            var ph = UIFactory.Label(name + "_Ph", bg.transform, placeholder, font, TextAnchor.MiddleCenter, c, c, Vector2.zero, inner, new Color(1f, 1f, 1f, 0.25f));
+            var txt = UIFactory.Label(name + "_Text", bg.transform, value, font, TextAnchor.MiddleCenter, c, c, Vector2.zero, inner, MenuTheme.Text);
+            txt.horizontalOverflow = HorizontalWrapMode.Wrap;
             var input = bg.gameObject.AddComponent<InputField>();
             input.targetGraphic = bg;
             input.placeholder = ph;
             input.textComponent = txt;
-            string savedUrl = PlayerPrefs.GetString(OnlineClient.ServerUrlKey, "");
-            input.text = savedUrl.Length > 0 ? savedUrl : OnlineClient.DefaultServerUrl;
-            serverUrlField = input;
-            MenuTheme.StyledButton(parent, "ServerSave", "SALVAR", c, c, new Vector2(ContentX + 50f + 410f + 90f, y), new Vector2(160f, 72f), 26, ApplyServerUrl);
-            UIFactory.Label("ServerHint", parent, "Outros jogadores usam o IP da máquina do servidor (ex.: 192.168.0.10:3000)", 20, TextAnchor.MiddleCenter, c, c, new Vector2(ContentX + 50f, y - 58f), new Vector2(820f, 30f), MenuTheme.TextDim);
+            input.text = value;
+            return input;
+        }
+
+        /// <summary>Consulta /health (HTTP) — mostra o estado e já ACORDA o servidor gratuito antes do clique.</summary>
+        void CheckServer()
+        {
+            if (healthRoutine != null) StopCoroutine(healthRoutine);
+            healthRoutine = StartCoroutine(CheckServerRoutine());
+        }
+
+        static string HealthUrl(string wsUrl)
+        {
+            try
+            {
+                var u = new Uri(wsUrl);
+                string scheme = u.Scheme == "wss" || u.Scheme == "https" ? "https" : "http";
+                return scheme + "://" + u.Authority + "/health";
+            }
+            catch { return null; }
+        }
+
+        IEnumerator CheckServerRoutine()
+        {
+            string url = HealthUrl(OnlineClient.ServerUrl);
+            if (serverPill == null || url == null) yield break;
+            serverPill.text = "●  ACORDANDO O SERVIDOR...";
+            serverPill.color = WarnColor;
+            var req = UnityWebRequest.Get(url);
+            req.timeout = 75;
+            yield return req.SendWebRequest();
+            if (serverPill == null) yield break;
+            bool ok = req.result == UnityWebRequest.Result.Success && req.downloadHandler.text.Contains("\"ok\":true");
+            serverPill.text = ok ? "●  SERVIDOR ONLINE" : "●  SERVIDOR INDISPONÍVEL";
+            serverPill.color = ok ? OkColor : BadColor;
+            req.Dispose();
+            healthRoutine = null;
         }
 
         void ApplyServerUrl()
@@ -373,60 +456,9 @@ namespace RaceX.UI
             Debug.Log("[Online] servidor definido: " + OnlineClient.ServerUrl);
         }
 
-        void ActionRow(RectTransform parent, string label, int row, Action onClick)
-        {
-            float y = 330f - row * 84f;
-            var c = new Vector2(0.5f, 0.5f);
-            MenuTheme.StyledButton(parent, "Online_" + label, label, c, c, new Vector2(ContentX + 50f, y), new Vector2(520f, 78f), 34, onClick);
-        }
-
         static readonly string CodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
         InputField codeInput;
-
-        /// <summary>Campo de texto editável do nome do jogador — abre o teclado do celular ao tocar.</summary>
-        void NameRow(RectTransform parent, int row)
-        {
-            float y = 330f - row * 84f;
-            var c = new Vector2(0.5f, 0.5f);
-            UIFactory.Label("NameLabel", parent, "NOME", 32, TextAnchor.MiddleRight, c, new Vector2(1f, 0.5f), new Vector2(ContentX - 250f, y), new Vector2(380f, 72f));
-            var bg = UIFactory.Panel("NameFieldBg", parent, c, c, new Vector2(ContentX + 110f, y), new Vector2(560f, 72f), new Color(1f, 1f, 1f, 0.07f));
-            var ph = UIFactory.Label("NameFieldPh", bg.transform, "Seu nome", 34, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(520f, 60f), new Color(1f, 1f, 1f, 0.25f));
-            ph.raycastTarget = false;
-            var txt = UIFactory.Label("NameFieldText", bg.transform, onlineName, 34, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(520f, 60f), MenuTheme.Text);
-            txt.raycastTarget = false;
-            var input = bg.gameObject.AddComponent<InputField>();
-            input.targetGraphic = bg;
-            input.placeholder = ph;
-            input.textComponent = txt;
-            input.text = onlineName;
-            input.characterLimit = 14;
-            input.contentType = InputField.ContentType.Standard;
-
-            input.onValueChanged.AddListener(v => onlineName = string.IsNullOrWhiteSpace(v) ? "Jogador" : v);
-        }
-
-        void CodeRow(RectTransform parent, int row)
-        {
-            float y = 330f - row * 84f;
-            var c = new Vector2(0.5f, 0.5f);
-            UIFactory.Label("CodeLabel", parent, "CÓDIGO DA SALA", 32, TextAnchor.MiddleRight, c, new Vector2(1f, 0.5f), new Vector2(ContentX - 250f, y), new Vector2(380f, 72f));
-            var bg = UIFactory.Panel("CodeFieldBg", parent, c, c, new Vector2(ContentX + 110f, y), new Vector2(560f, 72f), new Color(1f, 1f, 1f, 0.07f));
-            var ph = UIFactory.Label("CodeFieldPh", bg.transform, "EX.: 7NKUVQ", 34, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(520f, 60f), new Color(1f, 1f, 1f, 0.25f));
-            ph.raycastTarget = false;
-            var txt = UIFactory.Label("CodeFieldText", bg.transform, onlineCode, 34, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(520f, 60f), MenuTheme.Text);
-            txt.raycastTarget = false;
-            var input = bg.gameObject.AddComponent<InputField>();
-            input.targetGraphic = bg;
-            input.placeholder = ph;
-            input.textComponent = txt;
-            input.text = onlineCode;
-            input.characterLimit = 6;
-            input.contentType = InputField.ContentType.Alphanumeric;
-
-            input.onValueChanged.AddListener(v => { onlineCode = NormalizeCode(v); if (input != null && input.text != onlineCode) { input.text = onlineCode; input.MoveTextEnd(false); } });
-            codeInput = input;
-        }
 
         /// <summary>Mantém apenas caracteres do alfabeto de códigos (A-Z sem I/O e 2-9), em maiúsculas, até 6.</summary>
         string NormalizeCode(string raw)
@@ -456,7 +488,7 @@ namespace RaceX.UI
             accountBody = UIFactory.Rect("AccountBody", s, c, c, c, new Vector2(230f, 30f), new Vector2(1300f, 780f));
             if (AccountClient.IsLoggedIn) ShowAccountProfile();
             else ShowAccountAuth();
-            MenuTheme.StyledButton(s, "AccBack", "VOLTAR", new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-40f, 20f), new Vector2(260f, 64f), 28, ShowMain);
+            MenuTheme.StyledButton(s, "AccBack", "VOLTAR", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(ContentX, 24f), new Vector2(380f, 70f), 28, ShowMain);
         }
 
         void SetAccountStatus(string msg)
@@ -595,16 +627,26 @@ namespace RaceX.UI
             UIFactory.Label("CellEmailV", emailCell.transform, AccountClient.Email, 30, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, -12f), new Vector2(570f, 60f), MenuTheme.Text);
 
             var colorCell = AccountCellBg(-320f, -160f);
-            var colorBtn = MenuTheme.StyledButton((RectTransform)colorCell.transform, "AccColor", "COR DO AVATAR: " + (AccountClient.AvatarColor + 1), c, c, Vector2.zero, new Vector2(570f, 76f), 28, null);
+            var colorBtn = MenuTheme.StyledButton((RectTransform)colorCell.transform, "AccColor", "COR DO AVATAR: " + AvatarColorName(AccountClient.AvatarColor), c, c, Vector2.zero, new Vector2(570f, 76f), 28, null);
             int nextColor = AccountClient.AvatarColor;
+            var colorLabel = colorBtn.transform.Find("AccColor_Label").GetComponent<Text>();
+            Action paintColor = () =>
+            {
+                var col = AvatarColorOf(nextColor);
+                colorBtn.image.color = col;
+                // Texto escuro em cor clara (antes branco no amarelo, ilegível).
+                colorLabel.color = col.r * 0.299f + col.g * 0.587f + col.b * 0.114f > 0.6f ? new Color(0.08f, 0.08f, 0.1f) : Color.white;
+                // Prévia: o quadrado do avatar já mostra a cor nova (salva com SALVAR PERFIL).
+                var av = accountBody != null ? accountBody.Find("Avatar") : null;
+                if (av != null) av.GetComponent<Image>().color = col;
+            };
             colorBtn.onClick.AddListener(() =>
             {
                 nextColor = (nextColor + 1) & 7;
-                colorBtn.transform.Find("AccColor_Label").GetComponent<Text>().text = "COR DO AVATAR: " + (nextColor + 1);
-                colorBtn.transform.Find("AccColor_Label").GetComponent<Text>().color = Color.white;
-                colorBtn.image.color = AvatarColorOf(nextColor);
+                colorLabel.text = "COR DO AVATAR: " + AvatarColorName(nextColor);
+                paintColor();
             });
-            colorBtn.image.color = AvatarColorOf(AccountClient.AvatarColor);
+            paintColor();
 
             // AVATAR LOCAL (v79): sem URL — escolhe um dos capacetes prontos (fica salvo na conta).
             var photoCell = AccountCellBg(320f, -160f);
@@ -737,6 +779,9 @@ namespace RaceX.UI
 
         Color AvatarColorOf(int i) { return Color.HSVToRGB((i & 7) / 8f, 0.62f, 0.95f); }
 
+        static readonly string[] AvatarColorNames = { "VERMELHO", "AMARELO", "VERDE-LIMÃO", "VERDE", "CIANO", "AZUL", "ROXO", "ROSA" };
+        static string AvatarColorName(int i) => AvatarColorNames[i & 7];
+
         void AccountDoPhoto()
         {
             if (accPhotoField == null || string.IsNullOrWhiteSpace(accPhotoField.text)) { SetAccountStatus("Cole antes a URL de uma imagem"); return; }
@@ -799,6 +844,7 @@ namespace RaceX.UI
 
         void JoinOnlineRoom()
         {
+            if (string.IsNullOrEmpty(onlineCode) || onlineCode.Length != 6) { SetOnlineStatus("Digite o código de 6 letras da sala"); return; }
             carSentForRoom = false;
             ApplyServerUrl();
             SetOnlineStatus("");
@@ -807,37 +853,215 @@ namespace RaceX.UI
             ShowLobby();
         }
 
+        // ---------- SALA ----------
+        // Valores "ao vivo" da sala: (texto, função) — atualizados a cada 0,5 s (o host muda, todos veem).
+        readonly System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<Text, Func<string>>> lobbyLive =
+            new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<Text, Func<string>>>();
+        bool lobbyBuiltAsHost;
+        Button lobbyRetryBtn;
+        InputField lobbyLapsField;
+        string lobbyMsg;
+        float lobbyMsgUntil;
+
         void ShowLobby()
         {
             back = LeaveLobby;
-            var s = NewScreen("SALA");
+            var s = NewScreen("");
+            ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.9f);
             lobbyScreen = s;
+            lobbyLive.Clear();
+            bool host = OnlineClient.IsHost;
+            lobbyBuiltAsHost = host;
+            Color role = host ? HostColor : GuestColor;
             var c = new Vector2(0.5f, 0.5f);
-            lobbyStatus = UIFactory.Label("LobbyStatus", s, "Conectando...", 30, TextAnchor.MiddleCenter, c, c, new Vector2(ContentX, 300f), new Vector2(1200f, 46f), MenuTheme.Text);
-            UIFactory.Label("LobbyServer", s, "Servidor: " + OnlineClient.ServerUrl, 22, TextAnchor.MiddleCenter, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 150f), new Vector2(1200f, 30f), MenuTheme.TextDim);
-            UIFactory.Panel("LobbyBox", s, c, c, new Vector2(ContentX, 170f), new Vector2(1100f, 300f), new Color(1f, 1f, 1f, 0.05f));
-            lobbyList = UIFactory.Rect("LobbyList", s, c, c, new Vector2(0.5f, 0.5f), new Vector2(ContentX, 170f), new Vector2(1040f, 280f)).transform;
+            var ml = new Vector2(0f, 0.5f);
+
+            // Cabeçalho: papel + código grande + copiar + estado da conexão.
+            var head = UIFactory.Panel("LobbyHead", s, c, c, new Vector2(ContentX, 420f), new Vector2(1440f, 110f), CardColor);
+            head.sprite = MenuTheme.RoundedSprite(140, 100, 16);
+            var hr = (RectTransform)head.transform;
+            UIFactory.Panel("RoleBar", hr, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), Vector2.zero, new Vector2(8f, 110f), role);
+            var badge = UIFactory.Panel("RoleBadge", hr, ml, ml, new Vector2(32f, 0f), new Vector2(250f, 58f), role);
+            badge.sprite = MenuTheme.RoundedSprite(140, 60, 12);
+            UIFactory.Label("RoleText", badge.transform, host ? "ANFITRIÃO" : "CONVIDADO", 26, TextAnchor.MiddleCenter, c, c, Vector2.zero, new Vector2(250f, 58f), new Color(0.05f, 0.05f, 0.07f));
+            UIFactory.Label("RoomWord", hr, "SALA", 22, TextAnchor.MiddleLeft, ml, ml, new Vector2(310f, 0f), new Vector2(80f, 40f), MenuTheme.TextDim);
+            Live(UIFactory.Label("RoomCode", hr, "", 60, TextAnchor.MiddleLeft, ml, ml, new Vector2(386f, 0f), new Vector2(340f, 80f), MenuTheme.Text),
+                () => OnlineClient.RoomCode ?? "······");
+            MenuTheme.StyledButton(hr, "CopyCode", "COPIAR", ml, ml, new Vector2(730f, 0f), new Vector2(170f, 60f), 24, () =>
+            {
+                if (string.IsNullOrEmpty(OnlineClient.RoomCode)) return;
+                GUIUtility.systemCopyBuffer = OnlineClient.RoomCode;
+                LobbyMessage("Código " + OnlineClient.RoomCode + " copiado — envie para os amigos");
+            });
+            lobbyStatus = UIFactory.Label("LobbyConn", hr, "", 22, TextAnchor.MiddleRight, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-30f, 0f), new Vector2(500f, 80f), MenuTheme.TextDim);
+            lobbyStatus.horizontalOverflow = HorizontalWrapMode.Wrap;
+
+            // CORRIDA (mesmas opções do Single Player + REGRAS). Host edita; convidado só vê. Linhas de 68 (não 76) para as
+            // 8 linhas caberem acima do aviso e dos botões.
+            const float lobbyStep = 68f;
+            var race = SetupCard(s, host ? "CORRIDA" : "CORRIDA  ·  DEFINIDA PELO ANFITRIÃO", ContentX - 365f, 8, 330f, lobbyStep);
+            int row = 0;
+            LiveRow(race, "Pista", row++, () => TrackNames[RoomTrackIndex], host ? (Action<int>)(d => PushRoom(track: ServerTrackIds[Step(RoomTrackIndex, d, ServerTrackIds.Length)])) : null, lobbyStep);
+            lobbyLapsField = LapsRow(race, row++, () => OnlineClient.RoomLaps, v => PushRoom(laps: v), () => ServerTrack(OnlineClient.RoomTrackId), host, lobbyStep);
+            LiveRow(race, "Carros no grid", row++, () => OnlineClient.RoomTotalCars.ToString(), host ? (Action<int>)(d => PushRoom(cars: StepIn(OnlineCarCounts, OnlineClient.RoomTotalCars, d))) : null, lobbyStep);
+            LiveRow(race, "Dificuldade", row++, RoomDiffName, host ? (Action<int>)(d => PushRoom(diff: ServerDiffIds[Step(Mathf.Max(0, Array.IndexOf(ServerDiffIds, OnlineClient.RoomDifficulty)), d, ServerDiffIds.Length)])) : null, lobbyStep);
+            LiveRow(race, "Categoria", row++, () => OnlineClient.RoomCategory == "f1" ? "F1" : "GT", host ? (Action<int>)(d => PushRoom(cat: OnlineClient.RoomCategory == "f1" ? "gt" : "f1")) : null, lobbyStep);
+            LiveRow(race, "Pit Stop", row++, () => OnlineClient.RoomPitStops ? "LIGADO" : "DESLIGADO", host ? (Action<int>)(d => PushRoom(pit: !OnlineClient.RoomPitStops)) : null, lobbyStep);
+            LiveRow(race, "Clima", row++, () => WeatherLabel(OnlineClient.RoomWeather), host ? (Action<int>)(d => PushRoom(weather: WeatherIds[Step(Mathf.Max(0, Array.IndexOf(WeatherIds, OnlineClient.RoomWeather ?? "")), d, WeatherIds.Length)])) : null, lobbyStep);
+            RulesRow(race, row++, () => OnlineClient.RoomTotalLoss, v => PushRoom(totalLoss: v), () => OnlineClient.RoomPenalties, v => PushRoom(penalties: v), host, lobbyStep);
+
+            // PILOTOS na sala.
+            var pilots = SetupCard(s, "PILOTOS", ContentX + 365f, 4, 330f);
+            Live((Text)pilots.Find("CardTitle").GetComponent<Text>(), () => "PILOTOS  " + OnlineClient.LobbyPlayers.Count + "/8");
+            lobbyList = UIFactory.Rect("LobbyList", pilots, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(16f, -80f), new Vector2(668f, 320f)).transform;
+
+            // MEU CARRO
+            var mine = SetupCard(s, "MEU CARRO", ContentX + 365f, 2, -84f);
+            CardRow(mine, "Carro", 0, () => CarLabel(settings.players[0].car), d => { settings.players[0].car = StepLobbyCar(settings.players[0].car, d); SendMyCar(); });
+            CardRow(mine, "Cor", 1, () => CarPalette.Names[settings.players[0].colorIndex], d => { settings.players[0].colorIndex = Step(settings.players[0].colorIndex, d, CarPalette.Colors.Length); SendMyCar(); });
+
+            // Ações por papel. Ação principal (INICIAR / ESTOU PRONTO) À DIREITA (pedido do usuário); SAIR à esquerda.
             var b = new Vector2(0.5f, 0f);
-            lobbyReadyBtn = MenuTheme.StyledButton(s, "LobbyReady", "PRONTO", b, b, new Vector2(-400f, 40f), new Vector2(360f, 100f), 36, ToggleReady);
-            lobbyStartBtn = MenuTheme.StyledButton(s, "LobbyStart", "COMEÇAR", b, b, new Vector2(0f, 40f), new Vector2(360f, 100f), 36, () => OnlineClient.StartRace());
-            lobbyStartBtn.interactable = false;
-            MenuTheme.StyledButton(s, "LobbyBack", "VOLTAR", b, b, new Vector2(400f, 40f), new Vector2(360f, 100f), 36, LeaveLobby);
-            // CONFIGURAÇÕES DA SALA (as MESMAS opções do single player): PISTA (24) + VOLTAS/CARROS/DIFICULDADE.
-            // Host navega < >; os demais só veem. O servidor sanitiza, aplica e re-transmite no lobby.
-            lobbyTrackLabel = UIFactory.Label("LobbyTrack", s, "", 30, TextAnchor.MiddleCenter, b, b, new Vector2(0f, 280f), new Vector2(700f, 40f), MenuTheme.Accent);
-            lobbyTrackPrev = MenuTheme.StyledButton(s, "LobbyTrackPrev", "<", b, b, new Vector2(-440f, 280f), new Vector2(110f, 90f), 34, () => CycleRoomTrack(-1));
-            lobbyTrackNext = MenuTheme.StyledButton(s, "LobbyTrackNext", ">", b, b, new Vector2(440f, 280f), new Vector2(110f, 90f), 34, () => CycleRoomTrack(1));
-            lobbyOptButtons = new Button[6];
-            lobbyLapsLabel = UIFactory.Label("LobbyLaps", s, "", 26, TextAnchor.MiddleCenter, b, b, new Vector2(-420f, 185f), new Vector2(300f, 40f), MenuTheme.Text);
-            lobbyCarsLabel = UIFactory.Label("LobbyCars", s, "", 26, TextAnchor.MiddleCenter, b, b, new Vector2(0f, 185f), new Vector2(300f, 40f), MenuTheme.Text);
-            lobbyDiffLabel = UIFactory.Label("LobbyDiff", s, "", 26, TextAnchor.MiddleCenter, b, b, new Vector2(420f, 185f), new Vector2(300f, 40f), MenuTheme.Text);
-            lobbyOptButtons[0] = MenuTheme.StyledButton(s, "LapsPrev", "<", b, b, new Vector2(-590f, 185f), new Vector2(90f, 80f), 30, () => CycleRoomSetting(0, -1));
-            lobbyOptButtons[1] = MenuTheme.StyledButton(s, "LapsNext", ">", b, b, new Vector2(-250f, 185f), new Vector2(90f, 80f), 30, () => CycleRoomSetting(0, 1));
-            lobbyOptButtons[2] = MenuTheme.StyledButton(s, "CarsPrev", "<", b, b, new Vector2(-170f, 185f), new Vector2(90f, 80f), 30, () => CycleRoomSetting(1, -1));
-            lobbyOptButtons[3] = MenuTheme.StyledButton(s, "CarsNext", ">", b, b, new Vector2(170f, 185f), new Vector2(90f, 80f), 30, () => CycleRoomSetting(1, 1));
-            lobbyOptButtons[4] = MenuTheme.StyledButton(s, "DiffPrev", "<", b, b, new Vector2(250f, 185f), new Vector2(90f, 80f), 30, () => CycleRoomSetting(2, -1));
-            lobbyOptButtons[5] = MenuTheme.StyledButton(s, "DiffNext", ">", b, b, new Vector2(590f, 185f), new Vector2(90f, 80f), 30, () => CycleRoomSetting(2, 1));
+            if (host)
+                lobbyStartBtn = MenuTheme.StyledButton(s, "LobbyStart", "INICIAR CORRIDA", b, b, new Vector2(ContentX + 250f, 40f), new Vector2(460f, 100f), 34, StartAsHost);
+            else
+            {
+                lobbyReadyBtn = MenuTheme.StyledButton(s, "LobbyReady", "ESTOU PRONTO", b, b, new Vector2(ContentX + 250f, 40f), new Vector2(460f, 100f), 34, ToggleReady);
+                Tint(lobbyReadyBtn, GuestColor);
+            }
+            MenuTheme.StyledButton(s, "LobbyBack", "SAIR DA SALA", b, b, new Vector2(ContentX - 250f, 40f), new Vector2(460f, 100f), 34, LeaveLobby);
+            // TENTAR DE NOVO ocupa o LUGAR da ação principal quando a conexão falha (antes ficava solto no meio, por cima do
+            // aviso e dos botões — "truncou com os outros").
+            lobbyRetryBtn = MenuTheme.StyledButton(s, "LobbyRetry", "TENTAR DE NOVO", b, b, new Vector2(ContentX + 250f, 40f), new Vector2(460f, 100f), 34, () => { if (lobbyBuiltAsHost) CreateOnlineRoom(); else JoinOnlineRoom(); });
+            lobbyRetryBtn.gameObject.SetActive(false);
+            Live(UIFactory.Label("LobbyHint", s, "", 26, TextAnchor.MiddleCenter, c, c, new Vector2(ContentX, -362f), new Vector2(1400f, 40f), WarnColor), LobbyHint);
             RefreshLobby();
+        }
+
+        static void SetButtonText(Button b, string text, int font)
+        {
+            if (b == null) return;
+            var t = b.GetComponentInChildren<Text>();
+            if (t == null) return;
+            t.text = MenuTheme.Spaced(text);
+            MenuTheme.FitText(t, font);
+        }
+
+        /// <summary>Linha "REGRAS": dois botões que alternam PERDA TOTAL e PENALIDADES (SIM/NÃO). Uma linha só para o
+        /// cartão caber na tela. editable = false (convidado): só mostra.</summary>
+        void RulesRow(RectTransform card, int row, Func<bool> pt, Action<bool> setPt, Func<bool> pen, Action<bool> setPen, bool editable, float step = 76f)
+        {
+            var tl = new Vector2(0f, 1f);
+            var ml = new Vector2(0f, 0.5f);
+            float y = -84f - row * step;
+            var line = UIFactory.Panel("Regras_Row", card, tl, tl, new Vector2(16f, y), new Vector2(668f, step - 8f), new Color(1f, 1f, 1f, row % 2 == 0 ? 0.05f : 0.025f));
+            var lr = (RectTransform)line.transform;
+            UIFactory.Label("Regras", lr, "REGRAS", 22, TextAnchor.MiddleLeft, ml, ml, new Vector2(16f, 0f), new Vector2(140f, 60f), MenuTheme.TextDim);
+            string PtText() => "PERDA TOTAL: " + (pt() ? "SIM" : "NÃO");
+            string PenText() => "PENALIDADES: " + (pen() ? "SIM" : "NÃO");
+            if (!editable)
+            {
+                var ro = UIFactory.Label("Regras_Value", lr, "", 22, TextAnchor.MiddleCenter, ml, ml, new Vector2(156f, 0f), new Vector2(500f, 60f), new Color(0.75f, 0.78f, 0.84f));
+                Live(ro, () => PtText() + "   ·   " + PenText());
+                return;
+            }
+            Button bPt = null, bPen = null;
+            bPt = MenuTheme.StyledButton(lr, "Regras_PT", PtText(), ml, ml, new Vector2(150f, 0f), new Vector2(252f, step - 16f), 20, () => { setPt(!pt()); SetButtonText(bPt, PtText(), 20); });
+            bPen = MenuTheme.StyledButton(lr, "Regras_Pen", PenText(), ml, ml, new Vector2(412f, 0f), new Vector2(252f, step - 16f), 20, () => { setPen(!pen()); SetButtonText(bPen, PenText(), 20); });
+        }
+
+        Text Live(Text t, Func<string> value)
+        {
+            lobbyLive.Add(new System.Collections.Generic.KeyValuePair<Text, Func<string>>(t, value));
+            t.text = value();
+            return t;
+        }
+
+        /// <summary>Linha de configuração da sala no mesmo visual do Single Player. change == null = só leitura.</summary>
+        void LiveRow(RectTransform card, string label, int row, Func<string> value, Action<int> change, float step = 76f)
+        {
+            var tl = new Vector2(0f, 1f);
+            var ml = new Vector2(0f, 0.5f);
+            float y = -84f - row * step;
+            var line = UIFactory.Panel(label + "_Row", card, tl, tl, new Vector2(16f, y), new Vector2(668f, step - 8f), new Color(1f, 1f, 1f, row % 2 == 0 ? 0.05f : 0.025f));
+            var lr = (RectTransform)line.transform;
+            MenuTheme.FitText(UIFactory.Label(label, lr, label.ToUpperInvariant(), 22, TextAnchor.MiddleLeft, ml, ml, new Vector2(16f, 0f), new Vector2(210f, 60f), MenuTheme.TextDim), 22);
+            // MAIÚSCULAS como na configuração do Single Player (antes "Circuito Verde"/"Médio" ao lado de "SECO").
+            var valueT = UIFactory.Label(label + "_Value", lr, "", 26, TextAnchor.MiddleCenter, ml, ml, new Vector2(306f, 0f), new Vector2(286f, 60f), change != null ? MenuTheme.Text : new Color(0.75f, 0.78f, 0.84f));
+            MenuTheme.FitText(valueT, 26);
+            Live(valueT, () => (value() ?? "").ToUpperInvariant());
+            if (change == null) return;
+            MenuTheme.StyledButton(lr, label + "_Prev", "<", ml, ml, new Vector2(234f, 0f), new Vector2(66f, 56f), 32, () => change(-1));
+            MenuTheme.StyledButton(lr, label + "_Next", ">", ml, ml, new Vector2(596f, 0f), new Vector2(66f, 56f), 32, () => change(1));
+        }
+
+        /// <summary>Total de carros da sala (humanos + IA) — até as 24 vagas do grid, como no servidor.</summary>
+        static readonly int[] OnlineCarCounts = { 2, 4, 6, 8, 10, 12, 16, 20, 24 };
+
+        void PushRoom(string track = null, int? laps = null, int? cars = null, string diff = null, string cat = null, bool? pit = null, string weather = null, bool? totalLoss = null, bool? penalties = null)
+        {
+            string t = track ?? ServerTrackIds[RoomTrackIndex];
+            int l = laps ?? OnlineClient.RoomLaps, n = cars ?? OnlineClient.RoomTotalCars;
+            string df = diff ?? OnlineClient.RoomDifficulty, ct = cat ?? OnlineClient.RoomCategory, w = weather ?? OnlineClient.RoomWeather;
+            bool p = pit ?? OnlineClient.RoomPitStops;
+            bool pt = totalLoss ?? OnlineClient.RoomTotalLoss, pen = penalties ?? OnlineClient.RoomPenalties;
+            OnlineClient.SendRoomSettings(t, l, n, df, ct, p, w, pt, pen);
+            // Mostra na hora (o servidor confirma depois): toques seguidos não desfazem um ao outro com estado velho.
+            OnlineClient.RoomTrackId = t; OnlineClient.RoomLaps = l; OnlineClient.RoomTotalCars = n;
+            OnlineClient.RoomDifficulty = df; OnlineClient.RoomCategory = ct; OnlineClient.RoomPitStops = p; OnlineClient.RoomWeather = w;
+            OnlineClient.RoomTotalLoss = pt; OnlineClient.RoomPenalties = pen;
+            SyncMyCar();
+        }
+
+
+        /// <summary>Carro na sala respeita a categoria: F1 = só fórmulas; GT = só carros de rua.</summary>
+        CarModel StepLobbyCar(CarModel current, int d)
+        {
+            bool f1 = OnlineClient.RoomCategory == "f1";
+            var m = current;
+            for (int i = 0; i < AllModels.Length; i++)
+            {
+                m = (CarModel)Step((int)m, d, AllModels.Length);
+                if (IsFormula(m) == f1) return m;
+            }
+            return current;
+        }
+
+        void SendMyCar()
+        {
+            carSentForRoom = true;
+            OnlineClient.UpdatePlayer((int)settings.players[0].car, settings.players[0].colorIndex);
+        }
+
+        void StartAsHost()
+        {
+            if (!OnlineClient.IsHost) return;
+            OnlineClient.SetReady(true); // compatível com servidor antigo, que exigia o host "pronto"
+            OnlineClient.StartRace();
+        }
+
+        void LobbyMessage(string msg)
+        {
+            lobbyMsg = msg;
+            lobbyMsgUntil = Time.unscaledTime + 5f;
+        }
+
+        string LobbyHint()
+        {
+            if (!string.IsNullOrEmpty(lobbyMsg) && Time.unscaledTime < lobbyMsgUntil) return lobbyMsg;
+            if (OnlineClient.ConnectFailed) return "Não foi possível conectar — " + (OnlineClient.LastServerMessage ?? "verifique a internet");
+            if (!OnlineClient.Connected || OnlineClient.RoomCode == null) return OnlineClient.ConnectionStatus.Length > 0 ? OnlineClient.ConnectionStatus : "Entrando na sala...";
+            var list = OnlineClient.LobbyPlayers;
+            int guests = 0, ready = 0;
+            foreach (var p in list) if (!p.isHost) { guests++; if (p.ready) ready++; }
+            if (OnlineClient.IsHost)
+            {
+                if (guests == 0) return "Aguardando convidados — compartilhe o código " + OnlineClient.RoomCode;
+                if (ready < guests) return "Aguardando convidados marcarem PRONTO (" + ready + "/" + guests + ")";
+                return "Todos prontos! Pode iniciar a corrida";
+            }
+            var me = OnlineClient.Me;
+            return me != null && me.ready ? "Você está PRONTO — aguardando o anfitrião iniciar" : "Escolha seu carro e marque ESTOU PRONTO";
         }
 
         /// <summary>Ids de pista no SERVIDOR — MESMA ORDEM de TrackNames/TrackLibrary.All (24 pistas).</summary>
@@ -848,50 +1072,9 @@ namespace RaceX.UI
             "colinas", "norte", "danubio", "dunas", "fortaleza", "texas", "estadio", "neon"
         };
 
-        /// <summary>Total de carros aceito pelo servidor (humanos + IA) — server/utils.js TOTAL_CAR_OPTIONS.</summary>
-        static readonly int[] ServerCarCounts = { 4, 6, 8, 10, 12, 16 };
         static readonly string[] ServerDiffIds = { "easy", "medium", "hard", "expert" };
 
         int RoomTrackIndex => Mathf.Clamp(System.Array.IndexOf(ServerTrackIds, OnlineClient.RoomTrackId), 0, TrackNames.Length - 1);
-
-        void CycleRoomTrack(int dir)
-        {
-            if (!OnlineClient.IsHost) return;
-            int next = (int)Mathf.Repeat(RoomTrackIndex + dir, ServerTrackIds.Length);
-            OnlineClient.SetRoomTrack(ServerTrackIds[next]); // servidor aplica e re-transmite no lobby
-        }
-
-        /// <summary>Host altera VOLTAS (0), CARROS (1) ou DIFICULDADE (2) — reenvia o conjunto completo da sala.</summary>
-        void CycleRoomSetting(int which, int dir)
-        {
-            if (!OnlineClient.IsHost) return;
-            string track = ServerTrackIds[RoomTrackIndex];
-            int laps = OnlineClient.RoomLaps;
-            int cars = OnlineClient.RoomTotalCars;
-            string diff = OnlineClient.RoomDifficulty;
-            switch (which)
-            {
-                case 0:
-                {
-                    int i = Mathf.Max(0, System.Array.IndexOf(RaceSettings.LapOptions, laps));
-                    laps = RaceSettings.LapOptions[(int)Mathf.Repeat(i + dir, RaceSettings.LapOptions.Length)];
-                    break;
-                }
-                case 1:
-                {
-                    int i = Mathf.Max(0, System.Array.IndexOf(ServerCarCounts, cars));
-                    cars = ServerCarCounts[(int)Mathf.Repeat(i + dir, ServerCarCounts.Length)];
-                    break;
-                }
-                case 2:
-                {
-                    int i = Mathf.Max(0, System.Array.IndexOf(ServerDiffIds, diff));
-                    diff = ServerDiffIds[(int)Mathf.Repeat(i + dir, ServerDiffIds.Length)];
-                    break;
-                }
-            }
-            OnlineClient.SendRoomSettings(track, laps, cars, diff);
-        }
 
         string RoomDiffName()
         {
@@ -902,53 +1085,63 @@ namespace RaceX.UI
         void RefreshLobby()
         {
             if (lobbyScreen == null) return;
-            var title = lobbyScreen.Find("Title");
-            if (title != null)
-                title.GetComponent<Text>().text = OnlineClient.RoomCode != null ? "SALA " + OnlineClient.RoomCode : OnlineClient.ConnectFailed ? "SALA — FALHA DE CONEXÃO" : "SALA — CONECTANDO";
+            // Papel mudou (anfitrião saiu e o servidor passou a sala para mim): remonta a tela.
+            if (OnlineClient.RoomCode != null && OnlineClient.IsHost != lobbyBuiltAsHost) { ShowLobby(); return; }
+            // Categoria mudou: meu carro precisa ser da categoria da sala.
+            if (OnlineClient.RoomCode != null && IsFormula(settings.players[0].car) != (OnlineClient.RoomCategory == "f1"))
+            {
+                settings.players[0].car = OnlineClient.RoomCategory == "f1" ? CarModel.F1 : CarModel.Titan;
+                SendMyCar();
+            }
+            foreach (var kv in lobbyLive)
+            {
+                if (kv.Key == null) continue;
+                kv.Key.text = kv.Value();
+            }
+            if (lobbyLapsField != null && !lobbyLapsField.isFocused) lobbyLapsField.text = LapsText(OnlineClient.RoomLaps, ServerTrack(OnlineClient.RoomTrackId));
             if (lobbyStatus != null)
             {
-                if (!OnlineClient.Connected && !OnlineClient.ConnectFailed)
-                    lobbyStatus.text = "Conectando...";
-                else if (OnlineClient.ConnectFailed)
-                    lobbyStatus.text = "Falha ao conectar — verifique o servidor em ONLINE" + (string.IsNullOrEmpty(OnlineClient.LastServerMessage) ? "" : " (" + OnlineClient.LastServerMessage + ")");
-                else
-                    lobbyStatus.text = OnlineClient.LastError ?? "Aguardando jogadores...";
+                bool ok = OnlineClient.Connected && OnlineClient.RoomCode != null;
+                lobbyStatus.text = ok ? "●  CONECTADO" : OnlineClient.ConnectFailed ? "●  SEM CONEXÃO" : "●  CONECTANDO...";
+                lobbyStatus.color = ok ? OkColor : OnlineClient.ConnectFailed ? BadColor : WarnColor;
             }
-            for (int i = 0; i < 16; i++)
-            {
-                var old = lobbyList != null ? lobbyList.Find("LobbyPlayer" + i) : null;
-                if (old != null) Destroy(old.gameObject);
-            }
+            // Conexão falhou: TENTAR DE NOVO no lugar da ação principal (nunca os dois juntos).
+            bool failed = OnlineClient.ConnectFailed;
+            if (lobbyRetryBtn != null) lobbyRetryBtn.gameObject.SetActive(failed);
+            if (lobbyStartBtn != null) lobbyStartBtn.gameObject.SetActive(!failed);
+            if (lobbyReadyBtn != null) lobbyReadyBtn.gameObject.SetActive(!failed);
+
+            // Lista de pilotos.
+            if (lobbyList != null)
+                for (int i = lobbyList.childCount - 1; i >= 0; i--) Destroy(lobbyList.GetChild(i).gameObject);
             var list = OnlineClient.LobbyPlayers;
-            for (int i = 0; i < list.Count; i++)
+            var tl = new Vector2(0f, 1f);
+            var ml = new Vector2(0f, 0.5f);
+            for (int i = 0; i < list.Count && lobbyList != null; i++)
             {
                 var p = list[i];
-                string marker = p.id == OnlineClient.MyPlayerId ? "> " : "";
-                string ready = p.ready ? "  [PRONTO]" : "  [...]";
-                string host = p.isHost ? "  (anfitrião)" : "";
-                float y = 140f - i * 44f;
-                UIFactory.Label("LobbyPlayer" + i, lobbyList, marker + p.name + ready + host, 30, TextAnchor.MiddleLeft, new Vector2(0.5f, 1f), new Vector2(0.5f, 0.5f), new Vector2(-400f, y), new Vector2(900f, 40f), p.id == OnlineClient.MyPlayerId ? MenuTheme.Accent : MenuTheme.Text);
+                bool me = p.id == OnlineClient.MyPlayerId;
+                var rowImg = UIFactory.Panel("LobbyPlayer" + i, lobbyList, tl, tl, new Vector2(0f, -i * 40f), new Vector2(668f, 36f), new Color(1f, 1f, 1f, me ? 0.09f : (i % 2 == 0 ? 0.04f : 0.02f)));
+                var rr = (RectTransform)rowImg.transform;
+                UIFactory.Panel("Tag", rr, ml, ml, Vector2.zero, new Vector2(6f, 36f), p.isHost ? HostColor : GuestColor);
+                UIFactory.Label("Name", rr, (me ? "▸ " : "") + p.name, 22, TextAnchor.MiddleLeft, ml, ml, new Vector2(18f, 0f), new Vector2(230f, 34f), me ? MenuTheme.Text : new Color(0.82f, 0.84f, 0.88f));
+                UIFactory.Label("Car", rr, CarLabel(OnlineClient.CarModelFromServer(p.carModel)), 20, TextAnchor.MiddleLeft, ml, ml, new Vector2(252f, 0f), new Vector2(260f, 34f), MenuTheme.TextDim);
+                string st = p.isHost ? "ANFITRIÃO" : p.ready ? "PRONTO" : "AGUARDANDO";
+                Color sc = p.isHost ? HostColor : p.ready ? OkColor : MenuTheme.TextDim;
+                UIFactory.Label("State", rr, st, 20, TextAnchor.MiddleRight, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-12f, 0f), new Vector2(150f, 34f), sc);
             }
-            var me = OnlineClient.Me;
+
+            var meInfo = OnlineClient.Me;
             if (lobbyReadyBtn != null)
-                lobbyReadyBtn.transform.Find("LobbyReady_Label").GetComponent<Text>().text = me != null && me.ready ? "CANCELAR PRONTO" : "PRONTO";
+            {
+                var lbl = lobbyReadyBtn.transform.Find("LobbyReady_Label");
+                if (lbl != null) lbl.GetComponent<Text>().text = meInfo != null && meInfo.ready ? "CANCELAR PRONTO" : "ESTOU PRONTO";
+                lobbyReadyBtn.interactable = OnlineClient.Connected && OnlineClient.RoomCode != null;
+            }
             if (lobbyStartBtn != null)
             {
-                bool canStart = OnlineClient.IsHost && list.Count > 0 && list.TrueForAll(p => p.ready);
-                lobbyStartBtn.interactable = canStart;
-            }
-            if (lobbyTrackLabel != null)
-            {
-                bool host = OnlineClient.IsHost;
-                lobbyTrackLabel.text = "PISTA  " + TrackNames[RoomTrackIndex] + (host ? "" : "  (só o anfitrião muda)");
-                if (lobbyTrackPrev != null) lobbyTrackPrev.interactable = host;
-                if (lobbyTrackNext != null) lobbyTrackNext.interactable = host;
-                if (lobbyLapsLabel != null) lobbyLapsLabel.text = "VOLTAS  " + OnlineClient.RoomLaps;
-                if (lobbyCarsLabel != null) lobbyCarsLabel.text = "CARROS  " + OnlineClient.RoomTotalCars;
-                if (lobbyDiffLabel != null) lobbyDiffLabel.text = "NÍVEL  " + RoomDiffName();
-                if (lobbyOptButtons != null)
-                    foreach (var ob in lobbyOptButtons)
-                        if (ob != null) ob.interactable = host;
+                bool othersReady = list.Count >= 2 && list.TrueForAll(p => p.isHost || p.ready);
+                lobbyStartBtn.interactable = OnlineClient.IsHost && OnlineClient.Connected && othersReady;
             }
         }
 
@@ -971,6 +1164,7 @@ namespace RaceX.UI
             OnlineClient.OnRoomJoined += OnOnlineRoomJoined;
             OnlineClient.OnLobbyUpdate += OnOnlineLobbyUpdate;
             OnlineClient.OnError += OnOnlineError;
+            OnlineClient.OnWarning += OnOnlineWarning;
             OnlineClient.OnGameStart += StartOnlineRace;
         }
 
@@ -980,47 +1174,71 @@ namespace RaceX.UI
             OnlineClient.OnRoomJoined -= OnOnlineRoomJoined;
             OnlineClient.OnLobbyUpdate -= OnOnlineLobbyUpdate;
             OnlineClient.OnError -= OnOnlineError;
+            OnlineClient.OnWarning -= OnOnlineWarning;
             OnlineClient.OnGameStart -= StartOnlineRace;
         }
 
         void OnOnlineRoomCreated(string code)
         {
             Debug.Log("[Online] código " + code);
-            if (lobbyStatus != null) lobbyStatus.text = "Sala " + code + " criada — compartilhe o código com outros jogadores";
+            LobbyMessage("Sala " + code + " criada — toque em COPIAR e envie o código");
             RefreshLobby();
         }
 
         void OnOnlineRoomJoined(string code)
         {
-            if (!carSentForRoom)
-            {
-                carSentForRoom = true;
-                OnlineClient.UpdatePlayer((int)settings.players[0].car, settings.players[0].colorIndex);
-            }
+            SyncMyCar();
             RefreshLobby();
         }
 
         void OnOnlineLobbyUpdate()
         {
-            carSentForRoom = true;
+            // Antes marcava "carro enviado" SEM enviar: se esta atualização chegasse antes do room:joined, o
+            // servidor ficava com o carro padrão (lista mostrava Porsche Cayman S com Temerario em MEU CARRO).
+            SyncMyCar();
             RefreshLobby();
+        }
+
+        /// <summary>Carro do jogador na sala: respeita a categoria (F1 = fórmulas, GT = carros de rua — antes a
+        /// sala GT aceitava o FÓRMULA C2 vindo da garagem) e é enviado ao servidor uma vez por sala e a cada troca.</summary>
+        void SyncMyCar()
+        {
+            var pc = settings.players[0];
+            bool f1 = OnlineClient.RoomCategory == "f1";
+            bool fixedCar = false;
+            if (IsFormula(pc.car) != f1) { pc.car = StepLobbyCar(pc.car, 1); fixedCar = true; }
+            if (fixedCar || !carSentForRoom) SendMyCar();
         }
 
         void OnOnlineError(string message)
         {
-            if (lobbyStatus != null) lobbyStatus.text = "Erro: " + message;
+            if (lobbyScreen != null) LobbyMessage("Erro: " + message);
             else if (onlineSetupStatus != null) onlineSetupStatus.text = "Erro: " + message;
+        }
+
+        void OnOnlineWarning(string message)
+        {
+            if (lobbyScreen != null) LobbyMessage(message);
         }
 
         void SetOnlineStatus(string msg)
         {
-            if (lobbyStatus != null) lobbyStatus.text = msg;
+            if (lobbyScreen != null) LobbyMessage(msg);
             if (onlineSetupStatus != null) onlineSetupStatus.text = msg;
         }
 
         void StartOnlineRace(GameStartInfo info)
         {
             UnbindOnline();
+            LaunchOnlineRace(info, onlineName);
+        }
+
+        /// <summary>Carrega a corrida online a partir do game:start do servidor. Usado no lobby E dentro da corrida (reinício
+        /// votado / jogar novamente): todos recebem o MESMO game:start e vão juntos para a mesma corrida da mesma sala.</summary>
+        public static void LaunchOnlineRace(GameStartInfo info, string fallbackName)
+        {
+            if (info == null) return;
+            string onlineName = string.IsNullOrEmpty(fallbackName) ? "Jogador" : fallbackName;
             var st = GameManager.Settings;
             st.mode = GameMode.Online;
             st.careerPhase = -1;
@@ -1028,10 +1246,14 @@ namespace RaceX.UI
             st.sessionTimeLimit = 0f;
             RaceX.Career.CareerData.raceActive = false;
             st.track = ServerTrack(info.trackId);
-            st.laps = Mathf.Clamp(info.laps, 1, 20);
+            st.laps = Mathf.Clamp(info.laps, 0, MaxLaps); // 0 = voltas reais (o RaceBootstrap converte)
             st.totalCars = Mathf.Max(1, info.totalCars);
             st.difficulty = ServerDifficulty(info.difficulty);
-            st.formulaOnly = false;
+            st.formulaOnly = info.category == "f1";
+            st.pitStops = info.pitStops;
+            st.weather = info.weather ?? "";
+            st.totalLoss = info.totalLoss;
+            st.penalties = info.penalties;
             var pid = OnlineClient.MyPlayerId;
             StartSlotInfo mine = null;
             foreach (var sp in info.startPositions)
@@ -1118,13 +1340,25 @@ namespace RaceX.UI
             case CarModel.Bugatti: return "Bugatti";
             case CarModel.F2008: return "Ferrari F2008";
             case CarModel.F1Studio: return "Fórmula 1 (2022)";
-            default: return m.ToString();
+            default: return CarSpec.CreateDefault(m).displayName;
             }
         }
 
         static readonly CarModel[] AllModels = (CarModel[])System.Enum.GetValues(typeof(CarModel));
 
-        static int ModelCount(RaceSettings st) => st.formulaOnly ? 1 : (SettingsManager.AllowF1 ? AllModels.Length : AllModels.Length - 1);
+        /// <summary>Próximo carro da configuração: categoria F1 = só monopostos; GT = carros de rua
+        /// (o F1 entra no GT só com "F1 em GT" ligado).</summary>
+        static CarModel StepSetupCar(CarModel current, int d, bool formula)
+        {
+            var m = current;
+            for (int i = 0; i < AllModels.Length; i++)
+            {
+                m = (CarModel)Step((int)m, d, AllModels.Length);
+                bool ok = formula ? CarSpec.IsFormula(m) : (!CarSpec.IsFormula(m) || (m == CarModel.F1 && SettingsManager.AllowF1));
+                if (ok) return m;
+            }
+            return current;
+        }
 
         static int Step(int value, int delta, int count) => ((value + delta) % count + count) % count;
 
@@ -1135,10 +1369,10 @@ namespace RaceX.UI
             return options[Step(i, delta, options.Length)];
         }
 
-        RectTransform SetupCard(RectTransform parent, string title, float x, int rows)
+        RectTransform SetupCard(RectTransform parent, string title, float x, int rows, float top = 350f, float rowStep = 76f)
         {
             var c = new Vector2(0.5f, 0.5f);
-            var card = UIFactory.Panel("Card_" + title, parent, c, new Vector2(0.5f, 1f), new Vector2(x, 350f), new Vector2(700f, 96f + rows * 76f), new Color(0.05f, 0.06f, 0.09f, 0.94f));
+            var card = UIFactory.Panel("Card_" + title, parent, c, new Vector2(0.5f, 1f), new Vector2(x, top), new Vector2(700f, 96f + rows * rowStep), new Color(0.05f, 0.06f, 0.09f, 0.94f));
             card.sprite = MenuTheme.RoundedSprite(140, 100, 16);
             var rt = (RectTransform)card.transform;
             var tl = new Vector2(0f, 1f);
@@ -1147,17 +1381,78 @@ namespace RaceX.UI
             return rt;
         }
 
-        void CardRow(RectTransform card, string label, int row, Func<string> value, Action<int> change)
+        void CardRow(RectTransform card, string label, int row, Func<string> value, Action<int> change, float step = 76f)
         {
             var tl = new Vector2(0f, 1f);
             var ml = new Vector2(0f, 0.5f);
-            float y = -84f - row * 76f;
-            var line = UIFactory.Panel(label + "_Row", card, tl, tl, new Vector2(16f, y), new Vector2(668f, 68f), new Color(1f, 1f, 1f, row % 2 == 0 ? 0.05f : 0.025f));
+            float y = -84f - row * step;
+            var line = UIFactory.Panel(label + "_Row", card, tl, tl, new Vector2(16f, y), new Vector2(668f, step - 8f), new Color(1f, 1f, 1f, row % 2 == 0 ? 0.05f : 0.025f));
             var lr = (RectTransform)line.transform;
-            UIFactory.Label(label, lr, label.ToUpperInvariant(), 22, TextAnchor.MiddleLeft, ml, ml, new Vector2(16f, 0f), new Vector2(210f, 60f), MenuTheme.TextDim);
+            MenuTheme.FitText(UIFactory.Label(label, lr, label.ToUpperInvariant(), 22, TextAnchor.MiddleLeft, ml, ml, new Vector2(16f, 0f), new Vector2(210f, 60f), MenuTheme.TextDim), 22);
+            // Valores em MAIÚSCULAS (antes "Circuito Verde"/"Médio" ao lado de "DESLIGADO"/"GT") e que diminuem para caber.
+            var raw = value;
+            value = () => (raw() ?? "").ToUpperInvariant();
             var text = UIFactory.Label(label + "_Value", lr, value(), 26, TextAnchor.MiddleCenter, ml, ml, new Vector2(306f, 0f), new Vector2(286f, 60f), MenuTheme.Text);
+            MenuTheme.FitText(text, 26);
             MenuTheme.StyledButton(lr, label + "_Prev", "<", ml, ml, new Vector2(234f, 0f), new Vector2(66f, 56f), 32, () => { change(-1); text.text = value(); });
             MenuTheme.StyledButton(lr, label + "_Next", ">", ml, ml, new Vector2(596f, 0f), new Vector2(66f, 56f), 32, () => { change(1); text.text = value(); });
+        }
+
+        /// <summary>Climas escolhíveis fora da carreira ("" = seco) — ids do WeatherSystem.Forced e do servidor.</summary>
+        static readonly string[] WeatherIds = { "", "cloudy", "light", "heavy", "mixed" };
+
+        static string WeatherLabel(string id) => id switch
+        {
+            "cloudy" => "NUBLADO",
+            "light" => "CHUVA FRACA",
+            "heavy" => "CHUVA FORTE",
+            "mixed" => "VARIÁVEL",
+            _ => "SECO"
+        };
+
+        /// <summary>Limite de voltas digitadas (mesmo do servidor online).</summary>
+        const int MaxLaps = 200;
+
+        static string LapsText(int laps, TrackId track) => laps <= 0 ? "REAIS (" + TrackLibrary.RealLaps(track) + ")" : laps.ToString();
+
+        /// <summary>Próxima opção pronta de voltas; funciona também a partir de um número digitado.</summary>
+        static int StepLaps(int value, int d)
+        {
+            var o = RaceSettings.LapOptions;
+            int i = Array.IndexOf(o, value);
+            if (i >= 0) return o[Step(i, d, o.Length)];
+            if (d > 0) { foreach (int x in o) if (x > value) return x; return o[0]; }
+            for (int k = o.Length - 1; k >= 0; k--) if (o[k] < value) return o[k];
+            return o[o.Length - 1];
+        }
+
+        /// <summary>Linha VOLTAS: &lt; &gt; percorre as opções prontas e o campo aceita DIGITAR (1 a 200).
+        /// 0 = voltas reais da pista. editable == false: só mostra (convidado na sala online).</summary>
+        InputField LapsRow(RectTransform card, int row, Func<int> get, Action<int> set, Func<TrackId> track, bool editable, float step = 76f)
+        {
+            var tl = new Vector2(0f, 1f);
+            var ml = new Vector2(0f, 0.5f);
+            float y = -84f - row * step;
+            var line = UIFactory.Panel("Voltas_Row", card, tl, tl, new Vector2(16f, y), new Vector2(668f, step - 8f), new Color(1f, 1f, 1f, row % 2 == 0 ? 0.05f : 0.025f));
+            var lr = (RectTransform)line.transform;
+            UIFactory.Label("Voltas", lr, "VOLTAS", 22, TextAnchor.MiddleLeft, ml, ml, new Vector2(16f, 0f), new Vector2(210f, 60f), MenuTheme.TextDim);
+            if (!editable)
+            {
+                Live(UIFactory.Label("Voltas_Value", lr, "", 26, TextAnchor.MiddleCenter, ml, ml, new Vector2(306f, 0f), new Vector2(286f, 60f), new Color(0.75f, 0.78f, 0.84f)), () => LapsText(get(), track()));
+                return null;
+            }
+            var field = MakeField(lr, "Voltas_Field", ml, new Vector2(449f, 0f), new Vector2(286f, 56f), LapsText(get(), track()), "digite", 26);
+            field.characterLimit = 12;
+            field.onEndEdit.AddListener(v =>
+            {
+                int n = 0; bool any = false;
+                foreach (char ch in v) if (ch >= '0' && ch <= '9') { n = Mathf.Min(n * 10 + (ch - '0'), 9999); any = true; }
+                if (any && n >= 1) set(Mathf.Clamp(n, 1, MaxLaps));
+                field.text = LapsText(get(), track());
+            });
+            MenuTheme.StyledButton(lr, "Voltas_Prev", "<", ml, ml, new Vector2(234f, 0f), new Vector2(66f, 56f), 32, () => { set(StepLaps(get(), -1)); field.text = LapsText(get(), track()); });
+            MenuTheme.StyledButton(lr, "Voltas_Next", ">", ml, ml, new Vector2(596f, 0f), new Vector2(66f, 56f), 32, () => { set(StepLaps(get(), 1)); field.text = LapsText(get(), track()); });
+            return field;
         }
 
         internal void ShowRaceSetup()
@@ -1177,19 +1472,37 @@ namespace RaceX.UI
             if (settings.totalCars > 16) settings.totalCars = RaceSettings.ClassicCarCount;
             RaceX.Career.CareerData.raceActive = false;
             bool split = settings.mode == GameMode.LocalSplitScreen;
-            SetShowroomCam(split ? new Vector3(0f, 3.6f, -12.5f) : new Vector3(0f, 3.4f, -10.5f), 26f);
+            // Carro escolhido na GARAGEM tem que bater com a categoria (antes: categoria F1 com McLaren P1).
+            for (int pi = 0; pi < settings.players.Length; pi++)
+            {
+                var pc = settings.players[pi];
+                if (settings.formulaOnly && !IsFormula(pc.car)) pc.car = CarModel.F1;
+                else if (!settings.formulaOnly && IsFormula(pc.car) && !(pc.car == CarModel.F1 && SettingsManager.AllowF1)) settings.formulaOnly = true;
+            }
+            // Câmera inclinada para CIMA (pitch -13): o carro desce para a faixa livre entre os cartões e os
+            // botões VOLTAR/INICIAR (y ≈ 365–465 de 540). Com pitch 0 (v80) ficava em y ≈ 305, atrás dos cartões.
+            SetShowroomCam(split ? new Vector3(0f, 4.0f, -12.5f) : new Vector3(0f, 3.8f, -10.5f), -13f);
             var s = NewScreen(split ? "CORRIDA — TELA DIVIDIDA" : "CONFIGURAÇÕES DA CORRIDA");
             ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.82f);
             int players = split ? 2 : 1;
-            var raceCard = SetupCard(s, "CORRIDA", ContentX - 365f, 5);
-            var carCard = SetupCard(s, split ? "PILOTOS E CARROS" : "PILOTO E CARRO", ContentX + 365f, split ? 5 : 4);
+            // Cartão CORRIDA com linhas de 68 (não 76): a linha REGRAS cabe sem o cartão cobrir o carro da vitrine.
+            const float raceStep = 68f;
+            var raceCard = SetupCard(s, "CORRIDA", ContentX - 365f, 7, 350f, raceStep);
+            var carCard = SetupCard(s, split ? "PILOTOS E CARROS" : "PILOTO E CARRO", ContentX + 365f, split ? 6 : 5);
             int row = 0;
-            CardRow(raceCard, "Pista", row++, () => TrackNames[(int)settings.track], d => settings.track = (TrackId)Step((int)settings.track, d, TrackNames.Length));
-            CardRow(raceCard, "Voltas", row++, () => settings.laps <= 0 ? "REAIS (" + TrackLibrary.RealLaps(settings.track) + ")" : settings.laps.ToString(), d => settings.laps = StepIn(RaceSettings.LapOptions, settings.laps, d));
-            CardRow(raceCard, "Adversários", row++, () => settings.totalCars == RaceSettings.ClassicCarCount ? "Clássico (8)" : settings.totalCars.ToString(),
-                d => settings.totalCars = StepIn(RaceSettings.CarCountOptions, settings.totalCars, d));
-            CardRow(raceCard, "Dificuldade", row++, () => DifficultyNames[(int)settings.difficulty], d => settings.difficulty = (Difficulty)Step((int)settings.difficulty, d, 4));
-            CardRow(raceCard, "Pit Stop", row++, () => settings.pitStops ? "LIGADO" : "DESLIGADO", d => settings.pitStops = !settings.pitStops);
+            InputField spLaps = null;
+            CardRow(raceCard, "Pista", row++, () => TrackNames[(int)settings.track], d =>
+            {
+                settings.track = (TrackId)Step((int)settings.track, d, TrackNames.Length);
+                if (spLaps != null) spLaps.text = LapsText(settings.laps, settings.track); // "REAIS (N)" muda com a pista
+            }, raceStep);
+            spLaps = LapsRow(raceCard, row++, () => settings.laps, v => settings.laps = v, () => settings.track, true, raceStep);
+            CardRow(raceCard, "Carros no grid", row++, () => settings.totalCars.ToString(),
+                d => settings.totalCars = StepIn(RaceSettings.CarCountOptions, settings.totalCars, d), raceStep);
+            CardRow(raceCard, "Dificuldade", row++, () => DifficultyNames[(int)settings.difficulty], d => settings.difficulty = (Difficulty)Step((int)settings.difficulty, d, 4), raceStep);
+            CardRow(raceCard, "Pit Stop", row++, () => settings.pitStops ? "LIGADO" : "DESLIGADO", d => settings.pitStops = !settings.pitStops, raceStep);
+            CardRow(raceCard, "Clima", row++, () => WeatherLabel(settings.weather), d => settings.weather = WeatherIds[Step(Mathf.Max(0, Array.IndexOf(WeatherIds, settings.weather ?? "")), d, WeatherIds.Length)], raceStep);
+            RulesRow(raceCard, row++, () => settings.totalLoss, v => settings.totalLoss = v, () => settings.penalties, v => settings.penalties = v, true, raceStep);
             row = 0;
             CardRow(carCard, "Categoria", row++, () => settings.formulaOnly ? "F1" : "GT",
                 d =>
@@ -1202,6 +1515,7 @@ namespace RaceX.UI
                 });
 
             if (!split) CardRow(carCard, "Câmera", row++, () => CameraNames[(int)settings.players[0].startCamera], d => settings.players[0].startCamera = (CameraView)Step((int)settings.players[0].startCamera, d, 4));
+            CardRow(carCard, "Rádio da equipe", row++, () => SettingsManager.PitRadio == 0 ? "DESLIGADO" : "LIGADO", d => SettingsManager.PitRadio = SettingsManager.PitRadio == 0 ? 1 : 0);
 
             for (int p = 0; p < players; p++)
             {
@@ -1209,8 +1523,7 @@ namespace RaceX.UI
                 string tag = split ? $"J{p + 1} " : "";
                 CardRow(carCard, tag + "Carro", row++, () => CarLabel(ps.car), d =>
                 {
-                    if (settings.formulaOnly) { ps.car = CarModel.F1; RefreshShowroomCarAsync(); return; }
-                    ps.car = (CarModel)Step((int)ps.car, d, ModelCount(settings));
+                    ps.car = StepSetupCar(ps.car, d, settings.formulaOnly);
                     RefreshShowroomCarAsync();
                 });
                 CardRow(carCard, tag + "Cor", row++, () => CarPalette.Names[ps.colorIndex], d =>
@@ -1249,7 +1562,7 @@ namespace RaceX.UI
             CardRow(audio, "Volume motor", row++, () => Pct(SettingsManager.EngineVolume), d => SettingsManager.EngineVolume = Clamp10(SettingsManager.EngineVolume, d));
             CardRow(audio, "Música", row++, () => SettingsManager.MusicOn ? "LIGADA" : "DESLIGADA", d => SettingsManager.MusicOn = !SettingsManager.MusicOn);
             CardRow(audio, "Efeitos", row++, () => SettingsManager.SfxOn ? "LIGADOS" : "DESLIGADOS", d => SettingsManager.SfxOn = !SettingsManager.SfxOn);
-            CardRow(audio, "Rádio do pit", row++, () => SettingsManager.PitRadio == 0 ? "DESLIGADO" : "LIGADO", d => SettingsManager.PitRadio = SettingsManager.PitRadio == 0 ? 1 : 0);
+            CardRow(audio, "Rádio da equipe", row++, () => SettingsManager.PitRadio == 0 ? "DESLIGADO" : "LIGADO", d => SettingsManager.PitRadio = SettingsManager.PitRadio == 0 ? 1 : 0);
             CardRow(audio, "Nomes nos carros", row++, () => SettingsManager.NameTags ? "LIGADOS" : "DESLIGADOS", d => SettingsManager.NameTags = !SettingsManager.NameTags);
             CardRow(audio, "Mini-mapa", row++, () => SettingsManager.MinimapDynamic ? "DINÂMICO" : "PISTA INTEIRA", d => SettingsManager.MinimapDynamic = !SettingsManager.MinimapDynamic);
             if (mobile)
@@ -1276,7 +1589,7 @@ namespace RaceX.UI
             var c = new Vector2(0.5f, 0.5f);
             float hintY = 350f - (96f + (mobile ? 4 : 5) * 76f) - 30f;
             var hint = UIFactory.Label("FpsHint", s,
-                "AUTO: celular 60 FPS em Alta/Ultra e 30 FPS em Baixa/Média; PC sem limite.\n30 economiza bateria · 60 é o recomendado · 120 só em telas de 120 Hz.\nQualidade mais baixa = mais FPS (menos sombras e resolução).",
+                "AUTO: celular 60 FPS (Alta/Ultra) ou 30 FPS (Baixa/Média).\n30 economiza bateria · 60 recomendado · 120 só em tela 120 Hz.\nQualidade mais baixa = mais FPS.",
                 20, TextAnchor.UpperLeft, c, new Vector2(0.5f, 1f), new Vector2(ContentX + 365f, hintY), new Vector2(680f, 100f), MenuTheme.TextDim);
             hint.horizontalOverflow = HorizontalWrapMode.Wrap;
             MenuTheme.StyledButton(s, "About", "SOBRE O JOGO", c, c, new Vector2(ContentX + 365f, hintY - 150f), new Vector2(420f, 64f), 24, ShowCredits);
@@ -1308,8 +1621,9 @@ namespace RaceX.UI
             {
                 CarModel cm = AllModels[i];
                 bool sel = (int)cm == garageIndex;
-                float cx = ContentX + (i % 7 - 3) * 168f;
-                float cy = -132f - (i / 7) * 56f;
+                // 5 por linha, só na faixa ENTRE o painel lateral e o cartão de dados (antes o cartão cobria F2008/F1 2022).
+                float cx = -120f + (i % 5 - 2) * 164f;
+                float cy = -132f - (i / 5) * 52f;
                 var chip = MenuTheme.StyledButton(s, "GarageCar" + i, ShortCarLabel(cm), top, top, new Vector2(cx, cy), new Vector2(158f, 46f), 18,
                     () => { garageIndex = (int)cm; settings.players[0].car = cm; garageStatus = ""; RefreshShowroomCarAsync(); ShowGarage(); });
                 if (sel) chip.image.color = new Color(MenuTheme.Accent.r, MenuTheme.Accent.g, MenuTheme.Accent.b, 0.55f);
@@ -1318,7 +1632,8 @@ namespace RaceX.UI
             // Nome do carro sob ele, com < > para trocar.
             var bc = new Vector2(0.5f, 0f);
             MenuTheme.StyledButton(s, "GaragePrev", "<", bc, bc, new Vector2(-470f, 150f), new Vector2(70f, 64f), 34, () => ChangeGarage(-1));
-            UIFactory.Label("GarageName", s, CarLabel(current).ToUpperInvariant(), 40, TextAnchor.MiddleCenter, bc, bc, new Vector2(-190f, 150f), new Vector2(480f, 64f), MenuTheme.Accent);
+            // Nome longo ("TATUUS F4-T421 (F4 BRITÂNICO)") diminui para caber entre as setas (antes passava por cima).
+            MenuTheme.FitText(UIFactory.Label("GarageName", s, CarLabel(current).ToUpperInvariant(), 40, TextAnchor.MiddleCenter, bc, bc, new Vector2(-190f, 150f), new Vector2(470f, 64f), MenuTheme.Accent), 40);
             MenuTheme.StyledButton(s, "GarageNext", ">", bc, bc, new Vector2(90f, 150f), new Vector2(70f, 64f), 34, () => ChangeGarage(1));
             UIFactory.Label("GarageCat", s, IsFormula(current) ? "FÓRMULA" : "GT / SUPERCARRO", 22, TextAnchor.MiddleCenter, bc, bc, new Vector2(-190f, 110f), new Vector2(480f, 30f), MenuTheme.TextDim);
 
@@ -1327,7 +1642,7 @@ namespace RaceX.UI
             card.sprite = MenuTheme.RoundedSprite(128, 160, 16);
             var crt = (RectTransform)card.transform;
             var tl = new Vector2(0f, 1f);
-            UIFactory.Label("CardCredits", crt, "CRÉDITOS: " + CareerStats.Credits.ToString("N0", System.Globalization.CultureInfo.InvariantCulture).Replace(",", ".") + " cr", 26, TextAnchor.MiddleLeft, tl, tl, new Vector2(28f, -18f), new Vector2(590f, 40f), MenuTheme.Text);
+            UIFactory.Label("CardCredits", crt, "CRÉDITOS: " + CareerStats.Credits.ToString("N0", System.Globalization.CultureInfo.InvariantCulture).Replace(",", ".") + " CR", 26, TextAnchor.MiddleLeft, tl, tl, new Vector2(28f, -18f), new Vector2(590f, 40f), MenuTheme.Text);
             UIFactory.Label("PerfTitle", crt, "DESEMPENHO", 24, TextAnchor.MiddleLeft, tl, tl, new Vector2(28f, -66f), new Vector2(400f, 34f), MenuTheme.Accent);
             UIFactory.Panel("PerfLine", crt, tl, tl, new Vector2(28f, -100f), new Vector2(584f, 2f), MenuTheme.AccentDim);
 
@@ -1380,7 +1695,8 @@ namespace RaceX.UI
                     if (!can) btn.image.color = new Color(1f, 1f, 1f, 0.03f);
                 }
             }
-            UIFactory.Label("GarageStatus", crt, garageStatus, 20, TextAnchor.MiddleCenter, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 46f), new Vector2(600f, 30f), MenuTheme.Accent);
+            // Mensagem da compra ao lado do título MELHORIAS (antes ficava por cima da linha REDUÇÃO DE PESO).
+            MenuTheme.FitText(UIFactory.Label("GarageStatus", crt, garageStatus, 20, TextAnchor.MiddleRight, tl, tl, new Vector2(330f, -404f), new Vector2(290f, 34f), MenuTheme.Accent), 20);
             UIFactory.Label("GarageNote", crt, "Barra clara = de fábrica · laranja = com suas melhorias", 17, TextAnchor.MiddleCenter, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 16f), new Vector2(600f, 26f), MenuTheme.TextDim);
             MenuTheme.StyledButton(s, "GarageBack", "VOLTAR", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(140f, -52f), new Vector2(260f, 60f), 28, ShowMain);
         }
@@ -1400,7 +1716,7 @@ namespace RaceX.UI
             UIFactory.Label("StV" + row, card, value, 20, TextAnchor.MiddleRight, tl, tl, new Vector2(470f, y), new Vector2(142f, 30f), MenuTheme.Text);
         }
 
-        static bool IsFormula(CarModel m) => m == CarModel.F1 || m == CarModel.F2008 || m == CarModel.F1Studio;
+        static bool IsFormula(CarModel m) => CarSpec.IsFormula(m);
 
         static string ShortCarLabel(CarModel m)
         {
@@ -1419,6 +1735,22 @@ namespace RaceX.UI
             case CarModel.Bugatti: return "BUGATTI";
             case CarModel.F2008: return "F2008";
             case CarModel.F1Studio: return "F1 2022";
+            case CarModel.F1Legacy: return "F1 2022 PINTURA";
+            case CarModel.F1Basic: return "F1 CLÁSSICO";
+            case CarModel.F1Concept26: return "CONCEPT 2026";
+            case CarModel.F1Custom22: return "F1 CUSTOM";
+            case CarModel.McLarenF1: return "MCLAREN F1";
+            case CarModel.FerrariF60: return "FERRARI F60";
+            case CarModel.F1Sponsor: return "F1 PATROCÍNIOS";
+            case CarModel.Lotus77: return "LOTUS 77";
+            case CarModel.FP04: return "FP04";
+            case CarModel.F4British: return "F4 BRITÂNICO";
+            case CarModel.McLarenMP45: return "MCLAREN MP4/5";
+            case CarModel.F1Photo22: return "F1 2022 B";
+            case CarModel.F1CarConcept: return "F1 CONCEPT";
+            case CarModel.F1Y2026: return "F1 2026";
+            case CarModel.FormulaC1: return "FÓRMULA C1";
+            case CarModel.FormulaC2: return "FÓRMULA C2";
             default: return m.ToString().ToUpperInvariant();
             }
         }
@@ -1473,7 +1805,7 @@ namespace RaceX.UI
             var how = SetupCard(s, "COMO GANHAR CRÉDITOS", ContentX + 365f, 8);
             var exp = UIFactory.Label("HowText", how,
                 "Você ganha créditos ao TERMINAR A CORRIDA DE DOMINGO do MODO CARREIRA. Quanto melhor a posição, mais créditos " +
-                "(mínimo de 400 cr). Treinos, classificação e sprint não pagam.\n\nGaste na GARAGEM: motor, freios, pneus, aerodinâmica e peso, " +
+                "(mínimo de " + CareerStats.RewardFor(24, 24).ToString("N0", System.Globalization.CultureInfo.InvariantCulture).Replace(",", ".") + " CR). Treinos, classificação e sprint não pagam.\n\nGaste na GARAGEM: motor, freios, pneus, aerodinâmica e peso, " +
                 "até o nível " + CareerStats.MaxUpgrade + " em cada carro. A melhoria vale nas suas corridas na hora.",
                 21, TextAnchor.UpperLeft, tl, tl, new Vector2(28f, -80f), new Vector2(640f, 220f), MenuTheme.Text);
             exp.horizontalOverflow = HorizontalWrapMode.Wrap;
@@ -1502,6 +1834,7 @@ namespace RaceX.UI
 
         // ======================= RECORDES (v79) =======================
         static int recordsTrack;
+        static int recordsPage;
 
         void ShowRecords()
         {
@@ -1522,7 +1855,7 @@ namespace RaceX.UI
                 float best = BestOnTrack(t, out _);
                 int col = t / 12, r = t % 12;
                 string label = TrackNames[t] + "   " + (best > 0f ? HUD.FormatTime(best) : "--:--");
-                var btn = MenuTheme.StyledButton(lrt, "Trk" + t, label, tl, tl, new Vector2(16f + col * 348f, -64f - r * 60f), new Vector2(338f, 54f), 16, () => { recordsTrack = tid; ShowRecords(); });
+                var btn = MenuTheme.StyledButton(lrt, "Trk" + t, label, tl, tl, new Vector2(16f + col * 348f, -64f - r * 60f), new Vector2(338f, 54f), 21, () => { recordsTrack = tid; ShowRecords(); });
                 btn.GetComponentInChildren<Text>().alignment = TextAnchor.MiddleCenter;
                 if (t == recordsTrack) btn.image.color = new Color(MenuTheme.Accent.r, MenuTheme.Accent.g, MenuTheme.Accent.b, 0.5f);
             }
@@ -1536,10 +1869,20 @@ namespace RaceX.UI
             MenuTheme.StyledButton(crt, "RecNext", ">", tl, tl, new Vector2(620f, -14f), new Vector2(64f, 52f), 30, () => { recordsTrack = (recordsTrack + 1) % TrackNames.Length; ShowRecords(); });
             float trackBest = BestOnTrack(recordsTrack, out int bestModel);
             UIFactory.Label("RecBest", crt, trackBest > 0f ? "RECORDE: " + HUD.FormatTime(trackBest) + " — " + CarLabel((CarModel)bestModel) : "SEM VOLTAS NESTA PISTA AINDA", 20, TextAnchor.MiddleCenter, tl, tl, new Vector2(16f, -76f), new Vector2(668f, 30f), MenuTheme.TextDim);
-            for (int m = 0; m < AllModels.Length; m++)
+            const int perPage = 12;
+            int pages = Mathf.Max(1, Mathf.CeilToInt(AllModels.Length / (float)perPage));
+            recordsPage = Mathf.Clamp(recordsPage, 0, pages - 1);
+            int first = recordsPage * perPage, last = Mathf.Min(AllModels.Length, first + perPage);
+            if (pages > 1)
+            {
+                MenuTheme.StyledButton(crt, "RecPgPrev", "<", tl, tl, new Vector2(150f, -730f), new Vector2(64f, 52f), 30, () => { recordsPage = (recordsPage + pages - 1) % pages; ShowRecords(); });
+                UIFactory.Label("RecPg", crt, "CARROS " + (first + 1) + "–" + last + " DE " + AllModels.Length, 20, TextAnchor.MiddleCenter, tl, tl, new Vector2(230f, -730f), new Vector2(240f, 52f), MenuTheme.TextDim);
+                MenuTheme.StyledButton(crt, "RecPgNext", ">", tl, tl, new Vector2(486f, -730f), new Vector2(64f, 52f), 30, () => { recordsPage = (recordsPage + 1) % pages; ShowRecords(); });
+            }
+            for (int m = first; m < last; m++)
             {
                 float best = SettingsManager.GetBestLap(recordsTrack, (int)AllModels[m]);
-                float y = -120f - m * 50f;
+                float y = -120f - (m - first) * 50f;
                 var row = UIFactory.Panel("RecRow" + m, crt, tl, tl, new Vector2(16f, y), new Vector2(668f, 44f), new Color(1f, 1f, 1f, m % 2 == 0 ? 0.05f : 0.02f));
                 var rr = (RectTransform)row.transform;
                 bool isRec = best > 0f && (int)AllModels[m] == bestModel;
@@ -1566,9 +1909,9 @@ namespace RaceX.UI
         {
             back = ShowSettings;
             var s = NewScreen("SOBRE O JOGO");
-            ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.88f);
+            ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.97f);
             var t = UIFactory.Label("Text", s,
-                "RaceX Proto — protótipo de corrida\n\nEngine: Unity 6 + URP\nMultiplayer: Node.js + Socket.IO\nContas e nuvem: Supabase\n\nVersão " + Application.version,
+                "RaceX Proto — protótipo de corrida\n\nEngine: Unity 6 + URP\nMultiplayer: Node.js + Socket.IO\nContas e nuvem: Supabase\n\nVersão " + Application.version + " · build v80",
                 32, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(ContentX, 40f), new Vector2(1200f, 500f));
             t.horizontalOverflow = HorizontalWrapMode.Wrap;
             MenuTheme.StyledButton(s, "Back", "VOLTAR", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(ContentX, 40f), new Vector2(380f, 90f), 32, ShowSettings);

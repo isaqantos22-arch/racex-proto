@@ -115,6 +115,8 @@ namespace RaceX.UI
         Vector2 zoomCenter;
         float zoomScale = 1f;
         bool zoomInit;
+        float heading;
+        bool headingInit;
 
         void LateUpdate()
         {
@@ -129,12 +131,26 @@ namespace RaceX.UI
                 zoomCenter = Vector2.Lerp(zoomCenter, new Vector2(sp.x, sp.z), Time.deltaTime * 4f);
                 zoomScale = Mathf.MoveTowards(zoomScale, 3.2f, Time.deltaTime * 2f);
                 mapRect.localScale = Vector3.one * zoomScale;
-                mapRect.anchoredPosition = -(zoomCenter - center) * worldScale * factor * zoomScale;
+                // FRENTE DO CARRO SEMPRE PARA CIMA (pedido do usuário: o mapa fixo no "norte" mostrava a reta descendo
+                // enquanto o carro subia na tela). Gira o mapa pelo rumo do carro, suavizado.
+                Vector3 fw = self.car.transform.forward;
+                if (fw.x * fw.x + fw.z * fw.z > 0.01f)
+                {
+                    float target = 90f - Mathf.Atan2(fw.z, fw.x) * Mathf.Rad2Deg;
+                    if (!headingInit) { heading = target; headingInit = true; }
+                    heading = Mathf.LerpAngle(heading, target, Time.deltaTime * 5f);
+                }
+                var rot = Quaternion.Euler(0f, 0f, heading);
+                mapRect.localRotation = rot;
+                Vector2 off = (zoomCenter - center) * worldScale * factor * zoomScale;
+                mapRect.anchoredPosition = -(Vector2)(rot * off);
             }
             else
             {
                 zoomScale = 1f;
                 zoomInit = false;
+                headingInit = false;
+                mapRect.localRotation = Quaternion.identity;
                 mapRect.localScale = Vector3.one;
                 mapRect.anchoredPosition = Vector2.zero;
             }

@@ -28,6 +28,15 @@ namespace RaceX.Core
         public float totalTime;
         public int position;
         public float raceDistance;
+        /// <summary>Fora da corrida: perda total ("PT") ou desclassificado ("DSQ", bandeira preta).</summary>
+        public bool retired;
+        public string retireReason = "";
+        /// <summary>Penalidades de tempo (s) somadas ao tempo final — regras da F1 (RaceControl).</summary>
+        public float penaltySeconds;
+        public int penaltyCount;
+        public int trackLimitStrikes;
+        /// <summary>Online: id do carro no servidor (jogador "p_..." ou IA "ai_N") — liga o placar oficial ao carro.</summary>
+        public string netId;
         public int CurrentLap(int laps, RaceProgress p) => Mathf.Clamp(p != null ? p.lap : 1, 1, laps);
     }
 
@@ -55,6 +64,22 @@ namespace RaceX.Core
         float sessionStart;
         bool timeExpired;
         int lapAtExpiry;
+        float flagAt;
+        bool flyingAtFlag;
+        /// <summary>Tempo da sessão acabou e a quadriculada está fora: só termina quem já estava em volta lançada.</summary>
+        public bool ChequeredFlag => timeExpired && State == RaceState.Racing;
+
+        /// <summary>O jogador está numa volta LANÇADA (fora do box e da volta de saída)?</summary>
+        bool HumanOnFlyingLap()
+        {
+            foreach (var e in entries)
+            {
+                if (!e.isHuman || e.finished || e.retired || e.car == null) continue;
+                if (RaceX.Core.PitLaneSystem.IsInPitFlow(e.car) || e.car.pitControlled || e.outLap) continue;
+                return true;
+            }
+            return false;
+        }
 
         /// <summary>Volta atual do humano (0 se não há).</summary>
         int HumanLapNow()
@@ -93,6 +118,7 @@ namespace RaceX.Core
         public event Action RaceStarted;
         public event Action<RaceEntry, float, bool> LapCompleted;
         public event Action<RaceEntry> EntryFinished;
+        public event Action<RaceEntry> EntryRetired;
         public event Action RaceFinished;
 
         float raceStartTime;
@@ -132,26 +158,183 @@ namespace RaceX.Core
 
         public RaceProgress GetProgress(RaceEntry e) => Track.Checkpoints.Get(e.car);
 
-        public void BeginCountdown() => StartCoroutine(CountdownRoutine());
+        /// <summary>fixedHold ≥ 0: espera com as 5 luzes acesas definida de fora (online: a MESMA para todos, vinda do
+        /// servidor). Negativo = sorteio local de 0,2–3 s.</summary>
+        public void BeginCountdown(float fixedHold = -1f) => StartCoroutine(CountdownRoutine(fixedHold));
 
-        IEnumerator CountdownRoutine()
+        /// <summary>Online: o servidor fechou a corrida (resultado oficial) com o jogador ainda na pista — encerra aqui também.</summary>
+        public void EndNow()
+        {
+            if (State == RaceState.Finished || endQueued) return;
+            endQueued = true;
+            StartCoroutine(EndRaceRoutine());
+        }
+
+        /// <summary>Volta de apresentação em andamento (HUD mostra o aviso e o botão PULAR).</summary>
+        public bool FormationLap { get; private set; }
+        /// <summary>Pedido de pular a volta de apresentação (os carros vão direto às posições do grid).</summary>
+        public static bool SkipFormationRequested;
+        /// <summary>Luzes da largada: -1 apagado/oculto, 0 painel sem luz, 1..5 vermelhas acesas, 6 TODAS VERDES (vai!).</summary>
+        public int LightsOn { get; private set; } = -1;
+        public float LightsGreenAt { get; private set; } = -1f;
+
+        /// <summary>LARGADA (v81, procedimento da F1): carros no grid → VOLTA DE APRESENTAÇÃO (pole na frente, fila, sem
+        /// ultrapassar, zigue-zague nas retas) → cada um para na SUA posição → 5 luzes vermelhas, uma por segundo →
+        /// espera aleatória → todas VERDES de uma vez (pedido do usuário; na F1 real elas se apagam). Treino e
+        /// classificação (sessões por tempo) saem do box: sinal verde direto.</summary>
+        IEnumerator CountdownRoutine(float fixedHold)
         {
             State = RaceState.Countdown;
             yield return new WaitForSeconds(0.5f);
-            for (int i = 3; i >= 1; i--)
+            bool timed = Settings.laps >= 900;
+            if (timed)
             {
-                CountdownValue = i;
-                CountdownTick?.Invoke(i);
+                LightsOn = 6; LightsGreenAt = Time.time;
+                CountdownValue = 0;
+                CountdownTick?.Invoke(0);
+                StartRace();
+                yield break;
+            }
+            bool formation = Settings.mode != GameMode.Online && SettingsManager.FormationLap && !AutoTest.Active; // autoteste mede a corrida
+            if (formation) yield return FormationLapRoutine();
+            LightsOn = 0;
+            yield return new WaitForSeconds(1f);
+            for (int i = 1; i <= 5; i++)
+            {
+                LightsOn = i;
+                CountdownValue = 6 - i;
+                CountdownTick?.Invoke(6 - i);
                 yield return new WaitForSeconds(CountdownStep);
             }
+            // Espera aleatória com as 5 acesas (ninguém adivinha o "vai").
+            yield return new WaitForSeconds(fixedHold >= 0f ? fixedHold : UnityEngine.Random.Range(0.2f, 3.0f)); // F1: 0,2–3 s, sorteado por computador
+            LightsOn = 6; LightsGreenAt = Time.time;
             CountdownValue = 0;
             CountdownTick?.Invoke(0);
             StartRace();
         }
 
+        /// <summary>VOLTA DE APRESENTAÇÃO: os carros andam em fila pela pista inteira (velocidade pela curva, máx.
+        /// ~150 km/h; o líder dita o ritmo) e param EXATAMENTE nas suas posições do grid. Movimento guiado
+        /// (cinemático, sem colisão) — ninguém bate nem erra a vaga. Pular = vai direto ao grid.</summary>
+        IEnumerator FormationLapRoutine()
+        {
+            var sp = Track != null ? Track.Spline : null;
+            if (sp == null || sp.Count < 20) yield break;
+            var list = new List<RaceEntry>();
+            foreach (var e in entries) if (e.car != null) list.Add(e);
+            int n = list.Count;
+            if (n == 0) yield break;
+            float L = sp.Length;
+            var s0 = new float[n]; var lat0 = new float[n]; var dy = new float[n];
+            var pose0 = new Pose[n]; var kin = new bool[n]; var det = new bool[n];
+            var interp = new RigidbodyInterpolation[n];
+            var straightS = new float[n];   // fator "reta" suavizado por carro (0 curva … 1 reta)
+            int lead = 0;
+            for (int i = 0; i < n; i++)
+            {
+                var c = list[i].car;
+                pose0[i] = new Pose(c.transform.position, c.transform.rotation);
+                s0[i] = sp.ClosestIndex(c.transform.position) * sp.spacing;
+                var p = sp.PoseAtDistance(s0[i]);
+                lat0[i] = Vector3.Dot(c.transform.position - p.position, p.rotation * Vector3.right);
+                dy[i] = c.transform.position.y - p.position.y;
+                kin[i] = c.Body.isKinematic; det[i] = c.Body.detectCollisions;
+                c.Body.isKinematic = true; c.Body.detectCollisions = false;
+                // Movimento por POSIÇÃO a cada quadro: com a interpolação ligada o Unity redesenhava o carro entre os
+                // passos de física (50 Hz) e brigava com a posição escrita — os carros andavam "aos saltos" com o
+                // cenário liso. Mesmo cuidado que o replay já tinha.
+                interp[i] = c.Body.interpolation;
+                c.Body.interpolation = RigidbodyInterpolation.None;
+                if (list[i].gridSlot < list[lead].gridSlot) lead = i;
+            }
+            // Os slots ficam ATRÁS da linha: o pole tem o maior s (relativo). A fila anda junto (mesma distância d).
+            FormationLap = true;
+            SkipFormationRequested = false;
+            float d = 0f, v = 0f, total = L;
+            int look = Mathf.Max(2, Mathf.RoundToInt(12f / Mathf.Max(0.5f, sp.spacing)));
+            while (d < total - 0.05f && !SkipFormationRequested)
+            {
+                float dt = Mathf.Min(Time.deltaTime, 0.05f);
+                float sLead = s0[lead] + d;
+                // Velocidade pela curvatura à frente do líder (lat. ~9 m/s²) e freada para parar no grid.
+                float vMax = 41f;
+                for (float ahead = 0f; ahead <= 120f; ahead += 20f)
+                {
+                    int ci = sp.Wrap(Mathf.RoundToInt((sLead + ahead) / sp.spacing));
+                    Vector3 ta = sp.tangents[sp.Wrap(ci - look)], tb = sp.tangents[sp.Wrap(ci + look)];
+                    float ang = Vector3.Angle(ta, tb) * Mathf.Deg2Rad;
+                    float kappa = ang / Mathf.Max(1f, 2f * look * sp.spacing);
+                    float vc = kappa > 1e-4f ? Mathf.Sqrt(9f / kappa) : 99f;
+                    vMax = Mathf.Min(vMax, Mathf.Sqrt(vc * vc + 2f * 6f * ahead));
+                }
+                vMax = Mathf.Max(8f, vMax);
+                vMax = Mathf.Min(vMax, Mathf.Sqrt(2f * 3.2f * Mathf.Max(0f, total - d)) + 0.4f);
+                v = Mathf.MoveTowards(v, vMax, (v < vMax ? 4.5f : 7f) * dt);
+                d = Mathf.Min(total, d + v * dt);
+                float edge = Mathf.Clamp01(Mathf.Min(d, total - d) / 160f);
+                for (int i = 0; i < n; i++)
+                {
+                    var c = list[i].car;
+                    if (c == null) continue;
+                    float s = s0[i] + d;
+                    // Zigue-zague nas retas (aquece um pouco a superfície e limpa sujeira — efeito modesto).
+                    int si = sp.Wrap(Mathf.RoundToInt(s / sp.spacing));
+                    // Fator CONTÍNUO (3°–9°) e suavizado no tempo (~2 s para virar): antes era 0/1 no limite de 6° e o
+                    // zigue-zague (1,1 m) e o giro (6°) entravam/saíam num quadro — o carro "pulava" de lado e voltava.
+                    float ang = Vector3.Angle(sp.tangents[sp.Wrap(si - look)], sp.tangents[sp.Wrap(si + look)]);
+                    straightS[i] = Mathf.MoveTowards(straightS[i], 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(3f, 9f, ang)), 0.5f * dt);
+                    float straight = straightS[i];
+                    float weave = 1.1f * straight * Mathf.Sin(s / 38f * 6.283f + i * 1.3f);
+                    float lat = Mathf.Lerp(lat0[i], weave, edge);
+                    // Pose INTERPOLADA: a PoseAtDistance anda em degraus de ~2 m (o "andar por quadros distantes").
+                    var p = sp.PoseAtDistanceSmooth(Mathf.Repeat(s, L), lat);
+                    float yaw = straight * edge * 6f * Mathf.Cos(s / 38f * 6.283f + i * 1.3f);
+                    c.transform.SetPositionAndRotation(p.position + Vector3.up * dy[i], p.rotation * Quaternion.Euler(0f, yaw, 0f));
+                }
+                yield return null;
+            }
+            // Chegada (ou PULAR): cada carro EXATAMENTE na sua posição do grid, parado.
+            for (int i = 0; i < n; i++)
+            {
+                var c = list[i].car;
+                if (c == null) continue;
+                c.Body.isKinematic = kin[i];
+                c.Body.detectCollisions = det[i];
+                c.Body.interpolation = interp[i];
+                c.ResetTo(pose0[i].position, pose0[i].rotation);
+                Track.Checkpoints.Register(c, pose0[i]); // a volta de apresentação NÃO conta volta
+            }
+            FormationLap = false;
+            SkipFormationRequested = false;
+        }
+
+        bool IsCareerSession => Settings.careerPhase >= 0 && RaceX.Career.CareerMode.data != null;
+
+        // Relógio da sessão da carreira: anda só com esta cena aberta e o jogo em primeiro plano.
+        void OnDestroy()
+        {
+            if (IsCareerSession) RaceX.Career.CareerMode.PauseSessionClock();
+        }
+
+        void OnApplicationPause(bool paused)
+        {
+            if (!IsCareerSession) return;
+            if (paused) RaceX.Career.CareerMode.PauseSessionClock();
+            // voltou ao jogo: retoma se a sessão está rodando (ou com o hub aberto por cima); com o menu de pausa aberto
+            // (tempo parado sem o hub), continua pausado até fechar o menu.
+            else if (State == RaceState.Racing && (Time.timeScale > 0f || RaceX.UI.CareerFlow.IsOpen)) RaceX.Career.CareerMode.ResumeSessionClock();
+        }
+
+        void OnApplicationQuit()
+        {
+            if (IsCareerSession) RaceX.Career.CareerMode.PauseSessionClock();
+        }
+
         void StartRace()
         {
             State = RaceState.Racing;
+            if (IsCareerSession) RaceX.Career.CareerMode.ResumeSessionClock();   // começou na pista: o relógio anda
             raceStartTime = Time.time;
             ConfigureSessionTime(Settings.sessionTimeLimit);
             foreach (var e in entries)
@@ -164,7 +347,12 @@ namespace RaceX.Core
 
         void OnLapCompleted(CarController car, int lapNumber)
         {
-            if (State != RaceState.Racing || !byCar.TryGetValue(car, out var e) || e.finished) return;
+            if (!byCar.TryGetValue(car, out var e) || e.finished) return;
+            // ONLINE: depois que a corrida DESTE aparelho acabou, os carros que ele pilota (IA do anfitrião, carro de quem caiu)
+            // continuam cruzando a linha e a chegada vale para o placar oficial — antes a IA que chegava depois do anfitrião
+            // ficava "na pista" e caía atrás de convidados que chegaram depois dela.
+            bool lateOnline = State == RaceState.Finished && Settings.mode == GameMode.Online && !e.isHuman && car != null && !car.IsRemote;
+            if (State != RaceState.Racing && !lateOnline) return;
             float now = Time.time;
             float lapTime = now - e.lapStartTime;
             e.lapStartTime = now;
@@ -211,11 +399,34 @@ namespace RaceX.Core
 
         void Finish(RaceEntry e, float now)
         {
+            if (e.retired) return;
             e.finished = true;
-            e.totalTime = now - raceStartTime;
+            e.totalTime = now - raceStartTime + e.penaltySeconds;
             finishOrder.Add(e);
             EntryFinished?.Invoke(e);
-            if (e.isHuman && entries.TrueForAll(x => !x.isHuman || x.finished)) StartCoroutine(EndRaceRoutine());
+            if (e.isHuman && HumansDone()) StartCoroutine(EndRaceRoutine());
+        }
+
+        bool HumansDone() => entries.TrueForAll(x => !x.isHuman || x.finished || x.retired);
+        bool endQueued;
+
+        /// <summary>Tira o carro da corrida (perda total / desclassificação). O jogador fora = fim da corrida para ele.</summary>
+        public void Retire(RaceEntry e, string reason)
+        {
+            if (e == null || e.finished || e.retired) return;
+            e.retired = true;
+            e.retireReason = reason;
+            EntryRetired?.Invoke(e);
+            if (e.isHuman && HumansDone() && !endQueued && State == RaceState.Racing) { endQueued = true; StartCoroutine(EndRaceRoutine()); }
+        }
+
+        /// <summary>Penalidade de tempo: soma no tempo final (se já cruzou a linha, soma direto no tempo).</summary>
+        public void AddPenalty(RaceEntry e, float seconds)
+        {
+            if (e == null || e.retired) return;
+            e.penaltySeconds += seconds;
+            e.penaltyCount++;
+            if (e.finished) e.totalTime += seconds;
         }
 
         IEnumerator EndRaceRoutine()
@@ -236,16 +447,15 @@ namespace RaceX.Core
 
         void Update()
         {
+            if (RaceX.Core.ReplaySystem.IsPlaying) return; // replay na tela: mundo congelado, nada reage às posições reproduzidas
             if (State != RaceState.Racing) return;
             // Relógio REAL da carreira: tempo passado em menu/hub também desconta (deadline UTC).
             if (Settings.careerPhase >= 0 && sessionTimeLimit > 0f)
             {
-                int careerLeft = RaceX.Career.CareerMode.SessionSecondsLeft();
-                if (careerLeft > 0)
-                {
-                    float realLimit = (Time.time - sessionStart) + careerLeft;
-                    if (realLimit < sessionTimeLimit) sessionTimeLimit = realLimit;
-                }
+                // A PISTA ESPELHA o relógio da carreira (nos dois sentidos, em tempo de jogo): os dois nunca divergem.
+                int careerLeft = RaceX.Career.CareerMode.SessionGameSecondsLeft();
+                if (careerLeft > 0 && RaceX.Career.CareerMode.SessionClockActive && !RaceX.Career.CareerMode.SessionClockPaused)
+                    sessionTimeLimit = (Time.time - sessionStart) + careerLeft;
             }
             // Fim POR TEMPO. Treino/CLASSIFICAÇÃO (laps>=900 = sessão por tempo): o tempo acabou
             // = FIM IMEDIATO com a classificação na tela (a Q2 não espera "volta de cortesia" —
@@ -254,16 +464,32 @@ namespace RaceX.Core
             // RELÓGIO REAL da carreira (deadline UTC): venceu mesmo com o jogo congelado no
             // menu/hub (timeScale=0 congela o Time.time local) = FIM IMEDIATO — era o buraco que
             // deixava a Q2 "nunca acabar" quando o tempo vencia com o hub aberto.
-            if (Settings.careerPhase >= 0 && sessionTimeLimit > 0f
+            bool careerClockUp = Settings.careerPhase >= 0 && sessionTimeLimit > 0f
                 && RaceX.Career.CareerMode.SessionClockActive
-                && RaceX.Career.CareerMode.SessionSecondsLeft() <= 0)
+                && RaceX.Career.CareerMode.SessionSecondsLeft() <= 0;
+            // Relógio venceu com o hub aberto (jogo congelado): fim imediato, como antes.
+            if (careerClockUp && RaceX.UI.CareerFlow.IsOpen) { EndByTime(); return; }
+            bool sessionTimeUp = sessionTimeLimit > 0f && Time.time - sessionStart >= sessionTimeLimit;
+            if (Settings.laps >= 900 && (careerClockUp || sessionTimeUp))
             {
-                EndByTime();
-                return;
+                // BANDEIRA QUADRICULADA (regra da F1): quem já está numa volta lançada termina a volta e o tempo
+                // vale; no box ou na volta de saída a sessão fecha na hora. Teto de 3 min por segurança.
+                if (!timeExpired)
+                {
+                    timeExpired = true;
+                    lapAtExpiry = HumanLapNow();
+                    flagAt = Time.time;
+                    flyingAtFlag = HumanOnFlyingLap();
+                }
+                if (!flyingAtFlag || HumanLapNow() > lapAtExpiry || HumanFinished() || !HumanOnFlyingLap() || Time.time - flagAt > 180f)
+                {
+                    EndByTime();
+                    return;
+                }
             }
-            if (sessionTimeLimit > 0f && Time.time - sessionStart >= sessionTimeLimit)
+            else if (careerClockUp) { EndByTime(); return; }
+            else if (sessionTimeUp)
             {
-                if (Settings.laps >= 900) { EndByTime(); return; }
                 if (!timeExpired)
                 {
                     timeExpired = true;
@@ -291,6 +517,7 @@ namespace RaceX.Core
                 {
                     if (a.finished && b.finished) return finishOrder.IndexOf(a).CompareTo(finishOrder.IndexOf(b));
                     if (a.finished != b.finished) return a.finished ? -1 : 1;
+                    if (a.retired != b.retired) return a.retired ? 1 : -1; // abandono vai para o fim
                     return b.raceDistance.CompareTo(a.raceDistance);
                 });
             for (int i = 0; i < entries.Count; i++) entries[i].position = i + 1;
@@ -298,8 +525,14 @@ namespace RaceX.Core
 
         public List<RaceEntry> FinalStandings()
         {
+            // Corrida: quem terminou, pelo tempo FINAL (com penalidades — como na F1, a penalidade
+            // pode tirar posição); depois quem não terminou (por distância); abandonos (PT/DSQ) no fim.
             var list = new List<RaceEntry>(finishOrder);
-            foreach (var e in entries) if (!list.Contains(e)) list.Add(e);
+            if (Settings.laps < 900) list.Sort((a, b) => a.totalTime.CompareTo(b.totalTime));
+            var rest = new List<RaceEntry>();
+            foreach (var e in entries) if (!list.Contains(e)) rest.Add(e);
+            rest.Sort((a, b) => a.retired != b.retired ? (a.retired ? 1 : -1) : b.raceDistance.CompareTo(a.raceDistance));
+            list.AddRange(rest);
             // Sessão só por tempo (treinos/classificação): ordem SEMPRE por MELHOR VOLTA,
             // nunca por distância/ultrapassagem (o quem andou mais tempo não é o mais rápido).
             if (Settings.laps >= 900)

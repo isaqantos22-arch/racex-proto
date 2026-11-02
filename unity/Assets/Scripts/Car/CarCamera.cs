@@ -5,7 +5,7 @@ using UnityEngine.UI;
 
 namespace RaceX.Car
 {
-    public enum CameraView { ThirdPerson = 0, FirstPerson = 1, SteeringWheel = 2, Front = 3 }
+    public enum CameraView { ThirdPerson = 0, FirstPerson = 1, SteeringWheel = 2, Front = 3, TCam = 4 }
 
     public class CarCamera : MonoBehaviour
     {
@@ -34,6 +34,10 @@ namespace RaceX.Car
         public Image fadeImage;
         public bool persistSelection = true;
         public CameraView View { get; private set; }
+        /// <summary>OLHAR PARA TRÁS (segurando o botão TRÁS do HUD ou a tecla B): câmera à frente do carro
+        /// virada para trás, como nos jogos de F1 — mostra quem vem atrás sem tirar o carro da tela.</summary>
+        public static bool LookBackHeld;
+        bool lookingBack;
         public Camera Cam { get; private set; }
 
         Vector3 smoothPos;
@@ -54,7 +58,7 @@ namespace RaceX.Car
         public void NextView()
         {
             if (switching) return;
-            StartCoroutine(SwitchRoutine((CameraView)(((int)View + 1) % 4)));
+            StartCoroutine(SwitchRoutine((CameraView)(((int)View + 1) % 5)));
         }
 
         public void ForceThirdPerson()
@@ -86,6 +90,58 @@ namespace RaceX.Car
             if (to <= 0f) fadeImage.enabled = false;
         }
 
+        int pitShot = -1;
+
+        /// <summary>PARADA NO BOX (carro desta câmera): 3 tomadas baixas como na TV — frente-esquerda, frente-direita e
+        /// traseira — trocando a cada terço da parada, para ver os mecânicos. Na liberação volta à câmera escolhida.</summary>
+        bool PitShot(Transform t)
+        {
+            float st = 0f, dur = 1f;
+            bool stopped = !RaceX.Core.ReplaySystem.IsPlaying && RaceX.Core.PitLaneSystem.StopInfo(car, out st, out dur, out _);
+            if (!stopped)
+            {
+                if (pitShot >= 0) { pitShot = -1; SetView(View); }
+                return false;
+            }
+            int shot = Mathf.Clamp((int)(st / Mathf.Max(0.5f, dur / 3f)), 0, 2);
+            Vector3 fwd = Vector3.ProjectOnPlane(car.transform.forward, Vector3.up).normalized;
+            if (fwd.sqrMagnitude < 0.01f) fwd = car.transform.forward;
+            Vector3 right = Vector3.Cross(Vector3.up, fwd);
+            Vector3 c = car.transform.position;
+            Vector3 pos, look;
+            if (RaceX.Core.PitLaneSystem.PracticeSession)
+            {
+                // treino: carro dentro da garagem (tomadas curtas, cabem entre as paredes)
+                switch (shot)
+                {
+                    case 0: pos = c + fwd * 3.4f - right * 2.6f + Vector3.up * 0.45f; look = c + fwd * 0.5f + Vector3.up * 0.3f; break;
+                    case 1: pos = c + fwd * 2.0f + right * 3.0f + Vector3.up * 0.5f; look = c + fwd * 0.6f + Vector3.up * 0.3f; break;
+                    default: pos = c - fwd * 4.4f + right * 1.2f + Vector3.up * 0.6f; look = c + Vector3.up * 0.4f; break;
+                }
+            }
+            else
+            {
+                // corrida: carro paralelo na faixa interna. Câmeras FORA das marcas da equipe (todas a até ~4,4 m do
+                // centro do carro): de frente pelas luzes, do lado da garagem mais alta, e de trás pelo lado da faixa rápida.
+                switch (shot)
+                {
+                    case 0: pos = c + fwd * 7.0f - right * 0.8f + Vector3.up * 1.5f; look = c + fwd * 0.5f + Vector3.up * 0.5f; break;
+                    case 1: pos = c - right * 5.2f + fwd * 0.6f + Vector3.up * 2.3f; look = c + Vector3.up * 0.3f; break;
+                    default: pos = c - fwd * 5.8f + right * 1.8f + Vector3.up * 1.0f; look = c + Vector3.up * 0.5f; break;
+                }
+            }
+            t.SetPositionAndRotation(pos, Quaternion.LookRotation(look - pos, Vector3.up));
+            Cam.fieldOfView = 55f;
+            if (shot != pitShot)
+            {
+                pitShot = shot;
+                // vista de fora: piloto visível, volante do cockpit escondido
+                if (visuals != null && visuals.driverHead != null) visuals.driverHead.SetActive(true);
+                if (visuals != null && visuals.steeringWheel != null) visuals.steeringWheel.gameObject.SetActive(false);
+            }
+            return true;
+        }
+
         public void SetView(CameraView view)
         {
             View = view;
@@ -93,7 +149,7 @@ namespace RaceX.Car
             if (visuals != null && visuals.steeringWheel != null)
                 visuals.steeringWheel.gameObject.SetActive(view == CameraView.SteeringWheel || view == CameraView.FirstPerson);
             if (visuals != null && visuals.driverHead != null)
-                visuals.driverHead.SetActive(view == CameraView.ThirdPerson);
+                visuals.driverHead.SetActive(view == CameraView.ThirdPerson || view == CameraView.TCam);
             Snap();
         }
 
@@ -118,14 +174,10 @@ namespace RaceX.Car
 
         void LateUpdate()
         {
-            if (UnityEngine.Input.GetKey(KeyCode.B) && !switching)
-            {
-                var e = Cam.transform.eulerAngles;
-                Cam.transform.rotation = Quaternion.Euler(e.x, e.y + 180f, 0f);
-            }
             if (car == null || Cam == null) return;
             float dt = Time.deltaTime;
             Transform t = Cam.transform;
+            if (PitShot(t)) return;
 
             switch (View)
             {
@@ -158,6 +210,14 @@ namespace RaceX.Car
                     Cam.fieldOfView = wheel ? wheelFov : firstPersonFov;
                     break;
                 }
+                case CameraView.TCam:
+                {
+                    // T-CAM: acima e atrás do capacete (o piloto aparece na tela), como a câmera da TV.
+                    Vector3 eye = visuals != null && visuals.eyeAnchor != null ? visuals.eyeAnchor.position : car.transform.position + car.transform.up;
+                    t.SetPositionAndRotation(eye + car.transform.up * 0.55f - car.transform.forward * 0.45f, car.transform.rotation * Quaternion.Euler(7f, 0f, 0f));
+                    Cam.fieldOfView = 72f;
+                    break;
+                }
                 case CameraView.Front:
                 {
                     bool hardBrake = car.brakeInput > 0.6f && car.ForwardSpeed > 8f && car.LocalAcceleration.z < -4f;
@@ -169,6 +229,31 @@ namespace RaceX.Car
                     break;
                 }
             }
+            bool back = (LookBackHeld || KeyBack()) && !switching;
+            if (back) LookBack(t);
+            if (back != lookingBack)
+            {
+                lookingBack = back;
+                if (visuals != null && visuals.driverHead != null)
+                    visuals.driverHead.SetActive(back || View == CameraView.ThirdPerson || View == CameraView.TCam);
+                if (!back) Snap();
+            }
+        }
+
+        bool KeyBack()
+        {
+            try { return UnityEngine.Input.GetKey(KeyCode.B); } catch (System.Exception) { return false; }
+        }
+
+        void LookBack(Transform t)
+        {
+            Vector3 fwd = Vector3.ProjectOnPlane(car.transform.forward, Vector3.up).normalized;
+            if (fwd.sqrMagnitude < 0.01f) fwd = car.transform.forward;
+            bool far = View == CameraView.ThirdPerson;
+            Vector3 pos = car.transform.position + fwd * (far ? 6.5f : 2.4f) + Vector3.up * (far ? 2.3f : 1.25f);
+            Vector3 look = car.transform.position - fwd * 14f + Vector3.up * 0.8f;
+            t.SetPositionAndRotation(pos, Quaternion.LookRotation(look - pos, Vector3.up));
+            Cam.fieldOfView = 70f;
         }
 
         Vector3 ResolveCollision(Vector3 from, Vector3 to)

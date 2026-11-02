@@ -12,6 +12,7 @@ namespace RaceX.UI
         CarController car;
         Camera cam;
         float camTimer;
+        MeshRenderer mr;
 
         public static void Attach(CarController car, string pilotName)
         {
@@ -50,7 +51,13 @@ namespace RaceX.UI
             label.position = transform.position + Vector3.up * h;
             label.rotation = cam.transform.rotation;
             float dist = Vector3.Distance(cam.transform.position, label.position);
-            label.localScale = Vector3.one * Mathf.Clamp(dist * 0.09f, 0.9f, 2.4f);
+            // Só os carros PRÓXIMOS (até 70 m) e à frente da câmera têm nome — na largada os 24 nomes
+            // empilhados viravam um borrão ilegível. Escala menor (máx. 1,8).
+            bool visible = dist < 70f && Vector3.Dot(cam.transform.forward, label.position - cam.transform.position) > 0f;
+            if (mr == null) mr = label.GetComponent<MeshRenderer>();
+            if (mr != null && mr.enabled != visible) mr.enabled = visible;
+            if (!visible) return;
+            label.localScale = Vector3.one * Mathf.Clamp(dist * 0.08f, 0.8f, 1.8f);
         }
     }
 }

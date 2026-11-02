@@ -29,6 +29,13 @@ namespace RaceX.Track
         static int pending;
         static float nextCommit;
         static bool ready, failed;
+        static GameObject root;
+        static string shaderName = "";
+
+        /// <summary>Segmentos de marca ativos (telemetria do teste automático).</summary>
+        public static int Count => segCount;
+        public static int Total { get; private set; }
+        public static string ShaderName => shaderName;
 
         /// <summary>Liga um emissor ao carro (jogador E IA). Nunca lança exceção: é decoração.</summary>
         public static void Attach(CarController car)
@@ -46,58 +53,90 @@ namespace RaceX.Track
             }
         }
 
-        /// <summary>Malha única da cena com FALLBACK de shader. Sem shader válido, fica inativo.</summary>
+        static Material BuildMaterial()
+        {
+            // 1º: cópia do material de partícula do projeto (URP Particles/Unlit, transparente, usa a COR
+            // DE VÉRTICE e está garantido no build por estar em Resources). Textura branca e sem
+            // soft particles (senão a marca colada no asfalto "some" no depth fade).
+            var src = Resources.Load<Material>("RaceX_Particle");
+            if (src != null && src.shader != null)
+            {
+                var m = new Material(src) { name = "SkidMarks" };
+                if (m.HasProperty("_BaseMap")) m.SetTexture("_BaseMap", Texture2D.whiteTexture);
+                if (m.HasProperty("_MainTex")) m.SetTexture("_MainTex", Texture2D.whiteTexture);
+                if (m.HasProperty("_SoftParticlesEnabled")) m.SetFloat("_SoftParticlesEnabled", 0f);
+                if (m.HasProperty("_CameraFadingEnabled")) m.SetFloat("_CameraFadingEnabled", 0f);
+                if (m.HasProperty("_Cull")) m.SetFloat("_Cull", 0f);
+                m.DisableKeyword("_SOFTPARTICLES_ON");
+                m.DisableKeyword("_FADING_ON");
+                return m;
+            }
+            // 2º: Sprites/Default (cor de vértice, alfa, Cull Off) e demais fallbacks.
+            var shader = Shader.Find("Sprites/Default")
+                      ?? Shader.Find("Universal Render Pipeline/Particles/Unlit")
+                      ?? Shader.Find("Universal Render Pipeline/Unlit")
+                      ?? Shader.Find("Unlit/Color");
+            if (shader == null) return null;
+            var mat = new Material(shader) { name = "SkidMarks" };
+            if (mat.HasProperty("_Surface")) mat.SetFloat("_Surface", 1f);
+            if (mat.HasProperty("_SrcBlend")) mat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            if (mat.HasProperty("_DstBlend")) mat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            if (mat.HasProperty("_ZWrite")) mat.SetInt("_ZWrite", 0);
+            if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", Color.white);
+            if (mat.HasProperty("_Color")) mat.SetColor("_Color", Color.white);
+            return mat;
+        }
+
+        /// <summary>Malha única da CENA. O objeto some quando a cena troca (nova sessão da carreira):
+        /// antes o "ready" estático continuava true com o renderer destruído e NENHUMA marca aparecia
+        /// a partir da 2ª sessão. Agora detecta e reconstrói. Sem material válido, fica inativo.</summary>
         static bool EnsureSystem()
         {
-            if (ready) return true;
+            if (ready && root != null && mesh != null) return true;
             if (failed) return false;
             try
             {
-                // Sprites/Default PRIMEIRO: usa a COR DE VÉRTICE (preto/terra por segmento), tem alfa e
-                // Cull Off. O URP/Unlit ignorava a cor de vértice (marca branca/invisível) — bug v78.
-                var shader = Shader.Find("Sprites/Default")
-                          ?? Shader.Find("Universal Render Pipeline/Particles/Unlit")
-                          ?? Shader.Find("Universal Render Pipeline/Unlit")
-                          ?? Shader.Find("Unlit/Color");
-                if (shader == null) { failed = true; return false; }
-                material = new Material(shader) { name = "SkidMarks" };
-                // Transparência (se o shader tiver): a marca precisa de alfa para não virar bloco.
-                if (material.HasProperty("_Surface")) material.SetFloat("_Surface", 1f);
-                if (material.HasProperty("_SrcBlend")) material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
-                if (material.HasProperty("_DstBlend")) material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-                if (material.HasProperty("_ZWrite")) material.SetInt("_ZWrite", 0);
-                if (material.HasProperty("_BaseColor")) material.SetColor("_BaseColor", Color.white);
-                if (material.HasProperty("_Color")) material.SetColor("_Color", Color.white);
+                if (material == null) material = BuildMaterial();
+                if (material == null) { failed = true; Debug.LogWarning("[SKID] nenhum shader disponível — marcas desligadas"); return false; }
                 material.renderQueue = 2950;
+                shaderName = material.shader != null ? material.shader.name : "?";
 
-                mesh = new Mesh { name = "SkidMarks" };
-                mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
-                mesh.MarkDynamic();
-                ring = new Segment[MaxSegments];
-                int vCount = MaxSegments * 4;
-                verts = new Vector3[vCount];
-                colors = new Color[vCount];
-                tris = new int[MaxSegments * 6];
-                for (int i = 0; i < MaxSegments; i++)
+                if (mesh == null)
                 {
-                    int b = i * 4, t = i * 6;
-                    // Face para CIMA (sentido horário visto de cima no Unity) — antes a face apontava para
-                    // baixo e era descartada pelo culling dos shaders URP.
-                    tris[t] = b; tris[t + 1] = b + 1; tris[t + 2] = b + 2;
-                    tris[t + 3] = b; tris[t + 4] = b + 2; tris[t + 5] = b + 3;
+                    mesh = new Mesh { name = "SkidMarks" };
+                    mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+                    mesh.MarkDynamic();
+                    ring = new Segment[MaxSegments];
+                    int vCount = MaxSegments * 4;
+                    verts = new Vector3[vCount];
+                    colors = new Color[vCount];
+                    tris = new int[MaxSegments * 6];
+                    for (int i = 0; i < MaxSegments; i++)
+                    {
+                        int b = i * 4, t = i * 6;
+                        // Face para CIMA (sentido horário visto de cima no Unity).
+                        tris[t] = b; tris[t + 1] = b + 1; tris[t + 2] = b + 2;
+                        tris[t + 3] = b; tris[t + 4] = b + 2; tris[t + 5] = b + 3;
+                    }
+                    mesh.vertices = verts;
+                    mesh.colors = colors;
+                    mesh.SetTriangles(tris, 0);
                 }
-                mesh.SetTriangles(tris, 0);
+                // Cena nova: zera as marcas da pista anterior.
+                segCount = 0; head = 0; pending = 1;
+                for (int i = 0; i < verts.Length; i++) { verts[i] = Vector3.zero; colors[i] = new Color(0f, 0f, 0f, 0f); }
                 mesh.vertices = verts;
                 mesh.colors = colors;
-                mesh.RecalculateBounds();
+                mesh.bounds = new Bounds(Vector3.zero, Vector3.one * 20000f);
 
-                var go = new GameObject("SkidMarks");
-                go.AddComponent<MeshFilter>().sharedMesh = mesh;
-                var mr = go.AddComponent<MeshRenderer>();
+                root = new GameObject("SkidMarks");
+                root.AddComponent<MeshFilter>().sharedMesh = mesh;
+                var mr = root.AddComponent<MeshRenderer>();
                 mr.sharedMaterial = material;
                 mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
                 mr.receiveShadows = false;
                 ready = true;
+                Debug.Log("[SKID] sistema pronto shader=" + shaderName);
             }
             catch (System.Exception ex)
             {
@@ -112,7 +151,8 @@ namespace RaceX.Track
         /// segmento mais antigo do anel (buffer fixo, nunca aloca).</summary>
         public static void AddMark(Vector3 backL, Vector3 backR, Vector3 dir, float length, Color color)
         {
-            if (!ready) return;
+            if (!ready || root == null) return;
+            Total++;
             ring[head] = new Segment { v0 = backL, v1 = backR, v2 = backR + dir * length, v3 = backL + dir * length, c = color };
             head = (head + 1) % MaxSegments;
             if (segCount < MaxSegments) segCount++;
@@ -122,7 +162,7 @@ namespace RaceX.Track
         /// <summary>Chamado pelos emissores: sobe a malha no máximo a 20 Hz.</summary>
         public static void Tick()
         {
-            if (!ready || pending <= 0 || Time.time < nextCommit) return;
+            if (!ready || root == null || pending <= 0 || Time.time < nextCommit) return;
             nextCommit = Time.time + UpdateInterval;
             pending = 0;
             for (int i = 0; i < segCount; i++)
@@ -141,22 +181,25 @@ namespace RaceX.Track
             }
             mesh.vertices = verts;
             mesh.colors = colors;
-            mesh.RecalculateBounds();
+            mesh.bounds = new Bounds(Vector3.zero, Vector3.one * 20000f); // fixo: sem RecalculateBounds a 20 Hz
         }
     }
 
-    /// <summary>Emissor por carro: decide quando deixar marca (freio/travada/derrapagem = preta;
-    /// grama/terra = cor de terra) e desenha o quad acompanhando o chão (offset pequeno anti-z-fighting).</summary>
+    /// <summary>Emissor por carro, POR RODA: só a roda que escorrega/trava marca (como na vida real —
+    /// derrapagem de traseira marca as traseiras, travada de dianteira marca a dianteira). Freada forte
+    /// marca as rodas que escorregam acima de ~0,2; grama/terra deixam rastro de terra. O segmento vai da
+    /// posição anterior do pneu até a atual (antes era desenhado À FRENTE da roda).</summary>
     class SkidEmitter : MonoBehaviour
     {
         public CarController car;
         readonly Vector3[] lastPos = new Vector3[4];
         readonly bool[] hasLast = new bool[4];
-        const float QuadWidth = 0.22f;
+        readonly float[] slideTime = new float[4];
         float tick;
 
         void Update()
         {
+            if (RaceX.Core.ReplaySystem.IsPlaying) return; // replay na tela: mundo congelado, nada reage às posições reproduzidas
             try { Run(); }
             catch (System.Exception) { }
         }
@@ -168,58 +211,49 @@ namespace RaceX.Track
             if (tick > 0f) return;
             tick = 1f / 20f; // 20 Hz
 
-            bool sliding = car.MaxWheelSlip > 0.45f;                        // travada/derrapagem
-            bool braking = car.brakeInput > 0.55f && car.ForwardSpeed > 3f; // freio forte em movimento
-            bool onDirt = car.IsOffTrack && car.SpeedKmh > 15f;             // grama/terra acima de 15 km/h
-            if (!sliding && !braking && !onDirt)
-            {
-                for (int w = 0; w < 4; w++) hasLast[w] = false;
-                return;
-            }
-            Color color = onDirt ? SkidMarks.DirtColor : SkidMarks.SkidColor;
+            bool fastEnough = car.SpeedKmh > 15f;
+            // Pista encharcada não guarda borracha preta (a água lava) — só o rastro de terra fica.
+            bool wetTrack = RaceX.Core.WeatherSystem.TextureWaterMm > RaceX.Core.WeatherSystem.TextureMm * 0.5f;
             var fwd = car.transform.forward; fwd.y = 0f; fwd.Normalize();
-            float track = car.spec.trackWidth * 0.5f;
-            float wb = car.spec.wheelbase * 0.5f;
+            float width = Mathf.Clamp(car.spec.bodySize.x * 0.17f, 0.24f, 0.36f);
+            bool any = false;
             for (int i = 0; i < 4; i++)
             {
-                Vector3 pos;
                 var wc = car.wheels != null && i < car.wheels.Length ? car.wheels[i] : null;
-                // Ponto de CONTATO real do pneu com o chão (WheelHit). O raycast antigo batia no próprio
-                // BoxCollider do carro e a marca nascia DENTRO da carroceria (invisível).
-                if (wc != null && wc.GetGroundHit(out var wh))
-                    pos = wh.point;
-                else if (wc != null)
-                {
-                    // Roda no ar: sem marca nesta roda.
-                    hasLast[i] = false;
-                    continue;
-                }
-                else
-                {
-                    float x = (i % 2 == 0 ? -1f : 1f) * track;
-                    float z = i < 2 ? wb : -wb;
-                    pos = car.transform.position + car.transform.rotation * new Vector3(x, 0f, z);
-                    pos.y -= car.spec.wheelRadius;
-                }
+                if (wc == null || !wc.GetGroundHit(out var wh)) { hasLast[i] = false; continue; }
+                bool dirt = false;
+                if (wh.collider != null && wh.collider.TryGetComponent<TrackSurface>(out var surf)) dirt = surf.IsOffTrack;
+                // Borracha no asfalto SÓ quando o pneu passa do pico de aderência e PATINA de verdade:
+                // roda girando em falso (arrancada) ou travada na freada = deslizamento longitudinal acima
+                // de 0,55 (pico da curva de atrito em 0,4); derrapagem lateral acima de 0,32 (pico em 0,25).
+                // Curva no limite e aceleração normal ficam abaixo do pico e NÃO marcam.
+                float fSlip = Mathf.Abs(wh.forwardSlip), sSlip = Mathf.Abs(wh.sidewaysSlip);
+                bool sliding = fSlip > 0.55f || sSlip > 0.32f;
+                // O pneu precisa patinar por 0,25 s seguidos para começar a marcar (um tranco não risca a pista).
+                slideTime[i] = sliding ? slideTime[i] + 1f / 20f : 0f;
+                bool rubber = !dirt && !wetTrack && slideTime[i] >= 0.25f;
+                float slip = Mathf.Max(Mathf.InverseLerp(0.55f, 1.2f, fSlip), Mathf.InverseLerp(0.32f, 0.8f, sSlip));
+                bool mark = rubber || (dirt && fastEnough);
+                if (!mark) { hasLast[i] = false; continue; }
+                any = true;
+                Vector3 pos = wh.point;
                 pos.y += 0.025f;
+                if (!hasLast[i]) { lastPos[i] = pos; hasLast[i] = true; continue; }
                 Vector3 d = pos - lastPos[i]; d.y = 0f;
-                Vector3 dir = d.sqrMagnitude > 0.001f ? d.normalized : fwd;
-                var side = new Vector3(-dir.z, 0f, dir.x) * (QuadWidth * 0.5f);
-                if (hasLast[i])
-                {
-                    float len = d.magnitude;
-                    if (len < 0.08f) continue;
-                    if (len > 1.6f) len = 1.6f;
-                    SkidMarks.AddMark(pos - side, pos + side, dir, len, color);
-                }
-                else
-                {
-                    SkidMarks.AddMark(pos - side, pos + side, dir, 0.3f, color);
-                }
+                float len = d.magnitude;
+                if (len < 0.08f) continue;
+                if (len > 3.5f) { lastPos[i] = pos; continue; } // teleporte/respawn: não liga os pontos
+                Vector3 dir = d / len;
+                var side = new Vector3(-dir.z, 0f, dir.x) * (width * 0.5f);
+                Color c = dirt ? SkidMarks.DirtColor : SkidMarks.SkidColor;
+                // Intensidade pela força do escorregamento (marca leve = cinza translúcido).
+                if (!dirt) c.a *= Mathf.Lerp(0.25f, 1f, slip);
+                Vector3 back = lastPos[i];
+                back.y = Mathf.Lerp(back.y, pos.y, 0.5f);
+                SkidMarks.AddMark(back - side, back + side, dir, len, c);
                 lastPos[i] = pos;
-                hasLast[i] = true;
             }
-            SkidMarks.Tick();
+            if (any) SkidMarks.Tick();
         }
     }
 }

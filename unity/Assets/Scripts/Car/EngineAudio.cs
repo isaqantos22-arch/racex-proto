@@ -14,6 +14,8 @@ namespace RaceX.Car
 
         public static void Attach(CarController car, bool isHuman)
         {
+            // Monopostos: motor com o som do vídeo de referência (F1EngineSynth). Sem o arquivo, cai no som antigo.
+            if (F1EngineSynth.TryAttach(car, isHuman)) return;
             var ea = car.gameObject.AddComponent<EngineAudio>();
             ea.car = car;
             ea.src = car.gameObject.AddComponent<AudioSource>();
@@ -68,7 +70,7 @@ namespace RaceX.Car
             CarModel.Bugatti => "bugatti_w16",
             CarModel.F2008 => "f1_brawn",
             CarModel.F1Studio => "f1_brawn",
-            _ => null
+            _ => CarSpec.IsFormula(m) ? "f1_brawn" : null
         };
 
         static AudioClip Clip(CarModel model)
@@ -105,15 +107,22 @@ namespace RaceX.Car
             return clip;
         }
 
+        /// <summary>Replay: tom acompanha a velocidade da reprodução e o motor some na pausa/arrasto.</summary>
+        public static float ReplayPitch = 1f, ReplayVolume = 1f;
+
         void Update()
         {
             if (car == null || car.spec == null || src == null) return;
+            bool replay = RaceX.Core.ReplaySystem.IsPlaying;
             float rpm01 = Mathf.Clamp01(car.Rpm / Mathf.Max(1f, car.spec.rpmLimit));
-            src.pitch = recorded.Contains(car.spec.model)
+            src.pitch = (recorded.Contains(car.spec.model)
                 ? Mathf.Clamp(0.9f + rpm01 * 0.4f, 0.85f, 1.35f)
-                : Mathf.Clamp(0.55f + rpm01 * 2.1f, 0.3f, 3f);
-            float target = car.inputLocked ? 0f : 0.55f + 0.35f * car.throttleInput;
-            src.volume = Mathf.MoveTowards(src.volume, target, Time.deltaTime * 2.5f);
+                : Mathf.Clamp(0.55f + rpm01 * 2.1f, 0.3f, 3f)) * (replay ? ReplayPitch : 1f);
+            float target = (car.inputLocked && !replay ? 0f : 0.55f + 0.35f * car.throttleInput) * (replay ? ReplayVolume : 1f);
+            // jogo parado (hub/pausa): sem som de motor congelado
+            bool frozen = !replay && (Time.timeScale < 0.01f || RaceX.UI.CareerFlow.IsOpen);
+            if (frozen) { src.volume = 0f; return; }
+            src.volume = Mathf.MoveTowards(src.volume, target, (replay ? Time.unscaledDeltaTime : Time.deltaTime) * 2.5f);
         }
     }
 }

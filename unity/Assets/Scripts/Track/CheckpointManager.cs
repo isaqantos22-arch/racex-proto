@@ -47,6 +47,7 @@ namespace RaceX.Track
         public event Action<CarController, int> CheckpointPassed;
 
         public int Count => triggers.Count;
+        public TrackBuilder Builder => track;
 
         public void Initialize(TrackBuilder builder, List<CheckpointTrigger> list)
         {
@@ -143,6 +144,7 @@ namespace RaceX.Track
 
         void Update()
         {
+            if (RaceX.Core.ReplaySystem.IsPlaying) return; // replay na tela: mundo congelado, nada reage às posições reproduzidas
             foreach (var kv in progress)
             {
                 var car = kv.Key;
