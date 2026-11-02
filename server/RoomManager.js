@@ -13,6 +13,8 @@ const {
 
 const IDLE_ROOM_MS = 30 * 60 * 1000;
 const RECONNECT_GRACE_MS = 15000;
+// Votação (reiniciar a corrida / jogar novamente): 10 s; quem não responde RECUSA.
+const VOTE_MS = 10000;
 
 class RoomManager {
   constructor(io, options = {}) {
@@ -21,11 +23,25 @@ class RoomManager {
     this.minPlayers = options.minPlayers ?? 2;
     this.idleRoomMs = options.idleRoomMs ?? IDLE_ROOM_MS;
     this.reconnectGraceMs = options.reconnectGraceMs ?? RECONNECT_GRACE_MS;
+    this.voteMs = options.voteMs ?? VOTE_MS;
     this.sessionOptions = options.sessionOptions ?? {};
     this.rooms = new Map();
     this.sockets = new Map();
     this.cleanupTimer = setInterval(() => this.cleanupIdle(), options.cleanupIntervalMs ?? 60000);
     this.cleanupTimer.unref?.();
+    // Eventos novos (largada sincronizada e votações) registrados aqui: o index.js continua igual.
+    io.on('connection', (socket) => {
+      const on = (event, handler) => socket.on(event, (...args) => {
+        try {
+          handler(...args);
+        } catch (err) {
+          console.error(`[${event}]`, err);
+        }
+      });
+      on('player:loaded', (d) => this.onLoaded(socket, d));
+      on('vote:request', (d) => this.voteRequest(socket, d));
+      on('vote:answer', (d) => this.voteAnswer(socket, d));
+    });
   }
 
   count() {
@@ -107,6 +123,8 @@ class RoomManager {
       settings: { ...DEFAULT_SETTINGS },
       players: new Map(),
       session: null,
+      vote: null,
+      round: 0,
       lastActivity: Date.now(),
     };
     this.rooms.set(code, room);
@@ -145,13 +163,17 @@ class RoomManager {
     socket.join(room.code);
     room.lastActivity = Date.now();
     this.broadcastRoom(room, { socket, player });
+    if (room.session) {
+      room.session.onBack(player.id);   // volta a dirigir o próprio carro
+      room.session.onConnectionChange();
+    }
   }
 
   updatePlayer(socket, data = {}) {
     const ctx = this.context(socket);
     if (!ctx) return;
     const { room, player } = ctx;
-    if (room.phase !== 'lobby') return;
+    if (room.phase !== 'lobby' && room.phase !== 'finished') return;
     if (data && data.playerName !== undefined) player.name = sanitizeName(data.playerName, player.name);
     Object.assign(player, sanitizeCar(data, { carModel: player.carModel, carColor: player.carColor }));
     this.broadcastRoom(room);
@@ -187,9 +209,31 @@ class RoomManager {
     // O anfitrião inicia: começar já é o "pronto" dele — só os CONVIDADOS precisam marcar pronto.
     player.ready = true;
     if (!players.every((p) => p.ready)) return this.error(socket, 'Nem todos estão prontos');
+    this.launchSession(room, null);
+  }
 
-    room.session = new GameSession(room, (event, payload) => this.io.to(room.code).emit(event, payload), this.sessionOptions);
-    room.session.start();
+  /** Nova corrida NA MESMA SALA (início, reinício votado ou nova partida votada). prev = grid a repetir. */
+  launchSession(room, prev) {
+    if (room.session) room.session.dispose();
+    // Quem caiu e não voltou não entra na corrida nova.
+    for (const p of [...room.players.values()]) if (!p.connected) this.removePlayer(room, p);
+    if (!this.rooms.has(room.code)) return;
+    room.round = (room.round || 0) + 1;
+    for (const p of room.players.values()) p.ready = true;
+    room.session = new GameSession(room, (event, payload) => this.io.to(room.code).emit(event, payload), {
+      ...this.sessionOptions,
+      round: room.round,
+      onEnd: () => this.cleanupDisconnected(room),
+    });
+    room.session.start(prev);
+  }
+
+  /** Fim da corrida: quem caiu e não voltou sai da sala agora (durante a corrida o carro dele seguiu no automático). */
+  cleanupDisconnected(room) {
+    setImmediate(() => {
+      if (!this.rooms.has(room.code)) return;
+      for (const p of [...room.players.values()]) if (!p.connected) this.removePlayer(room, p);
+    });
   }
 
   returnToLobby(socket) {
@@ -232,6 +276,101 @@ class RoomManager {
     ctx.room.session.onFinished(ctx.player.id, data);
   }
 
+  /** Aparelho terminou de carregar a pista; quem chega depois da largada recebe o "vai" na hora. */
+  onLoaded(socket, data) {
+    const ctx = this.context(socket);
+    if (!ctx || !ctx.room.session) return;
+    const { late } = ctx.room.session.onLoaded(ctx.player.id, data && data.pace);
+    if (late) socket.emit('game:go', { inMs: 0, holdMs: ctx.room.session.holdMs, round: ctx.room.session.round, late: true });
+  }
+
+  // ---------------- Votações ----------------
+  /** REINICIAR (durante a corrida): todos precisam aceitar. JOGAR NOVAMENTE (depois do resultado): segue com quem
+   * aceitar (mínimo 2) na MESMA sala — antes o botão recarregava a pista só no próprio aparelho e cada um ia correr
+   * sozinho com os nomes dos outros na tela. */
+  voteRequest(socket, data) {
+    const ctx = this.context(socket);
+    if (!ctx) return;
+    const { room, player } = ctx;
+    const kind = data && (data.kind === 'restart' || data.kind === 'rematch') ? data.kind : null;
+    if (!kind) return;
+    if (room.vote) return this.error(socket, 'Já existe uma votação em andamento');
+    if (kind === 'restart' && !(room.session && !room.session.ended)) return this.error(socket, 'Não há corrida em andamento');
+    if (kind === 'rematch' && room.phase !== 'finished') return this.error(socket, 'Aguarde o resultado oficial da corrida');
+    const eligible = [...room.players.values()].filter((p) => p.connected).map((p) => p.id);
+    const vote = {
+      id: generateId('v'),
+      kind,
+      requesterId: player.id,
+      eligible: new Set(eligible),
+      answers: new Map([[player.id, true]]),
+      timer: null,
+    };
+    room.vote = vote;
+    vote.timer = setTimeout(() => this.resolveVote(room, vote), this.voteMs + 500);
+    this.io.to(room.code).emit('vote:start', {
+      voteId: vote.id, kind, byId: player.id, byName: player.name, seconds: Math.round(this.voteMs / 1000),
+    });
+    this.maybeResolve(room, vote);
+  }
+
+  voteAnswer(socket, data) {
+    const ctx = this.context(socket);
+    if (!ctx) return;
+    const { room, player } = ctx;
+    const vote = room.vote;
+    if (!vote || !data || data.voteId !== vote.id || !vote.eligible.has(player.id) || vote.answers.has(player.id)) return;
+    vote.answers.set(player.id, data.yes === true);
+    const yes = [...vote.answers.values()].filter(Boolean).length;
+    this.io.to(room.code).emit('vote:update', { voteId: vote.id, yes, no: vote.answers.size - yes, total: vote.eligible.size });
+    this.maybeResolve(room, vote);
+  }
+
+  maybeResolve(room, vote) {
+    if (room.vote !== vote) return;
+    const active = [...vote.eligible].filter((id) => room.players.get(id)?.connected);
+    // Reinício: um "não" já decide. Todos responderam (ou só sobrou quem pediu): decide agora.
+    if (vote.kind === 'restart' && [...vote.answers.values()].some((v) => v === false)) return this.resolveVote(room, vote);
+    if (active.every((id) => vote.answers.has(id))) this.resolveVote(room, vote);
+  }
+
+  resolveVote(room, vote) {
+    if (room.vote !== vote) return;
+    room.vote = null;
+    clearTimeout(vote.timer);
+    if (!this.rooms.has(room.code)) return;
+    const ids = [...vote.eligible].filter((id) => room.players.get(id)?.connected);
+    const yesIds = ids.filter((id) => vote.answers.get(id) === true);
+    const noIds = ids.filter((id) => vote.answers.get(id) !== true);   // sem resposta = recusou
+    const nameOf = (id) => room.players.get(id)?.name ?? '?';
+    const accepted = vote.kind === 'restart'
+      ? yesIds.length > 0 && noIds.length === 0
+      : yesIds.length >= Math.max(2, this.minPlayers);
+    this.io.to(room.code).emit('vote:result', {
+      voteId: vote.id, kind: vote.kind, accepted, yes: yesIds.map(nameOf), no: noIds.map(nameOf),
+    });
+    if (!accepted) return;
+    if (vote.kind === 'rematch') {
+      // Quem recusou a nova partida sai da sala (volta ao menu); quem aceitou continua JUNTO.
+      for (const id of noIds) this.kick(room, id, 'Você não entrou na nova partida');
+      if (!this.rooms.has(room.code) || room.players.size < 2) return;
+      this.launchSession(room, null);
+    } else {
+      this.launchSession(room, room.session ? room.session.startPositions : null);
+    }
+  }
+
+  kick(room, playerId, message) {
+    const player = room.players.get(playerId);
+    if (!player) return;
+    const sock = this.io.sockets.sockets.get(player.socketId);
+    if (sock) {
+      sock.emit('room:kicked', { message });
+      sock.leave(room.code);
+    }
+    this.removePlayer(room, player);
+  }
+
   leave(socket) {
     const ref = this.sockets.get(socket.id);
     if (!ref) return;
@@ -244,9 +383,21 @@ class RoomManager {
     if (room.phase === 'lobby' || room.phase === 'finished') {
       this.removePlayer(room, player);
     } else {
+      // Caiu NO MEIO DA CORRIDA: continua na corrida com o carro no automático (o anfitrião pilota, no ritmo dele) e pode
+      // voltar até o fim (room:rejoin com a senha). Só sai de vez se a sala ficar sem ninguém conectado.
       player.connected = false;
-      player.disconnectTimer = setTimeout(() => this.removePlayer(room, player), this.reconnectGraceMs);
       this.reassignHostIfNeeded(room, player);
+      if (room.session) {
+        room.session.onDropped(player.id);
+        room.session.onConnectionChange();
+      }
+      if (room.vote) this.maybeResolve(room, room.vote);
+      player.disconnectTimer = setTimeout(() => {
+        player.disconnectTimer = null;
+        if (player.connected || !room.players.has(player.id)) return;
+        const anyone = [...room.players.values()].some((p) => p.connected);
+        if (!anyone || !room.session || room.session.ended) this.removePlayer(room, player);
+      }, this.reconnectGraceMs);
     }
   }
 
@@ -272,11 +423,14 @@ class RoomManager {
       return;
     }
     this.io.to(room.code).emit('player:disconnected', { playerId: player.id });
+    if (room.vote) this.maybeResolve(room, room.vote);
     if (room.phase === 'lobby' || room.phase === 'finished') this.broadcastRoom(room);
   }
 
   deleteRoom(room, reason) {
     if (room.session) room.session.dispose();
+    if (room.vote) clearTimeout(room.vote.timer);
+    room.vote = null;
     for (const p of room.players.values()) {
       if (p.disconnectTimer) clearTimeout(p.disconnectTimer);
       this.sockets.delete(p.socketId);

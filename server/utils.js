@@ -29,6 +29,9 @@ const DEFAULT_SETTINGS = Object.freeze({
   category: 'gt',
   pitStops: false,
   weather: '',
+  // Regras da corrida escolhidas pelo anfitrião (iguais para todos): perda total e penalidades da direção de prova.
+  totalLoss: true,
+  penalties: true,
 });
 
 function generateRoomCode(exists = () => false) {
@@ -96,6 +99,14 @@ function sanitizeSettingsDetailed(input, current = DEFAULT_SETTINGS) {
     if (typeof input.pitStops === 'boolean') out.pitStops = input.pitStops;
     else rejected.push('pit stop');
   }
+  if (input.totalLoss !== undefined) {
+    if (typeof input.totalLoss === 'boolean') out.totalLoss = input.totalLoss;
+    else rejected.push('perda total');
+  }
+  if (input.penalties !== undefined) {
+    if (typeof input.penalties === 'boolean') out.penalties = input.penalties;
+    else rejected.push('penalidades');
+  }
   return { settings: out, rejected };
 }
 
@@ -120,6 +131,8 @@ function round2(v) {
   return Math.round(v * 100) / 100;
 }
 
+/** st: 0 = correndo, 1 = cruzou a linha final, 2 = abandonou (perda total/quebra/desclassificado) — vem logo depois de
+ * "lap" porque o cliente lê o pacote por expressão regular nessa ordem. */
 function compactState(id, s) {
   return {
     id,
@@ -129,6 +142,7 @@ function compactState(id, s) {
     rotation: Math.round(s.rotation),
     speed: Math.round(s.speed * 10) / 10,
     lap: s.lap,
+    st: s.finished ? 1 : s.retired ? 2 : 0,
   };
 }
 
