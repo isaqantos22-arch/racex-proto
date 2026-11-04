@@ -84,6 +84,8 @@ namespace RaceX.Car
         public float[] WheelSlip { get; } = new float[4];
         public TrackSurface[] WheelSurfaces => surfaces;
         public bool IsOffTrack { get; private set; }
+        /// <summary>As 4 rodas fora do asfalto (regra FIA de limites de pista); IsOffTrack (2 rodas) continua para aderência/sujeira.</summary>
+        public bool IsFullyOffTrack { get; private set; }
         public int GroundedWheels { get; private set; }
 
         /// <summary>ONLINE: carro de OUTRO aparelho (OnlineGhost) — anda pela posição recebida da rede; aqui não tem física,
@@ -364,6 +366,9 @@ namespace RaceX.Car
             BrakeCapActive = lonMul < 0.999f;
             GroundedWheels = grounded;
             IsOffTrack = offTrack >= 2;
+            // FIA (art. 33.3): o carro só "saiu da pista" com as 4 RODAS além da linha branca. Com 2 rodas (zebra/grama de fora) a
+            // direção de prova distribuía penalidades em série (corrida de 04/11: 21 só num piloto, 9 no jogador em piloto automático).
+            IsFullyOffTrack = offTrack >= 4;
             MaxWheelSlip = maxSlip;
 
             if (IsOffTrack)

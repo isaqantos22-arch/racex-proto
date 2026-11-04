@@ -984,7 +984,8 @@ namespace RaceX.UI
             var fcP = RaceX.Core.WeatherSystem.ForecastFor(d.season, d.round, d.weekendPhase, (int)CareerMode.RoundTrack(d.round));
             if (d.stratStops < 0)
             {
-                stratMsg = RaceX.Core.PitLaneSystem.TeamProposal(laps, fcP, d.stratPace, out int sP, out var csP);
+                d.stratPace = RaceX.Core.PitLaneSystem.SuggestPace(laps, fcP, out string whyP);   // ritmo sugerido pelo desgaste medido
+                stratMsg = RaceX.Core.PitLaneSystem.TeamProposal(laps, fcP, d.stratPace, out int sP, out var csP) + " Ritmo: " + whyP + ".";
                 d.stratStart = sP; d.stratStints.Clear(); d.stratStints.AddRange(csP); d.stratStops = csP.Count;
                 CareerMode.SaveQuiet();
             }
@@ -1044,7 +1045,7 @@ namespace RaceX.UI
             }
             float yInfo = y0 - 170f - Mathf.Max(1, stops) * 85f + 20f;
             var stintList = StintList(d, stops);
-            var boxLaps = RaceX.Core.PitLaneSystem.StopLapsFor(laps, d.stratStart, stintList);
+            var boxLaps = RaceX.Core.PitLaneSystem.StopLapsFor(laps, d.stratStart, stintList, fcP);   // parada de chuva na volta prevista
             string boxTxt = boxLaps.Count == 0 ? "SEM PARADAS" : "BOX NA VOLTA " + string.Join(", ", boxLaps);
             int covered = RaceX.Core.PitLaneSystem.CompoundLifeLaps(d.stratStart);
             foreach (int sc in stintList) covered += RaceX.Core.PitLaneSystem.CompoundLifeLaps(sc);
@@ -1069,7 +1070,8 @@ namespace RaceX.UI
             var bt = new Vector2(0.5f, 0f);
             MenuTheme.StyledButton(brt, "StratAuto", "PLANO DA EQUIPE", bt, bt, new Vector2(-220f, 34f), new Vector2(380f, 70f), 24, () =>
             {
-                stratMsg = RaceX.Core.PitLaneSystem.TeamProposal(laps, fcP, d.stratPace, out int sR, out var csR);
+                d.stratPace = RaceX.Core.PitLaneSystem.SuggestPace(laps, fcP, out string whyR);
+                stratMsg = RaceX.Core.PitLaneSystem.TeamProposal(laps, fcP, d.stratPace, out int sR, out var csR) + " Ritmo: " + whyR + ".";
                 d.stratStart = sR; d.stratStints.Clear(); d.stratStints.AddRange(csR); d.stratStops = csR.Count; d.stratTeamNote = "";
                 ApplyStrategyToLiveRace(d);
                 CareerMode.SaveQuiet();

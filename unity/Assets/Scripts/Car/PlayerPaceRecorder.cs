@@ -352,6 +352,17 @@ namespace RaceX.Car
                 p.decel[i] = decelBuf[i];
                 p.steerRate[i] = steerSum[i] / k;
             }
+            // Lateral SUAVIZADA (média móvel de 5 trechos, ~12 m no Circuito Verde): com 720 trechos cada amostra de 2,5 m traz o
+            // tremor do volante — a IA perseguia esse tremor e "puxava o volante" nas curvas suaves/lentas (relato de 04/11).
+            var raw = (float[])p.lat.Clone();
+            int S = PlayerStyle.Segments;
+            for (int i = 0; i < S; i++)
+            {
+                if (p.n[i] == 0) continue;
+                float sum = 0f; int cnt = 0;
+                for (int o = -2; o <= 2; o++) { int j = ((i + o) % S + S) % S; if (p.n[j] > 0) { sum += raw[j]; cnt++; } }
+                if (cnt > 0) p.lat[i] = sum / cnt;
+            }
             return p;
         }
 

@@ -395,6 +395,25 @@ namespace RaceX.Core
             if (!st.inPit && !st.exiting && !st.holding && d > 0f) RaceX.Career.CareerMode.RecordCompoundWear(st.compound, d);
         }
 
+        /// <summary>RITMO SUGERIDO PELA EQUIPE (pedido do usuário, 04/11: antes era sempre EQUILIBRADO, o padrão do save). Regra de
+        /// projeto a partir do DESGASTE MEDIDO nos treinos (CareerMode.WeekendCompound: vida em voltas = 0,92 / desgaste por volta):
+        /// pneus durando ≤ 80% do esperado → CAUTELOSO; chuva prevista no meio → ATAQUE NO INÍCIO (abre vantagem antes da pista mudar);
+        /// pneus durando ≥ 115% → ATAQUE NO FIM (sobra pneu para o fim); senão EQUILIBRADO. Sem medição = EQUILIBRADO.</summary>
+        public static int SuggestPace(int laps, WeatherForecast fc, out string why)
+        {
+            why = "";
+            float ratioSum = 0f; int n = 0;
+            for (int c = 0; c < 3; c++)
+                if (RaceX.Career.CareerMode.WeekendCompound(c, out _, out _, out float lf, out _) && lf > 0f) { ratioSum += lf / CompoundLife(c); n++; }
+            float ratio = n > 0 ? ratioSum / n : 1f;
+            RainLaps(fc, Mathf.Max(2, laps), out int rainLap, out _);
+            if (n > 0 && ratio <= 0.80f) { why = "seus pneus duraram " + Mathf.RoundToInt(ratio * 100f) + "% do esperado nos treinos"; return 4; }
+            if (rainLap > 0 && fc.kind < WeatherKind.LightRain) { why = "chuva prevista por volta da volta " + rainLap + " — vantagem antes da pista mudar"; return 1; }
+            if (n > 0 && ratio >= 1.15f) { why = "seus pneus duraram " + Mathf.RoundToInt(ratio * 100f) + "% do esperado — sobra pneu para o fim"; return 3; }
+            why = n > 0 ? "desgaste medido dentro do esperado" : "sem medição de desgaste nos treinos";
+            return 0;
+        }
+
         static readonly string[] PaceNames = { "EQUILIBRADO", "ATAQUE NO INÍCIO", "ATAQUE NO MEIO", "ATAQUE NO FIM", "CAUTELOSO", "ATAQUE TOTAL" };
         public static string PaceName(int p) => PaceNames[Mathf.Clamp(p, 0, PaceNames.Length - 1)];
         public static int PaceCount => PaceNames.Length;
@@ -426,10 +445,51 @@ namespace RaceX.Core
             stints = new List<int>();
             laps = Mathf.Max(2, laps);
             bool wetRace = fc.kind >= WeatherKind.LightRain;
+            RainLaps(fc, laps, out int rainLap, out int dryLap);
             if (wetRace)
             {
                 startC = fc.kind >= WeatherKind.HeavyRain ? TyreModel.Wet : TyreModel.Inter;
-                return "EQUIPE: corrida molhada prevista — largada de " + TyreModel.Name(startC) + "; a equipe chama a troca quando a pista mudar.";
+                // Chuva que PARA no meio da corrida: a volta ao slick já fica no plano, na volta prevista (pedido do usuário, 04/11).
+                if (dryLap > 0)
+                {
+                    int left = laps - dryLap;
+                    int dc = DryForLaps(left);
+                    stints.Add(dc);
+                    if (left > CompoundLife(dc) * 1.05f && dc < 2) stints.Add(2);
+                    return "PLANO DA EQUIPE: largada de " + TyreModel.Name(startC) + "; a pista deve SECAR por volta da volta " + dryLap
+                         + " — troca para " + TyreModel.Name(dc) + " marcada nela" + (stints.Count > 1 ? " e depois DURO" : "") + ".";
+                }
+                return "EQUIPE: corrida molhada prevista — largada de " + TyreModel.Name(startC) + "; a equipe chama a troca se a pista secar.";
+            }
+            // CHUVA PREVISTA NO MEIO DA CORRIDA: plano seco só até a volta da chuva, parada para INTERMEDIÁRIO/CHUVA marcada NELA
+            // (antes o plano era todo de slick e só avisava "a equipe chama a troca na hora").
+            if (rainLap > 0)
+            {
+                int wetC = fc.changeTo >= WeatherKind.HeavyRain ? TyreModel.Wet : TyreModel.Inter;
+                int dryLaps = rainLap;                       // voltas de slick antes da chuva (largada até a parada)
+                int sc = DryForLaps(dryLaps);
+                var pre = new List<int>();
+                if (dryLaps > CompoundLife(sc) * 1.05f)
+                {
+                    // não dá para ir de um pneu só até a chuva: um stint a mais (o que cobre o resto)
+                    int rest = dryLaps - Mathf.RoundToInt(CompoundLife(sc));
+                    pre.Add(DryForLaps(rest));
+                }
+                startC = sc;
+                stints.AddRange(pre);
+                stints.Add(wetC);
+                string tail = "";
+                if (dryLap > 0 && stints.Count < 3)
+                {
+                    int dc = DryForLaps(laps - dryLap);
+                    stints.Add(dc);
+                    tail = "; pista secando por volta da volta " + dryLap + " → " + TyreModel.Name(dc);
+                }
+                var lapsAtR = StopLapsFor(laps, startC, stints, fc);
+                string planR = TyreModel.Letter(startC);
+                foreach (int c in stints) planR += "→" + TyreModel.Letter(c);
+                return "PLANO DA EQUIPE: " + planR + ", box na volta " + string.Join(", ", lapsAtR) + " — ritmo " + PaceName(pace)
+                     + ". CHUVA prevista por volta da volta " + rainLap + ": parada para " + TyreModel.Name(wetC) + " marcada nela" + tail + ".";
             }
             float[] p = new float[3], life = new float[3];
             bool[] measured = new bool[3];
@@ -1939,6 +1999,56 @@ namespace RaceX.Core
             return l;
         }
 
+        /// <summary>Idem, com a PREVISÃO: a parada para pneu de chuva fica na volta em que a chuva chega (e a volta ao slick na volta
+        /// em que para). Pedido do usuário (04/11): "se a equipe já sabe quando a chuva vem, que fique no plano", não só o aviso.</summary>
+        public static List<int> StopLapsFor(int laps, int startC, List<int> stopCs, WeatherForecast fc)
+        {
+            var l = StopLapsFor(laps, startC, stopCs);
+            PinRainStops(l, Mathf.Max(2, laps), TyreModel.Clamp(startC), stopCs, fc);
+            return l;
+        }
+
+        /// <summary>Voltas da chuva pela previsão da sessão (-1 = não há): início e fim, em voltas da corrida.</summary>
+        static void RainLaps(WeatherForecast fc, int laps, out int rainLap, out int dryLap)
+        {
+            rainLap = -1; dryLap = -1;
+            if (fc.rainStart < 0f) return;
+            bool toWet = fc.changeTo >= WeatherKind.LightRain;       // seco → chuva no meio da corrida
+            bool toDry = fc.kind >= WeatherKind.LightRain && !toWet; // começa na chuva e seca
+            int at = Mathf.Clamp(Mathf.RoundToInt(fc.rainStart * laps), 1, laps - 1);
+            int end = fc.rainEnd >= 0f ? Mathf.Clamp(Mathf.RoundToInt(fc.rainEnd * laps), at + 1, laps - 1) : -1;
+            if (toWet) { rainLap = at; dryLap = end; }
+            else if (toDry) { dryLap = at; }
+        }
+
+        /// <summary>Fixa as paradas de pneu de chuva/slick nas voltas da previsão; as demais se redistribuem entre elas.</summary>
+        static void PinRainStops(List<int> stopLaps, int laps, int startC, List<int> stopCs, WeatherForecast fc)
+        {
+            if (stopLaps == null || stopCs == null || stopLaps.Count == 0) return;
+            RainLaps(fc, laps, out int rainLap, out int dryLap);
+            if (rainLap < 0 && dryLap < 0) return;
+            int n = Mathf.Min(stopLaps.Count, stopCs.Count);
+            int prevC = startC, lo = 1;
+            for (int i = 0; i < n; i++)
+            {
+                int c = TyreModel.Clamp(stopCs[i]);
+                bool wetIn = TyreModel.IsWetTyre(c) && !TyreModel.IsWetTyre(prevC);   // slick → chuva
+                bool wetOut = !TyreModel.IsWetTyre(c) && TyreModel.IsWetTyre(prevC);  // chuva → slick
+                int pin = wetIn && rainLap > 0 ? rainLap : wetOut && dryLap > 0 ? dryLap : -1;
+                if (pin > 0)
+                {
+                    pin = Mathf.Clamp(pin, lo, laps - 1 - (n - 1 - i));
+                    // paradas anteriores ainda não fixadas ficam proporcionais entre a última fixa e esta
+                    int first = i; while (first > 0 && stopLaps[first - 1] >= pin) first--;
+                    for (int k = first; k < i; k++) stopLaps[k] = Mathf.Clamp(lo + Mathf.RoundToInt((pin - lo) * (k - first + 1f) / (i - first + 1f)), lo, pin - 1);
+                    stopLaps[i] = pin;
+                }
+                else if (stopLaps[i] < lo) stopLaps[i] = Mathf.Min(laps - 1, lo);
+                lo = stopLaps[i] + 1;
+                prevC = c;
+            }
+        }
+
         /// <summary>Estratégia do jogador com composto POR PARADA.</summary>
         public static void SetPlayerStrategy(CarController car, int startC, List<int> stopCs)
         {
@@ -1957,6 +2067,7 @@ namespace RaceX.Core
             var rm = instance.race;
             if (rm == null || rm.Settings.laps >= 900) return;
             FillStopLaps(st.stopLaps, Mathf.Max(2, rm.Settings.laps), startC, cs);
+            PinRainStops(st.stopLaps, Mathf.Max(2, rm.Settings.laps), startC, cs, WeatherSystem.CurrentForecast);
             if (st.stopsDone > st.plannedStops) st.stopsDone = st.plannedStops;
         }
 
@@ -1970,6 +2081,7 @@ namespace RaceX.Core
             {
                 // Sem plano escolhido: vale o PLANO DA EQUIPE (dados do fim de semana + clima + ritmo), não um pneu fixo.
                 var fcA = WeatherSystem.ForecastFor(d.season, d.round, d.weekendPhase, (int)RaceX.Career.CareerMode.RoundTrack(d.round));
+                d.stratPace = SuggestPace(race.Settings.laps, fcA, out _);   // ritmo sugerido pelo desgaste medido
                 string noteA = TeamProposal(race.Settings.laps, fcA, d.stratPace, out int sA, out var csA);
                 d.stratStart = sA; d.stratStints.Clear(); d.stratStints.AddRange(csA); d.stratStops = csA.Count;
                 d.stratTeamNote = noteA;
@@ -1985,6 +2097,7 @@ namespace RaceX.Core
             for (int i = 0; i < st.plannedStops; i++) cs.Add(TyreModel.Clamp(i < d.stratStints.Count ? d.stratStints[i] : stopC));
             st.strategy.AddRange(cs);
             FillStopLaps(st.stopLaps, laps, startC, cs);
+            PinRainStops(st.stopLaps, laps, startC, cs, WeatherSystem.CurrentForecast);   // parada de chuva na volta prevista
         }
 
         /// <summary>Estratégia automática sugerida (usada pelo hub da carreira para mostrar o padrão).</summary>
@@ -3141,14 +3254,35 @@ namespace RaceX.Core
 
             // DOUBLE STACK (corrida): o companheiro ainda está parado no box → espera atrás (a ~10 m da marca) até ele sair,
             // como na F1. Antes o 2º carro parava em cima do 1º e ganhava a equipe dele.
-            if (!PracticeSession && st.stopTimer <= 0f && Vector3.Distance(st.car.transform.position, st.boxTarget) < 10f && BoxBusyByOther(st, e))
+            // v101 (relato do usuário, 04/11): a espera só começava a < 10 m da marca em qualquer direção — o carro chegava pela faixa
+            // rápida, PASSAVA do companheiro, parava à frente dele e, liberado, dava a volta pela garagem vizinha (atravessou paredes).
+            // Agora a conta é AO LONGO da faixa: com a marca ainda à frente (até 35 m), reduz pela distância e para ~8 m ATRÁS dela;
+            // já tendo passado da marca, não espera — encaixa quando a vaga vagar (SpotTaken abaixo).
+            if (!PracticeSession && st.stopTimer <= 0f && BoxBusyByOther(st, e))
             {
-                st.car.extThrottle = 0f;
-                st.car.extBrake = 1f;
-                st.car.extSteer = 0f;
-                st.stuckTimer = 0f; st.stillTimer = 0f; st.finalApproachT = 0f;
-                st.pitCtrlSince = Time.time;   // esperar a vez não é travamento
-                return;
+                Vector3 laneFwd = StopPose(e).rotation * Vector3.forward; laneFwd.y = 0f; laneFwd.Normalize();
+                Vector3 toMark = st.boxTarget - st.car.transform.position; toMark.y = 0f;
+                float ahead = Vector3.Dot(toMark, laneFwd);
+                if (ahead > 0f && ahead < 35f)
+                {
+                    const float holdAt = 8f;
+                    float vCap = ahead > holdAt + 1f ? Mathf.Sqrt(2f * 3f * (ahead - holdAt)) : 0f;   // ~0,3 g até parar atrás
+                    if (vCap > 0.8f)
+                    {
+                        if (!DriveRoute(st, Mathf.Min(LaneLimitMs, vCap)))
+                        {
+                            float steerW = Vector3.SignedAngle(st.car.transform.forward, toMark.normalized, Vector3.up) / 30f;
+                            st.car.extSteer = Mathf.Clamp(steerW, -1f, 1f);
+                            st.car.extThrottle = st.car.ForwardSpeed < vCap ? 0.25f : 0f;
+                            st.car.extBrake = st.car.ForwardSpeed > vCap + 0.3f ? 1f : 0f;
+                        }
+                        else if (st.car.ForwardSpeed > vCap + 0.3f) { st.car.extThrottle = 0f; st.car.extBrake = 1f; }
+                    }
+                    else { st.car.extThrottle = 0f; st.car.extBrake = 1f; st.car.extSteer = 0f; }
+                    st.stuckTimer = 0f; st.stillTimer = 0f; st.finalApproachT = 0f;
+                    st.pitCtrlSince = Time.time;   // esperar a vez não é travamento
+                    return;
+                }
             }
             // Piloto automático do pit (na caixa/navegação por rota): limita velocidade, para NA SUA GARAGEM.
             Vector3 toBox = st.car.transform.position; toBox.y = 0f;
@@ -3175,7 +3309,8 @@ namespace RaceX.Core
                     if (!snap) st.spotWaitT = 0f;
                     // Só na CORRIDA (marca da faixa interna): no treino a garagem vizinha se sobrepõe (boxes de ~10 m) e o carro do
                     // box ao lado "ocupava" a vaga — o jogador parava fora do centro da equipe por 8 s (relato do usuário, 03/11).
-                    if (snap && !garageStop && st.spotWaitT < 4f && SpotTaken(StopPose(e).position, st.car))
+                    // Vaga do COMPANHEIRO (double stack): espera o tempo que for — ele vai sair; os 4 s valem só para carro estranho/quebrado.
+                    if (snap && !garageStop && (st.spotWaitT < 4f || BoxBusyByOther(st, e)) && SpotTaken(StopPose(e).position, st.car))
                     {
                         st.spotWaitT += Time.deltaTime;   // 4 s sem liberar (carro quebrado na vaga): encaixa como antes
                         st.car.extThrottle = 0f; st.car.extSteer = 0f;

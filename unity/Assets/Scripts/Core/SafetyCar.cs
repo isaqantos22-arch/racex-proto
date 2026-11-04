@@ -512,9 +512,9 @@ namespace RaceX.Core
                                     && Mathf.Repeat(SplineDist(e.car.transform.position) - s, L) > L * 0.5f)
                                 {
                                     unlapping.Add(e.car);
-                                    // Retardatário passando a fila: SEM COLISÃO com os outros carros enquanto desdobra (regra do
-                                    // usuário: "não deve em hipótese alguma causar colisão nos demais que estão na fila").
-                                    if (!e.isHuman && ghosted.Add(e.car)) SetIgnore(e.car, true);
+                                    // Retardatário passando a fila: colisão LIGADA — ele passa PELO LADO, com a distância de um carro
+                                    // (ScanTraffic/SideFits). A versão "fantasma" (sem colisão) atravessava os carros da fila
+                                    // (pedido do usuário, 04/11: "passarem sem bater nos carros da fila", não por dentro deles).
                                 }
                             if (unlapping.Count > 0)
                             {
@@ -640,8 +640,9 @@ namespace RaceX.Core
             if (a.input != null) a.input.enabled = false;
             a.ai = e.car.gameObject.AddComponent<CarAI>();
             a.ai.Initialize(race.Track.Waypoints, race, race.Settings.difficulty);
-            SetIgnore(e.car, true);
-            a.ignoring = true;
+            // Colisões FICAM LIGADAS (pedido do usuário, 04/11: "retardatários passavam DENTRO dos carros da fila" — era o carro dele,
+            // em piloto automático, sem colisão com ninguém). A IA guarda distância; nada atravessa nada.
+            a.ignoring = false;
             RaceControl.Tell(e, "PILOTO AUTOMÁTICO: o carro segue a fila do safety car até a BANDEIRA VERDE");
             Debug.Log("[SC] piloto automático LIGADO no " + e.name);
         }

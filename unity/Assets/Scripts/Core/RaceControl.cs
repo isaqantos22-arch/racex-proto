@@ -449,13 +449,17 @@ namespace RaceX.Core
             // Limites de pista: só conta saída "sozinho". FORÇADO para fora — qualquer toque de outro carro nos últimos 2 s (mesmo
             // leve) ou ESPREMIDO por um carro emparelhado do lado de dentro — não conta nem obriga a devolver posição (FIA, art. 33.3:
             // sair da pista "com motivo justificável"; notas da direção de prova: quem é forçado para fora não entra na contagem).
-            bool off = car.IsOffTrack && !inPit;
+            // FIA: só com as 4 RODAS fora da pista (IsFullyOffTrack); 2 rodas na zebra/grama não é infração. O PILOTO AUTOMÁTICO
+            // (fila do safety car) também não pode render advertência ao jogador: quem dirige ali é a IA (relato de 04/11: 9 penalidades
+            // com o automático ligado).
+            bool off = car.IsFullyOffTrack && !inPit;
+            bool autopilot = SafetyCar.AutopilotOn(car);
             if (off && !s.wasOff)
             {
                 s.aheadAtOff.Clear();
                 foreach (var o in order)
                     if (o != e && o.raceDistance > e.raceDistance && o.raceDistance - e.raceDistance < 80f) s.aheadAtOff.Add(o);
-                s.forcedOff = now - s.lastContact <= 2f || SqueezedOff(s) || AvoidingIncident(s, now);
+                s.forcedOff = now - s.lastContact <= 2f || SqueezedOff(s) || AvoidingIncident(s, now) || autopilot;
                 if (car.SpeedKmh > 60f && !s.forcedOff)
                 {
                     e.trackLimitStrikes++;

@@ -30,6 +30,8 @@ namespace RaceX.Core
         public static WeatherSystem Instance { get; private set; }
 
         public static float Wetness => Instance != null ? Instance.wetness : 0f;
+        /// <summary>Previsão da sessão em andamento (a equipe usa para marcar a parada de chuva na volta certa).</summary>
+        public static WeatherForecast CurrentForecast => Instance != null ? Instance.fc : new WeatherForecast { kind = WeatherKind.Dry, rainStart = -1f, rainEnd = -1f };
 
         // ÁGUA NA PISTA (v81, embasada — Claude outputs/PESQUISA_v81.md §12). Duas partes:
         // (1) água DENTRO da textura do asfalto (0..TextureMm) e (2) LÂMINA acima dela (Gallaway, TTI 1971).

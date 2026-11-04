@@ -218,6 +218,8 @@ namespace RaceX.Car
         float skill;
         float unlockTime = -999f;
         float lateralAtUnlock;
+        bool lateralSeeded;          // 1º pensamento: lateral parte de onde o carro está (piloto automático ligado em movimento)
+        float playerLineEdge = 4.75f; // limite da lateral quando segue a linha do jogador (até 0,6 m da borda)
         bool wasLocked = true;
         float committedLateral;
 
@@ -660,7 +662,17 @@ namespace RaceX.Car
             // "C por dentro" de cada curva — zigue-zague nas seções sinuosas com o carro de aderência real.
             if (!playerLine) lineHere = RacingLine.LatAt(spline, LineEdge(), along);
             bool learnedLine = !float.IsNaN(lineHere);
-            if (learnedLine) desiredLateral = Mathf.Clamp(lineHere + deviation * 0.5f + lane * 0.15f, -edge, edge);
+            // Linha do JOGADOR: ele usa a zebra (volta de 04/11: lateral até ±6,3 m com meia pista de 6,0). Cortar a linha dele a
+            // 1,25 m da borda e manter a VELOCIDADE dele = curva mais fechada na mesma velocidade → o carro sai de frente e bate
+            // (corrida de 04/11: 30 das 38 perdas totais com motivo "tracado" e alvo −4,8 = o corte). A lateral dele vale até 0,6 m da
+            // borda (o centro do carro; as rodas ficam na zebra, dentro da regra das 4 rodas) e, onde ainda assim é cortada, o
+            // CornerSpeedAhead tira o fator de ritmo (LineClampedAt).
+            float lineEdge = playerLine ? Mathf.Max(edge, half - 0.6f) : edge;
+            if (learnedLine) desiredLateral = Mathf.Clamp(lineHere + deviation * 0.5f + lane * 0.15f, -lineEdge, lineEdge);
+            if (playerLine) playerLineEdge = lineEdge;
+            // Primeiro pensamento (piloto automático ligado com o carro ANDANDO, no meio da curva): parte de onde o carro está —
+            // antes partia de lateral 0 e puxava o volante para o meio da pista a 110 km/h (jogador fora da pista, 04/11).
+            if (!lateralSeeded) { lateralSeeded = true; committedLateral = myLat; lineAnchor = myLat; lateralAtUnlock = myLat; latVel = 0f; }
             float launchBlend = Mathf.Clamp01((Time.time - unlockTime) / 5f);
             desiredLateral = Mathf.Lerp(Mathf.Clamp(lateralAtUnlock, -edge, edge), desiredLateral, launchBlend);
             // Primeiros segundos depois da largada (pelotão junto): sem defesa nem troca de lado e mudança de faixa devagar.
@@ -1066,7 +1078,10 @@ namespace RaceX.Car
             if (pracYield && !passing) { trafficLat = pracLat; defendActive = false; latReason = LatYield; }
             float targetLat = float.IsNaN(trafficLat) ? desiredLateral : trafficLat;
             // Contornando carro parado o alvo pode chegar à zebra ou à área de escape (ObstacleGapLat); o resto, até "edge".
-            float latBound = latReason == LatObstacle ? half + 2.6f : edge;
+            float latBound = latReason == LatObstacle ? half + 2.6f : latReason == LatLine && playerLine ? playerLineEdge : edge;
+            // FILA DO SAFETY CAR / neutralização: ninguém anda na zebra atrás do SC (na fila a precisão cai e cada passada com as rodas
+            // de fora era advertência — corrida de 04/11: a fila inteira a ±6,5 m com meia pista de 6,0). Alvo a ≥ 1,6 m da borda.
+            if ((scQueue || noPassFlag) && latReason != LatObstacle) latBound = Mathf.Min(latBound, Mathf.Max(1.5f, half - 1.6f));
             // ESPAÇO DE UM CARRO: nunca espreme quem está ao lado.
             float limitedLat = leftLimit <= rightLimit ? Mathf.Clamp(targetLat, leftLimit, rightLimit) : targetLat;
             if (Mathf.Abs(limitedLat - targetLat) > 0.3f)
@@ -1748,6 +1763,13 @@ namespace RaceX.Car
                         // velocidade de saída gravada já é a que o carro aguenta; com 1,03–1,09 ali os carros saíam largos da última
                         // curva e 3 bateram no bico da mureta (treino v100g com estilo, 04/11). A vantagem fica onde a curva limita.
                         float mult = vPhys >= top * 0.999f ? Mathf.Min(playerPaceMul, 1f) : playerPaceMul;
+                        // Onde a LINHA dele foi cortada para dentro (ele passou além do limite que a IA mira), a curva da IA é mais
+                        // fechada que a dele: a velocidade dele ali não vale com fator > 1 — e perde 1,5% (corrida de 04/11, PT em série).
+                        if (style != null)
+                        {
+                            float pl = PlayerStyle.LatAt(style, along + s, L);
+                            if (!float.IsNaN(pl) && Mathf.Abs(pl) > playerLineEdge + 0.2f) mult = Mathf.Min(mult, 1f) * 0.985f;
+                        }
                         if (playerCleanV > 5f) { vCorner = Mathf.Min(playerCleanV * mult, vPhys * AiMaxUsable); playerRef = true; }
                     }
                     // Melhor volta PRÓPRIA (limpa): onde ele mesmo já passou mais rápido, pode repetir — até 98,5% do limite físico.
@@ -1972,7 +1994,9 @@ namespace RaceX.Car
             return "frente=" + (aheadCar != null ? aheadCar.name : "-") + " gap=" + (aheadCar != null ? aheadGap.ToString("0.0") : "-")
                 + " vFrente=" + aheadSpeed.ToString("0.0") + " passe=" + passSide + " motivoLat=" + LatReasonNames[Mathf.Clamp(latReason, 0, LatReasonNames.Length - 1)]
                 + " fila=" + (queueScan ? 1 : 0) + " frenteParado=" + (aheadCar != null && IsStationary(aheadCar) ? 1 : 0)
-                + " limites=" + leftLimit.ToString("0.0") + "/" + rightLimit.ToString("0.0") + " alvoLat=" + committedLateral.ToString("0.0");
+                + " limites=" + leftLimit.ToString("0.0") + "/" + rightLimit.ToString("0.0") + " alvoLat=" + committedLateral.ToString("0.0")
+                + " along=" + lastThinkAlong.ToString("0") + " lat=" + lastMyLat.ToString("0.0") + " vAlvo=" + (CornerSpeedAheadCached * 3.6f).ToString("0")
+                + " jogadorV=" + (PlayerSpeedAt(lastThinkAlong, waypoints != null && waypoints.Spline != null ? waypoints.Spline.Length : 1f) * 3.6f).ToString("0") + " mult=" + playerPaceMul.ToString("0.00");
         }
 
         bool UpdateRecovery(float speed, ref float steer, ref float throttle, ref float brake)
