@@ -134,7 +134,7 @@ namespace RaceX.Track
                             V(0f, -220f), V(0f, -200f), V(0f, -180f), V(0f, -160f), V(0f, -140f), V(0f, -120f), V(0f, -100f), V(0f, -80f),
                             V(0f, -60f), V(0f, -40f), V(0f, -20f)),
                         groundColor = G(0.26f, 0.34f, 0.3f), sunEuler = E(30, -60), sunColor = C(1f, 0.75f, 0.5f),
-                        sunIntensity = 1.2f, skyboxExr = "Skyboxes/kloppenheim_06_puresky_2k",
+                        sunIntensity = 1.2f, skyboxExr = "Skyboxes/belfast_sunset_puresky_2k",
                         fogColor = C(0.85f, 0.7f, 0.6f), fogDensity = 0.001f
                     };
                     return true;
@@ -304,7 +304,7 @@ namespace RaceX.Track
                             V(-16.6f, -177f), V(-7.7f, -168.1f), V(-2f, -156.9f), V(0f, -144.5f), V(0f, -123.9f), V(0f, -103.2f), V(0f, -82.6f), V(0f, -61.9f),
                             V(0f, -41.3f), V(0f, -20.6f)),
                         groundColor = G(0.42f, 0.46f, 0.3f), grassBandA = C(0.5f, 0.52f, 0.34f), grassBandB = C(0.44f, 0.46f, 0.3f),
-                        sunEuler = E(38, -30), sunColor = C(0.95f, 0.92f, 0.85f), skyboxExr = "Skyboxes/kloppenheim_06_puresky_2k",
+                        sunEuler = E(38, -30), sunColor = C(0.95f, 0.92f, 0.85f), skyboxExr = "Skyboxes/industrial_sunset_puresky_2k",
                         fogColor = C(0.78f, 0.82f, 0.86f), fogDensity = 0.0013f
                     };
                     return true;

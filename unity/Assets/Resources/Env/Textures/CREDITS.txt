@@ -4,5 +4,5 @@ Skyboxes: clarens_night_01, moonlit_golf, night_bridge, modern_buildings_night.
 Baixados em 03/11/2026 pela API/CDN oficial (dl.polyhaven.org).
 
 Fachadas (Resources/Env/Facades): ambientCG (https://ambientcg.com), CC0 — Facade001, 003, 005, 009, 011, 013, 016, 018A, 019A, 020A (1K JPG, Color + Emission).
-Céus (Resources/Skyboxes/*_puresky_2k.hdr): Poly Haven (https://polyhaven.com), CC0 — kloofendal_48d_partly_cloudy_puresky, kloofendal_43d_clear_puresky, sunflowers_puresky, kloppenheim_06_puresky, kloppenheim_07_puresky, kloppenheim_02_puresky.
+Céus (Resources/Skyboxes/*_puresky_2k.hdr): Poly Haven (https://polyhaven.com), CC0 — belfast_sunset_puresky, industrial_sunset_puresky, kloofendal_48d_partly_cloudy_puresky, kloofendal_43d_clear_puresky, sunflowers_puresky, kloppenheim_06_puresky, kloppenheim_07_puresky, kloppenheim_02_puresky.
 Árvores (Resources/Env/Trees/*.png): impostores renderizados no Blender a partir dos modelos do Poly Haven (https://polyhaven.com), CC0 — jacaranda_tree, tree_small_02, quiver_tree_02.

@@ -643,7 +643,8 @@ namespace RaceX.Core
                 // Céus antigos (4k, com horizonte: colinas, rochas, estacionamento ao entardecer) — pedido do usuário de vê-los
                 case "sky_forest": return 2.0f;                                // dia, nuvens e colinas verdes (0,19; a 2,4 o horizonte saiu branco)
                 case "sky_desert": return 3.0f;                                // deserto, sol forte e rochas (0,06; horizonte 0,12)
-                case "sky_city": return 1.2f;                                  // entardecer com holofotes (0,17) — sem uso: horizonte com árvores/prédio da foto
+                case "belfast_sunset_puresky_2k": return 0.5f;                 // pôr do sol roxo/rosa, só céu (0,93) — substitui o sky_city (tinha prédio e árvores)
+                case "industrial_sunset_puresky_2k": return 0.6f;              // fim de tarde com nuvens dramáticas, só céu (0,76)
                 default: return 1.1f;
             }
         }
