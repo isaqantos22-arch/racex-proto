@@ -101,7 +101,7 @@ namespace RaceX.Track
                         ambientColor = new Color(0.6f, 0.55f, 0.48f),
                         fogColor = new Color(0.85f, 0.73f, 0.55f),
                         fogDensity = 0.0011f,
-                        skyboxExr = "Skyboxes/sky_desert.hdr",
+                        skyboxExr = "Skyboxes/sky_desert",
                     };
                 case TrackId.NightCity:
                     return new TrackDefinition
@@ -130,7 +130,7 @@ namespace RaceX.Track
                         ambientColor = new Color(0.17f, 0.19f, 0.28f),
                         fogColor = new Color(0.03f, 0.04f, 0.08f),
                         fogDensity = 0.0016f,
-                        skyboxExr = "Skyboxes/sky_city.hdr",
+                        skyboxExr = "Skyboxes/kloppenheim_07_puresky_2k",
                     };
                 case TrackId.Velocita: // Inspirada em Monza: retões, dois chicanes e curvão final
                     return new TrackDefinition
@@ -171,7 +171,7 @@ namespace RaceX.Track
                         ambientColor = new Color(0.55f, 0.6f, 0.68f),
                         fogColor = new Color(0.72f, 0.79f, 0.86f),
                         fogDensity = 0.0009f,
-                        skyboxExr = "Skyboxes/sky_forest.hdr",
+                        skyboxExr = "Skyboxes/sunflowers_puresky_2k",
                     };
                 case TrackId.Principado: // Inspirada em Mônaco: rua estreita, 90° e um gancho
                     return new TrackDefinition
@@ -214,7 +214,7 @@ namespace RaceX.Track
                         ambientColor = new Color(0.58f, 0.62f, 0.7f),
                         fogColor = new Color(0.74f, 0.8f, 0.88f),
                         fogDensity = 0.001f,
-                        skyboxExr = "Skyboxes/sky_city.hdr",
+                        skyboxExr = "Skyboxes/sky_forest",
                     };
                 case TrackId.Ardenne: // Inspirada em Spa: pista longa, curvas rápidas e um gancho
                     return new TrackDefinition
@@ -256,7 +256,7 @@ namespace RaceX.Track
                         ambientColor = new Color(0.5f, 0.56f, 0.62f),
                         fogColor = new Color(0.68f, 0.74f, 0.8f),
                         fogDensity = 0.0014f,
-                        skyboxExr = "Skyboxes/sky_forest.hdr",
+                        skyboxExr = "Skyboxes/sky_forest",
                     };
                 case TrackId.JardimDaBaia: // Inspirada em Singapura: urbana noturna em blocos
                     return new TrackDefinition
@@ -303,7 +303,7 @@ namespace RaceX.Track
                         ambientColor = new Color(0.18f, 0.2f, 0.3f),
                         fogColor = new Color(0.03f, 0.05f, 0.09f),
                         fogDensity = 0.0015f,
-                        skyboxExr = "Skyboxes/sky_city.hdr",
+                        skyboxExr = "Skyboxes/kloppenheim_02_puresky_2k",
                     };
                 case TrackId.GolfoReal: // Inspirada no Bahrain: deserto, freadas fortes
                     return new TrackDefinition
@@ -347,7 +347,7 @@ namespace RaceX.Track
                         ambientColor = new Color(0.62f, 0.52f, 0.44f),
                         fogColor = new Color(0.87f, 0.7f, 0.48f),
                         fogDensity = 0.0012f,
-                        skyboxExr = "Skyboxes/sky_desert.hdr",
+                        skyboxExr = "Skyboxes/sky_desert",
                     };
                 case TrackId.SerraDoCafe: // Inspirada em Interlagos: compacta, anti-horária, S inicial
                     return new TrackDefinition
@@ -383,7 +383,7 @@ namespace RaceX.Track
                         ambientColor = new Color(0.55f, 0.58f, 0.62f),
                         fogColor = new Color(0.74f, 0.78f, 0.8f),
                         fogDensity = 0.0011f,
-                        skyboxExr = "Skyboxes/sky_forest.hdr",
+                        skyboxExr = "Skyboxes/sky_forest",
                     };
                 case TrackId.CircuitoDoSol: // Inspirada em Suzuka (sem cruzamento): serpentário + alça longa
                     return new TrackDefinition
@@ -424,7 +424,7 @@ namespace RaceX.Track
                         ambientColor = new Color(0.56f, 0.6f, 0.66f),
                         fogColor = new Color(0.73f, 0.79f, 0.85f),
                         fogDensity = 0.001f,
-                        skyboxExr = "Skyboxes/sky_forest.hdr",
+                        skyboxExr = "Skyboxes/kloofendal_48d_partly_cloudy_puresky_2k",
                     };
                 default:
                     if (TrackLibraryExtra.TryGet(id, out var extra)) return extra;
@@ -450,7 +450,7 @@ namespace RaceX.Track
                         ambientColor = new Color(0.55f, 0.62f, 0.7f),
                         fogColor = new Color(0.7f, 0.78f, 0.85f),
                         fogDensity = 0.0012f,
-                        skyboxExr = "Skyboxes/sky_forest.hdr",
+                        skyboxExr = "Skyboxes/sky_forest",
                     };
             }
         }

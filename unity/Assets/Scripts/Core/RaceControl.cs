@@ -289,7 +289,7 @@ namespace RaceX.Core
                 var s = S(e.car);
                 if (s == null) continue;
                 // Destroço retirado: o carro destruído sai da pista depois de WreckClearSeconds (os outros contornam até lá).
-                if (e.retired && !e.isHuman && s.wreckAt > 0f && now - s.wreckAt > WreckClearSeconds && e.car.gameObject.activeSelf) e.car.gameObject.SetActive(false);
+                if (e.retired && !e.isHuman && s.wreckAt > 0f && now - s.wreckAt > (WreckInPitZone(e.car) ? PitWreckClearSeconds : WreckClearSeconds) && e.car.gameObject.activeSelf) e.car.gameObject.SetActive(false);
                 if (e.retired || !e.car.gameObject.activeInHierarchy) continue;
                 UpdateTrackPos(s);
                 order.Add(e);
@@ -538,6 +538,21 @@ namespace RaceX.Core
         /// fazem com carro parado na pista. Pior caso do autoteste (dois carros atravessados de borda a borda): a fila esperava os 30 s
         /// inteiros — agora espera alguns segundos. Valores de projeto.</summary>
         const float MarshalDelay = 4f, MarshalPushSpeed = 1.5f;
+        /// <summary>Zona do pit (v99): o lado "de fora" da pista ali é a ENTRADA e o corredor do box — empurrar o destroço para lá
+        /// bloqueava todo mundo (autoteste 03/11: carro destruído a 7,9 m de lateral no bico da mureta, 96 resgates e o piloto
+        /// automático parando na entrada). Os fiscais do pit levam o carro para o lado das garagens (3 m/s) e o retiram em 12 s.</summary>
+        const float PitWreckClearSeconds = 12f, PitMarshalPushSpeed = 3f;
+
+        bool WreckInPitZone(CarController c)
+        {
+            if (c == null || wp == null || !PitLaneSystem.LaneInfo(out float pls, out float pll)) return false;
+            int h = -1;
+            float a = wp.DistanceAlong(c.transform.position, ref h);
+            var pose = wp.Spline.PoseAtDistance(a);
+            float lat = Vector3.Dot(c.transform.position - pose.position, pose.rotation * Vector3.right);
+            return lat < 0f && Mathf.Repeat(a - pls + 60f, trackLen) < pll + 80f;
+        }
+
         void PushWrecks(float dt)
         {
             float now = Time.time;
@@ -555,10 +570,11 @@ namespace RaceX.Core
                 var pose = wp.Spline.PoseAtDistance(a);
                 Vector3 right = pose.rotation * Vector3.right;
                 float lat = Vector3.Dot(c.transform.position - pose.position, right);
-                if (Mathf.Abs(lat) >= half + 3f) continue;   // já fora do asfalto (com folga)
+                bool pitZone = lat < 0f && PitLaneSystem.LaneInfo(out float pls, out float pll) && Mathf.Repeat(a - pls + 60f, trackLen) < pll + 80f;
+                if (pitZone ? lat <= -(half + 16f) : Mathf.Abs(lat) >= half + 3f) continue;   // já fora do asfalto (com folga) / já no lado das garagens
                 var rb = c.Body;
                 if (rb != null && !rb.isKinematic) rb.isKinematic = true;   // empurrado pelos fiscais: não "briga" com a física
-                Vector3 np = c.transform.position + right * (lat >= 0f ? 1f : -1f) * MarshalPushSpeed * dt;
+                Vector3 np = c.transform.position + right * (pitZone ? -1f : (lat >= 0f ? 1f : -1f)) * (pitZone ? PitMarshalPushSpeed : MarshalPushSpeed) * dt;
                 if (rb != null) rb.MovePosition(np); else c.transform.position = np;
             }
         }

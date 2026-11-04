@@ -37,7 +37,9 @@ namespace RaceX.Core
             PostFxSetup.Ensure();
 
             var def = TrackLibrary.Get(settings.track);
-            SetupEnvironment(def);
+            // Sol/céu/névoa nunca podem prender o carregamento (build 17: exceção aqui deixou a cena em "ATIVANDO" para sempre).
+            try { SetupEnvironment(def); }
+            catch (System.Exception ex) { Debug.LogWarning("[Env] ambiente ignorado: " + ex.Message); }
             var track = TrackBuilder.Build(def);
             long msTrack = swBoot.ElapsedMilliseconds;
 
@@ -205,8 +207,10 @@ namespace RaceX.Core
                         ? RaceX.Career.CareerMode.PlayerCar()
                         : (settings.formulaOnly ? CarModel.F1 : (!SettingsManager.AllowF1 && ps.car == CarModel.F1 ? CarModel.Titan : ps.car));
                     var hspec = CarSpec.CreateDefault(humanModel);
-                    if (CareerF2) hspec.ApplyF2Spec();   // F2 = carro único (o ajuste de equipe vem depois)
-                    CareerStats.ApplyUpgrades(hspec);
+                    if (CareerF2 || AutoTest.F2Spec) hspec.ApplyF2Spec();   // F2 = carro único (o ajuste de equipe vem depois)
+                    // Upgrades da GARAGEM (créditos do Single Player) não valem na carreira: lá o carro é o da equipe, igual ao do
+                    // companheiro e na mesma base dos rivais (pedido do usuário: "não quero vantagem").
+                    if (!RaceX.Career.CareerData.raceActive) CareerStats.ApplyUpgrades(hspec);
                     if (RaceX.Career.CareerData.raceActive && RaceX.Career.CareerMode.data != null)
                         RaceX.Career.CareerMode.ApplyTeamPerformance(hspec, RaceX.Career.CareerMode.data.f2Team);
                     int hBox = BoxOf(ps.name);
@@ -231,7 +235,7 @@ namespace RaceX.Core
                         ? RaceX.Career.CareerMode.CarForDriver(drvName)
                         : models[npc];
                     var nspec = CarSpec.CreateDefault(carModel);
-                    if (CareerF2) nspec.ApplyF2Spec();
+                    if (CareerF2 || AutoTest.F2Spec) nspec.ApplyF2Spec();
                     if (RaceX.Career.CareerData.raceActive)
                         RaceX.Career.CareerMode.ApplyTeamPerformance(nspec, RaceX.Career.CareerMode.TeamOfDriver(drvName));
                     int nBox = BoxOf(drvName);
@@ -588,24 +592,60 @@ namespace RaceX.Core
             RenderSettings.sun = sun;
 
             var skyTex = string.IsNullOrEmpty(def.skyboxExr) ? null : Resources.Load<Texture2D>(def.skyboxExr);
+            // Resources.Load não aceita extensão: tenta também o caminho sem ".hdr" (céus novos do Poly Haven, v99).
+            if (skyTex == null && !string.IsNullOrEmpty(def.skyboxExr) && def.skyboxExr.Contains("."))
+                skyTex = Resources.Load<Texture2D>(def.skyboxExr.Substring(0, def.skyboxExr.LastIndexOf('.')));
+            Material skyMat = null;
             if (skyTex != null)
             {
-                var skyMat = new Material(Shader.Find("Skybox/Panoramic"));
-                skyMat.SetTexture("_MainTex", skyTex);
-                skyMat.SetFloat("_Exposure", 1.1f);
-                RenderSettings.skybox = skyMat;
-                RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Skybox;
-                DynamicGI.UpdateEnvironment();
+                // Shader.Find("Skybox/Panoramic") volta NULL no APK (o IL2CPP remove shader que nenhuma cena usa) e a
+                // exceção prendia o carregamento em 100% (build 17). O build cria Resources/Env/SkyPanoramic.mat
+                // (RaceXSetup.SetupBaseMaterials) só para o shader entrar no pacote; sem ele, fica o ambiente liso.
+                try
+                {
+                    var tpl = Resources.Load<Material>("Env/SkyPanoramic");
+                    var sh = tpl != null ? tpl.shader : Shader.Find("Skybox/Panoramic");
+                    if (sh != null)
+                    {
+                        skyMat = tpl != null ? new Material(tpl) : new Material(sh);
+                        skyMat.name = "Sky_" + skyTex.name;
+                        skyMat.SetTexture("_MainTex", skyTex);
+                        skyMat.SetFloat("_Exposure", SkyExposure(skyTex.name));
+                    }
+                    Debug.Log("[Env] céu " + skyTex.name + " shader=" + (sh != null ? sh.name : "AUSENTE") + " exposicao=" + SkyExposure(skyTex.name).ToString("0.00"));
+                }
+                catch (System.Exception ex) { Debug.LogWarning("[Env] céu ignorado: " + ex.Message); skyMat = null; }
             }
-            else
-            {
-                RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
-            }
+            // O céu é só PANO DE FUNDO: a luz ambiente continua a da pista (def.ambientColor), como sempre foi. O ambiente
+            // pelo HDRI (build 18) clareava a noite inteira e mudaria a iluminação já aprovada das 24 pistas.
+            if (skyMat != null) RenderSettings.skybox = skyMat;
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
             RenderSettings.ambientLight = def.ambientColor;
             RenderSettings.fog = def.fogDensity > 0f;
             RenderSettings.fogMode = FogMode.ExponentialSquared;
             RenderSettings.fogColor = def.fogColor;
             RenderSettings.fogDensity = def.fogDensity;
+        }
+
+        /// <summary>Exposição por céu (medida em scratchpad hdr_stats.py). O projeto está em espaço de cor GAMMA: o valor do HDRI vai
+        /// direto para a tela (Skybox/Panoramic: tinta 0,5 × ColorSpaceDouble 2 = 1). Alvo = mediana do céu ~0,4–0,5 de dia e
+        /// ~0,12–0,15 à noite. O HDRI da cidade (build 18) tinha mediana 1,19 — por isso saiu branco. Sem entrada: 1,1.</summary>
+        static float SkyExposure(string tex)
+        {
+            switch (tex)
+            {
+                case "kloofendal_48d_partly_cloudy_puresky_2k": return 1.4f;   // dia, nuvens (mediana 0,33)
+                case "kloofendal_43d_clear_puresky_2k": return 2.2f;           // dia limpo (0,18)
+                case "sunflowers_puresky_2k": return 2.2f;                     // meio-dia, nuvens esparsas (0,19)
+                case "kloppenheim_06_puresky_2k": return 0.8f;                 // entardecer (0,43; a 1,0 saiu céu pálido no build 19)
+                case "kloppenheim_07_puresky_2k": return 0.5f;                 // noite nublada com brilho de cidade (0,30)
+                case "kloppenheim_02_puresky_2k": return 1.0f;                 // noite limpa, estrelas e lua (0,10)
+                // Céus antigos (4k, com horizonte: colinas, rochas, estacionamento ao entardecer) — pedido do usuário de vê-los
+                case "sky_forest": return 2.0f;                                // dia, nuvens e colinas verdes (0,19; a 2,4 o horizonte saiu branco)
+                case "sky_desert": return 3.0f;                                // deserto, sol forte e rochas (0,06; horizonte 0,12)
+                case "sky_city": return 1.2f;                                  // entardecer com holofotes (0,17) — sem uso: horizonte com árvores/prédio da foto
+                default: return 1.1f;
+            }
         }
 
         /// <summary>Single player: posição sorteada entre o meio e o fim do grid.</summary>

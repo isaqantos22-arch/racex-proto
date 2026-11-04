@@ -94,6 +94,53 @@ namespace RaceX.EditorTools
             var particleShader = Shader.Find("Universal Render Pipeline/Particles/Unlit");
             if (particleShader == null) particleShader = Shader.Find("Sprites/Default");
             CreateParticleMaterial("Assets/Resources/RaceX_Particle.mat", particleShader);
+            // Céu panorâmico (HDRI) montado em runtime (RaceBootstrap.SetupEnvironment): o material em Resources garante
+            // que o shader Skybox/Panoramic entre no build — Shader.Find voltava NULL no APK e travava o carregamento (v99, build 17).
+            var skyShader = Shader.Find("Skybox/Panoramic");
+            if (skyShader != null)
+            {
+                Directory.CreateDirectory("Assets/Resources/Env");
+                CreateSkyMaterial("Assets/Resources/Env/SkyPanoramic.mat", skyShader);
+            }
+            else Debug.LogWarning("RaceX: shader Skybox/Panoramic não encontrado — os céus HDRI ficam desligados.");
+            // Recorte alfa (árvores em planos cruzados, Track/ForestDecoration): a variante _ALPHATEST_ON do URP Lit só entra
+            // no build se um material em Resources a usar. Em runtime: new Material(Resources.Load<Material>("RaceX_Cutout")).
+            CreateCutoutMaterial("Assets/Resources/RaceX_Cutout.mat", shader);
+        }
+
+        static void CreateCutoutMaterial(string path, Shader shader)
+        {
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (mat == null)
+            {
+                mat = new Material(shader);
+                AssetDatabase.CreateAsset(mat, path);
+            }
+            mat.shader = shader;
+            mat.enableInstancing = true;
+            if (mat.HasProperty("_AlphaClip")) mat.SetFloat("_AlphaClip", 1f);
+            if (mat.HasProperty("_Cutoff")) mat.SetFloat("_Cutoff", 0.45f);
+            if (mat.HasProperty("_Cull")) mat.SetFloat("_Cull", 0f);          // dois lados (plano visto de trás)
+            if (mat.HasProperty("_Smoothness")) mat.SetFloat("_Smoothness", 0.1f);
+            if (mat.HasProperty("_SpecularHighlights")) mat.SetFloat("_SpecularHighlights", 0f);
+            mat.EnableKeyword("_ALPHATEST_ON");
+            mat.renderQueue = (int)RenderQueue.AlphaTest;
+            EditorUtility.SetDirty(mat);
+        }
+
+        static void CreateSkyMaterial(string path, Shader shader)
+        {
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (mat == null)
+            {
+                mat = new Material(shader);
+                AssetDatabase.CreateAsset(mat, path);
+            }
+            mat.shader = shader;
+            if (mat.HasProperty("_Mapping")) mat.SetFloat("_Mapping", 1f);      // latitude/longitude (equiretangular)
+            if (mat.HasProperty("_ImageType")) mat.SetFloat("_ImageType", 0f);  // 360 graus
+            if (mat.HasProperty("_Exposure")) mat.SetFloat("_Exposure", 1f);
+            EditorUtility.SetDirty(mat);
         }
 
         static void CreateParticleMaterial(string path, Shader shader)

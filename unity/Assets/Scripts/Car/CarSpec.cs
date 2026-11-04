@@ -167,6 +167,12 @@ namespace RaceX.Car
             _ => new FormulaData { name = m.ToString(), hp = 1000f, mass = 798f, top = 340f, downforce = 4.0f }
         };
 
+        /// <summary>v99: escala do apoio dos monopostos (a ordem relativa de DataFor se mantém). 0,78 = a MÉDIA pedida pelo
+        /// usuário entre o carro (100% do apoio) e a conta antiga da IA (55%). Referência real: F1 tem picos de ~6 g nas curvas
+        /// mais rápidas (Silverstone 2016, Maggots 6,1 g — telemetria via The Drive) e ~2 g nas lentas; com pneu 2,3 o F1 2022
+        /// do jogo (4,0 × 0,78) fica ACIMA disso em alta (escolha de jogabilidade, não medição).</summary>
+        const float FormulaAeroScale = 0.78f;
+
         /// <summary>Física do monoposto a partir dos dados reais. O jogo foi calibrado no F1 2022 (340 Nm
         /// "de jogo" ≈ 1000 cv): a potência entra em PROPORÇÃO a ele; peso e velocidade máxima são diretos.</summary>
         void ApplyFormulaData(CarModel m)
@@ -179,7 +185,7 @@ namespace RaceX.Car
             maxTorqueNm = 340f * CompressedHp(m, d.hp) / 1000f;
             massKg = d.mass;
             topSpeedKmh = d.top;
-            downforceCoefficient = d.downforce;
+            downforceCoefficient = d.downforce * FormulaAeroScale;
             gearRatios = ComputeGearRatios(8, topSpeedKmh, rpmLimit, wheelRadius, 3.2f);
             zeroToHundredSeconds = Mathf.Clamp(2.6f * (d.mass / 798f) / (d.hp / 1000f), 2.4f, 4.5f); // estimativa (relação peso/potência)
         }
@@ -187,10 +193,12 @@ namespace RaceX.Car
         // F2 = CARRO ÚNICO (pedido do usuário 01/11; como na F2 real): Dallara F2 2024 — 620 cv (462 kW) a 8.750 rpm e
         // 795 kg com o piloto (FIA F2, revelação do carro em Monza 31/08/2023 via Wikipedia "Dallara F2 2024"; o
         // combustível o jogo soma à parte, como faz com os 798 kg da F1). Velocidade máxima ~335 km/h em configuração de
-        // pouco arrasto (fontes secundárias, sem ficha oficial). Carga aerodinâmica: ESTIMATIVA de projeto (~80% da F1
-        // 2022 do jogo; o F2 2024 usa efeito-solo derivado da F1 2022) — não há número público. A diferença entre equipes
-        // fica só no ajuste de equipe (CareerMode.TeamPerformanceFor: 1,00–1,06).
-        public const float F2Hp = 620f, F2MassKg = 795f, F2TopKmh = 335f, F2Downforce = 3.2f;
+        // pouco arrasto (fontes secundárias, sem ficha oficial). Carga aerodinâmica: não há número público. Referência: F2 real
+        // faz ~3,9 g em curva e ~3,5 g freando (Pit Debrief, "Comparing F2 and F3 racing cars in 2025") — com pneu µ 1,8 isso
+        // daria apoio ~2,0, mas o usuário achou o carro sem aderência; v99 usa a MÉDIA pedida por ele: 3,2 × 0,78 ≈ 2,5 (com o
+        // pneu 2,3: ~2,8 g a 100 km/h e ~4,1 g a 180 km/h; raio de 44 m sai de ~178 para ~136 km/h e passa a pedir freada).
+        // A diferença entre equipes fica só no ajuste de equipe (CareerMode.TeamPerformanceFor: 1,00–1,06).
+        public const float F2Hp = 620f, F2MassKg = 795f, F2TopKmh = 335f, F2Downforce = 2.5f;
         public const string F2Name = "Dallara F2 2024";
 
         /// <summary>Carreira na F2: troca potência/peso/velocidade/carga do modelo pelo carro único da categoria (o modelo
@@ -474,7 +482,12 @@ namespace RaceX.Car
                     spring = 65000f; damper = 6500f; targetPosition = 0.45f; suspensionDistance = 0.12f; antiRollStiffness = 9000f;
                     brakeTorque = 5200f; frontBrakeBias = 0.56f; handbrakeTorque = 3000f;
                     downforceCoefficient = 4.0f; dragCoefficient = 0.45f;
-                    forwardStiffness = 1.8f; sidewaysStiffness = 2.9f;
+                    // v99 (pedido do usuário: "o carro não derrapa, faço a volta acelerando; F2 parece F1"): atrito LATERAL 2,9 →
+                    // 2,3. O slick real fica em ~1,8 (Motor Sport Magazine, "Technofile: the slick tyre", 1999; 1,4–2,1 ao longo
+                    // de uma corrida, fórum F1Technical), mas com 1,8 o carro "derrapa muito, ficou sem aderência" (usuário, 03/11)
+                    // e a IA saía e batia sem parar no autoteste; 2,3 = a MÉDIA que o usuário pediu entre o carro (2,9) e a conta
+                    // antiga da IA (1,74). Vale para TODOS os monopostos (herdam esta base).
+                    forwardStiffness = 1.8f; sidewaysStiffness = 2.3f;
                     tractionControl = 0.35f; abs = 0.7f;
                     bodySize = new Vector3(1.9f, 0.8f, 5.0f);
                     wheelbase = 3.40f; trackWidth = 1.68f;

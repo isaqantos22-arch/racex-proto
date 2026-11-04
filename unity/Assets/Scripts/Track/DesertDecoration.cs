@@ -48,6 +48,10 @@ namespace RaceX.Track
                 placed++;
             }
 
+            // Árvore de deserto com FOTO (quiver tree do Poly Haven, impostor de 4 triângulos — v99) em metade dos 70 pontos;
+            // sem a foto no build, só cactos como antes.
+            var quiverMat = ForestDecoration.PhotoTreeMaterial("quiver_tree_02");
+            var quiver = ("quiver_tree_02", 1.47f, 0.019f);   // 1,47 m no modelo; base do tronco a 1,9% do quadro
             for (int c = 0; c < 70; c++)
             {
                 int i = rng.Next(spline.Count);
@@ -59,6 +63,12 @@ namespace RaceX.Track
                 float bodyR = 0.22f + (float)rng.NextDouble() * 0.18f;
                 float bodyH = 2f + (float)rng.NextDouble() * 2.5f;
                 Quaternion yaw = Quaternion.Euler(0f, (float)rng.NextDouble() * 360f, 0f);
+                if (quiverMat != null && c % 2 == 0)
+                {
+                    float k = 2.0f + (float)rng.NextDouble() * 1.2f;   // 3,0–4,7 m (quiver tree real: 3–5 m)
+                    ForestDecoration.PhotoTree(root, quiverMat, quiver, pos, yaw, k, "Quiver" + c);
+                    continue;
+                }
                 track.Static(PrimitiveType.Cylinder, "Cactus" + c, pos + Vector3.up * bodyH * 0.5f, yaw, new Vector3(bodyR, bodyH * 0.5f, bodyR), cactus, false).transform.SetParent(root, true);
                 int arms = 1 + rng.Next(2);
                 for (int a = 0; a < arms; a++)

@@ -381,7 +381,9 @@ namespace RaceX.Car
         void UpdateGearbox()
         {
             float throttle = inputLocked ? 0f : throttleInput;
-            float brake = inputLocked ? 0f : brakeInput;
+            // Sob a rota do pit só o freio EXTERNO conta (como acelerador e direção): a IA do próprio carro segue escrevendo
+            // brakeInput e, com o carro parado na garagem, engatava a ré e o segurava (v99: resgate 5 s após "liberado").
+            float brake = inputLocked ? 0f : pitControlled ? extBrake : brakeInput;
             float fwd = ForwardSpeed;
 
             // Ré só engata com o carro PRATICAMENTE PARADO (|v| < 0,8 m/s). Antes valia "fwd < 0,8" — incluía o carro já rolando de
@@ -497,8 +499,10 @@ namespace RaceX.Car
 
         void ApplyBrakes()
         {
-            float brake = inputLocked || wrecked ? 1f : (Gear < 0 ? 0f : brakeInput);
-            if (pitControlled) brake = Mathf.Max(brake, extBrake);
+            // Sob a rota do pit o freio vem SÓ da rota (extBrake). Antes era max(brakeInput, extBrake): a IA do carro (que continua
+            // pensando sob controle do pit) freava por "carro parado à frente" (o vizinho da garagem seguinte) enquanto a rota
+            // acelerava a 0,85 — o carro ficava parado na garagem até o resgate (autoteste e Sven Larsen, treinos R/S, 03/11).
+            float brake = inputLocked || wrecked ? 1f : pitControlled ? extBrake : (Gear < 0 ? 0f : brakeInput);
             // SAÍDA DE RÉ (regra do usuário): de ré a 50 km/h, ao acelerar a 1ª engata na hora
             // e o carro PARA quase que instantaneamente (freio 100% enquanto anda para trás com
             // pedal acionado) — nada de arrastar de ré por 10-15 s antes de lançar.
@@ -513,9 +517,19 @@ namespace RaceX.Car
             for (int i = 0; i < 4; i++)
             {
                 float t = (i <= FR ? front : rear) * brakeEff[i];
-                if (t > 0f && spec.abs > 0f && wheels[i].GetGroundHit(out WheelHit hit) && Mathf.Abs(hit.forwardSlip) > 0.45f)
+                if (t > 0f && spec.abs > 0f && wheels[i].GetGroundHit(out WheelHit hit))
                 {
-                    t *= 1f - 0.5f * spec.abs;
+                    // ABS (v99): segura a roda PERTO DO PICO de aderência — o torque de freio não passa de 95% do que o pneu
+                    // transmite (carga × atrito longitudinal × raio), como o controle de tração faz na aceleração. Antes só
+                    // tirava 35% do torque DEPOIS de a roda travar: o torque seguia ~4× acima da aderência, a roda ia para o
+                    // trecho de 50% da curva (deslizando) e o carro freava ~1 g com o pedal no fundo (medido 03/11: mediana
+                    // 9,7 m/s² acima de 100 km/h). F2 real: ~3,5 g freando (Pit Debrief).
+                    if (hit.force > 1f)
+                    {
+                        float gripTorque = hit.force * fwdStiff[i] * baseForward.extremumValue * wheels[i].radius * 0.95f;
+                        if (t > gripTorque) t = gripTorque;
+                    }
+                    if (Mathf.Abs(hit.forwardSlip) > 0.45f) t *= 1f - 0.5f * spec.abs;
                 }
                 lastBrakeTorque[i] = t;
                 if (i >= RL && handbrake && !inputLocked && !pitControlled) t = Mathf.Max(t, spec.handbrakeTorque);

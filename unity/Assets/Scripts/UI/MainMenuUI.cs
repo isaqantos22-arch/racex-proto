@@ -286,6 +286,7 @@ namespace RaceX.UI
             MenuTheme.StyledButton(s, "MainProgress", "PROGRESSO", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, ShowProgress);
             MenuTheme.StyledButton(s, "MainSettings", "CONFIGURAÇÕES", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, ShowSettings);
             MenuTheme.StyledButton(s, "MainRecords", "RECORDES", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, ShowRecords);
+            MenuTheme.StyledButton(s, "MainGlobal", "GLOBAL", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, ShowGlobal);
             MenuTheme.StyledButton(s, "MainAccount", "CONTA", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, ShowAccount);
             if (!Application.isMobilePlatform) MenuTheme.StyledButton(s, "MainQuit", "SAIR", top, top, new Vector2(-745f, startY - step * row++), bsize, 26, Application.Quit);
         }
@@ -1902,6 +1903,110 @@ namespace RaceX.UI
                 if (t > 0f && (best <= 0f || t < best)) { best = t; model = (int)m; }
             }
             return best;
+        }
+
+        // ======================= GLOBAL (v99): pilotos e recordes de todas as contas (GlobalBoard / Supabase) =======================
+        static int globalTrack;
+        static int globalRecTrack = -1;   // pista dos recordes que estão em cache
+        static System.Collections.Generic.List<GlobalBoard.Rec> globalRecs;
+        static System.Collections.Generic.List<GlobalBoard.PlayerRow> globalPlayers;
+        static string globalRecMsg = "", globalPlayersMsg = "";
+        static bool globalRecLoading, globalPlayersLoading;
+        static float globalPlayersAt = -999f;
+
+        void ShowGlobal()
+        {
+            back = ShowMain;
+            var s = NewScreen("GLOBAL");
+            ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.9f);
+            globalTrack = Mathf.Clamp(globalTrack, 0, TrackNames.Length - 1);
+            var c = new Vector2(0.5f, 0.5f);
+            var tl = new Vector2(0f, 1f);
+            var ml = new Vector2(0f, 0.5f);
+            var screen = s;
+            // Busca uma de cada vez; quando chega, a tela se refaz (se ainda estiver aberta). Em cache: não busca de novo.
+            if (globalRecTrack != globalTrack && !globalRecLoading)
+            {
+                globalRecLoading = true;
+                int want = globalTrack;
+                GlobalBoard.FetchTrack(want, (ok, list, msg) =>
+                {
+                    globalRecLoading = false; globalRecTrack = want; globalRecs = ok ? list : null; globalRecMsg = ok ? "" : msg;
+                    if (current == screen) ShowGlobal();
+                });
+            }
+            if (!globalPlayersLoading && Time.unscaledTime - globalPlayersAt > 60f)
+            {
+                globalPlayersLoading = true;
+                GlobalBoard.FetchPlayers((ok, list, msg) =>
+                {
+                    globalPlayersLoading = false; globalPlayersAt = Time.unscaledTime; globalPlayers = ok ? list : null; globalPlayersMsg = ok ? "" : msg;
+                    if (current == screen) ShowGlobal();
+                });
+            }
+
+            // PILOTOS: ranking das contas.
+            var left = UIFactory.Panel("GlobalPlayers", s, c, new Vector2(0.5f, 1f), new Vector2(ContentX - 380f, 380f), new Vector2(720f, 800f), new Color(0.05f, 0.06f, 0.09f, 0.94f));
+            left.sprite = MenuTheme.RoundedSprite(144, 160, 16);
+            var lrt = (RectTransform)left.transform;
+            UIFactory.Label("PTitle", lrt, "PILOTOS", 24, TextAnchor.MiddleLeft, tl, tl, new Vector2(24f, -16f), new Vector2(300f, 36f), MenuTheme.Accent);
+            UIFactory.Label("PHead", lrt, "VIT   PÓD   TÍT   CORR   REC", 18, TextAnchor.MiddleRight, tl, tl, new Vector2(300f, -16f), new Vector2(396f, 36f), MenuTheme.TextDim);
+            if (globalPlayers == null || globalPlayers.Count == 0)
+            {
+                string msg = globalPlayersLoading ? "CARREGANDO..." : globalPlayers != null ? "NENHUM PILOTO AINDA" : globalPlayersMsg.ToUpperInvariant();
+                var lab = UIFactory.Label("PMsg", lrt, msg, 22, TextAnchor.MiddleCenter, tl, tl, new Vector2(16f, -120f), new Vector2(688f, 200f), MenuTheme.TextDim);
+                lab.horizontalOverflow = HorizontalWrapMode.Wrap;
+            }
+            else
+            {
+                for (int i = 0; i < globalPlayers.Count && i < 12; i++)
+                {
+                    var p = globalPlayers[i];
+                    bool me = AccountClient.IsLoggedIn && p.name == AccountClient.Name;
+                    var row = UIFactory.Panel("PRow" + i, lrt, tl, tl, new Vector2(16f, -64f - i * 58f), new Vector2(688f, 52f), new Color(1f, 1f, 1f, i % 2 == 0 ? 0.05f : 0.02f));
+                    var rr = (RectTransform)row.transform;
+                    Color col = me ? Gold : MenuTheme.Text;
+                    UIFactory.Label("PN", rr, (i + 1) + ". " + (string.IsNullOrEmpty(p.name) ? "Jogador" : p.name), 21, TextAnchor.MiddleLeft, ml, ml, new Vector2(14f, 0f), new Vector2(300f, 48f), col);
+                    UIFactory.Label("PS", rr, p.wins + "     " + p.podiums + "     " + p.titles + "     " + p.races + "     " + p.records, 21, TextAnchor.MiddleRight, ml, ml, new Vector2(300f, 0f), new Vector2(370f, 48f), col);
+                }
+            }
+
+            // RECORDES da pista: melhor volta de cada conta com cada carro (física atual).
+            var card = UIFactory.Panel("GlobalRecs", s, c, new Vector2(0.5f, 1f), new Vector2(ContentX + 380f, 380f), new Vector2(700f, 800f), new Color(0.05f, 0.06f, 0.09f, 0.94f));
+            card.sprite = MenuTheme.RoundedSprite(140, 160, 16);
+            var crt = (RectTransform)card.transform;
+            MenuTheme.StyledButton(crt, "GPrev", "<", tl, tl, new Vector2(16f, -14f), new Vector2(64f, 52f), 30, () => { globalTrack = (globalTrack + TrackNames.Length - 1) % TrackNames.Length; ShowGlobal(); });
+            UIFactory.Label("GTrack", crt, TrackNames[globalTrack].ToUpperInvariant(), 28, TextAnchor.MiddleCenter, tl, tl, new Vector2(90f, -14f), new Vector2(520f, 52f), MenuTheme.Accent);
+            MenuTheme.StyledButton(crt, "GNext", ">", tl, tl, new Vector2(620f, -14f), new Vector2(64f, 52f), 30, () => { globalTrack = (globalTrack + 1) % TrackNames.Length; ShowGlobal(); });
+            UIFactory.Label("GSub", crt, "RECORDES DE VOLTA — TODOS OS JOGADORES", 18, TextAnchor.MiddleCenter, tl, tl, new Vector2(16f, -74f), new Vector2(668f, 28f), MenuTheme.TextDim);
+            bool fresh = globalRecTrack == globalTrack && !globalRecLoading;
+            if (!fresh || globalRecs == null || globalRecs.Count == 0)
+            {
+                string msg = !fresh ? "CARREGANDO..." : globalRecs != null ? "NENHUM RECORDE NESTA PISTA AINDA" : globalRecMsg.ToUpperInvariant();
+                var lab = UIFactory.Label("GMsg", crt, msg, 22, TextAnchor.MiddleCenter, tl, tl, new Vector2(16f, -160f), new Vector2(668f, 200f), MenuTheme.TextDim);
+                lab.horizontalOverflow = HorizontalWrapMode.Wrap;
+            }
+            else
+            {
+                for (int i = 0; i < globalRecs.Count && i < 12; i++)
+                {
+                    var r = globalRecs[i];
+                    bool me = AccountClient.IsLoggedIn && r.name == AccountClient.Name;
+                    var row = UIFactory.Panel("GRow" + i, crt, tl, tl, new Vector2(16f, -112f - i * 52f), new Vector2(668f, 46f), new Color(1f, 1f, 1f, i % 2 == 0 ? 0.05f : 0.02f));
+                    var rr = (RectTransform)row.transform;
+                    Color col = i == 0 ? Gold : me ? MenuTheme.Accent : MenuTheme.Text;
+                    string carName = string.IsNullOrEmpty(r.car_name) ? r.car : r.car_name;
+                    UIFactory.Label("GN", rr, (i + 1) + ". " + (string.IsNullOrEmpty(r.name) ? "Jogador" : r.name), 20, TextAnchor.MiddleLeft, ml, ml, new Vector2(12f, 0f), new Vector2(230f, 44f), col);
+                    UIFactory.Label("GC", rr, carName + (r.wet ? " (chuva)" : ""), 17, TextAnchor.MiddleLeft, ml, ml, new Vector2(246f, 0f), new Vector2(250f, 44f), MenuTheme.TextDim);
+                    UIFactory.Label("GT", rr, HUD.FormatTime(r.lap_ms / 1000f), 20, TextAnchor.MiddleRight, ml, ml, new Vector2(500f, 0f), new Vector2(156f, 44f), col);
+                }
+            }
+            string hint = AccountClient.IsLoggedIn ? "Suas voltas LIMPAS (sem sair da pista, bater ou box) entram aqui"
+                                                   : "Entre na CONTA para suas voltas aparecerem aqui";
+            UIFactory.Label("GHint", crt, hint, 17, TextAnchor.MiddleCenter, tl, tl, new Vector2(16f, -748f), new Vector2(668f, 40f), MenuTheme.TextDim);
+            MenuTheme.StyledButton(s, "GRefresh", "ATUALIZAR", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(ContentX + 400f, 24f), new Vector2(300f, 70f), 26,
+                () => { globalRecTrack = -1; globalPlayersAt = -999f; ShowGlobal(); });
+            MenuTheme.StyledButton(s, "Back", "VOLTAR", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(ContentX, 24f), new Vector2(380f, 70f), 28, ShowMain);
         }
 
         // ======================= SOBRE (saiu do menu principal; abre por CONFIGURAÇÕES) =======================

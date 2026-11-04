@@ -324,6 +324,15 @@ namespace RaceX.Car
             if (lim.total > 0f && g >= lim.total)
             {
                 RetireReason = zone < TotalWhy.Length ? TotalWhy[zone] : "";
+                // Diagnóstico (v99): contra o QUE bateu, a que velocidade e o que a IA fazia — para achar a causa das perdas totais.
+                var ai = car.Ai;
+                // vImpacto: a velocidade perpendicular do choque (g = v⊥²/9,81; carro×carro conta metade); "depois" é a velocidade já
+                // depois do choque (o registro é feito com a colisão resolvida).
+                float vImp = Mathf.Sqrt(g * 9.81f * (otherCar != null ? 2f : 1f)) * 3.6f;
+                string ptCause = "PT-CAUSA " + car.name + " contra=" + (otherCar != null ? otherCar.name : wall ? "MURO" : "OBJETO")
+                             + " vImpacto=" + vImp.ToString("0") + "km/h depois=" + car.SpeedKmh.ToString("0") + "km/h g=" + g.ToString("0")
+                             + " zona=" + zone + (ai != null ? " ia=" + ai.Diag() : "");
+                if (RaceX.Core.AutoTest.Active) RaceX.Core.AutoTest.Log(ptCause); else Debug.Log("[DANO] " + ptCause);
                 Total(zone, worldPoint);
                 return;
             }

@@ -41,13 +41,21 @@ namespace RaceX.Track
             Spline = TrackSpline.Build(def.controlPoints, def.targetLength);
 
             float half = def.roadWidth * 0.5f;
-            var road = MaterialLibrary.GetPbr("Asphalt_" + def.id, def.asphaltColor, 0f, def.asphaltSmoothness);
-            var roadDark = MaterialLibrary.GetPbr("AsphaltDark_" + def.id, def.asphaltColor * 0.96f, 0f, def.asphaltSmoothness);
+            // v99 (pedido do usuário: "grama e asfalto que pareçam reais"): texturas PBR reais do Poly Haven (CC0, 1k) no asfalto e na
+            // grama — a cor da pista vira TINTA sobre a foto (nunca quebra o carregamento: sem textura volta à cor lisa).
+            var road = Textured("AsphaltTex_" + def.id, "asphalt_track_diff_1k", Color.white * 0.9f, def.asphaltSmoothness)
+                       ?? MaterialLibrary.GetPbr("Asphalt_" + def.id, def.asphaltColor, 0f, def.asphaltSmoothness);
+            var roadDark = Textured("AsphaltTexDark_" + def.id, "asphalt_track_diff_1k", Color.white * 0.84f, def.asphaltSmoothness)
+                           ?? MaterialLibrary.GetPbr("AsphaltDark_" + def.id, def.asphaltColor * 0.96f, 0f, def.asphaltSmoothness);
             var kerbRed = MaterialLibrary.Get("KerbRed", new Color(0.8f, 0.08f, 0.08f), 0.4f);
             var kerbWhite = MaterialLibrary.Get("KerbWhite", new Color(0.92f, 0.92f, 0.92f), 0.4f);
             var line = MaterialLibrary.Get("RoadLine", new Color(0.95f, 0.95f, 0.95f), 0.4f);
-            var grassA = MaterialLibrary.Get("GrassA_" + def.id, def.grassBandA, 0.1f);
-            var grassB = MaterialLibrary.Get("GrassB_" + def.id, def.grassBandB, 0.1f);
+            // Grama com foto real só onde a área de escape É grama (deserto/areia mantêm a cor); duas tintas para as faixas de corte.
+            bool realGrass = def.runoffSurface == SurfaceType.Grass;
+            var grassA = (realGrass ? Textured("GrassTexA_" + def.id, "leafy_grass_diff_1k", new Color(0.95f, 1f, 0.9f), 0.05f) : null)
+                         ?? MaterialLibrary.Get("GrassA_" + def.id, def.grassBandA, 0.1f);
+            var grassB = (realGrass ? Textured("GrassTexB_" + def.id, "leafy_grass_diff_1k", new Color(0.82f, 0.9f, 0.78f), 0.05f) : null)
+                         ?? MaterialLibrary.Get("GrassB_" + def.id, def.grassBandB, 0.1f);
             var ground = MaterialLibrary.Get("Ground_" + def.id, def.groundColor, 0.05f);
             var armco = MaterialLibrary.GetPbr("Armco", new Color(0.8f, 0.81f, 0.83f), 0.7f, 0.5f);
 
@@ -59,7 +67,8 @@ namespace RaceX.Track
             AddKerbs(half, half + def.kerbWidth, kerbRed, kerbWhite, "KerbR");
             AddStripBanded("RunoffL", -half - def.kerbWidth - def.runoffWidth, -half - def.kerbWidth, 0.02f, grassA, grassB, def.runoffSurface, true, 6);
             AddStripBanded("RunoffR", half + def.kerbWidth, half + def.kerbWidth + def.runoffWidth, 0.02f, grassA, grassB, def.runoffSurface, true, 6);
-            AddZebras();
+            // v99 (03/11, pedido do usuário): sem as "zebras" na largura toda da pista (blocos vermelho/branco a cada 8 m em toda
+            // curva — AddZebras). Pista real só tem zebra nas bordas (AddKerbs).
             float wallOffset = half + def.kerbWidth + def.runoffWidth;
             AddWall("BarrierL", -wallOffset, armco);
             AddWall("BarrierR", wallOffset, armco);
@@ -71,21 +80,27 @@ namespace RaceX.Track
             Checkpoints.Initialize(this, BuildCheckpoints(wallOffset));
             PlanPit(wallOffset);
 
-            switch (def.id)
+            // Decoração nunca pode quebrar o carregamento (regra do projeto): qualquer exceção aqui só tira o cenário.
+            try
             {
-                case TrackId.DesertCanyon:
-                case TrackId.GolfoReal: DesertDecoration.Build(this, wallOffset); break;
-                case TrackId.NightCity:
-                case TrackId.Principado:
-                case TrackId.JardimDaBaia:
-                case TrackId.CornicheDaNoite:
-                case TrackId.PortoSul:
-                case TrackId.IlhaDasCascatas:
-                case TrackId.Fortaleza:
-                case TrackId.EstadioCentral:
-                case TrackId.NeonStrip: CityDecoration.Build(this, wallOffset); break;
-                default: ForestDecoration.Build(this, wallOffset); break;
+                switch (def.id)
+                {
+                    case TrackId.DesertCanyon:
+                    case TrackId.GolfoReal: DesertDecoration.Build(this, wallOffset); break;
+                    case TrackId.NightCity:
+                    case TrackId.Principado:
+                    case TrackId.JardimDaBaia:
+                    case TrackId.CornicheDaNoite:
+                    case TrackId.PortoSul:
+                    case TrackId.IlhaDasCascatas:
+                    case TrackId.Fortaleza:
+                    case TrackId.EstadioCentral:
+                    case TrackId.NeonStrip: CityDecoration.Build(this, wallOffset); break;
+                    default: ForestDecoration.Build(this, wallOffset); break;
+                }
             }
+            catch (System.Exception ex) { Debug.LogWarning("[Track] decoracao ignorada: " + ex.Message); }
+            NightLighting.Build(this, wallOffset);   // v99: postes com luz nas pistas noturnas (sol fraco)
             try { ClearPitZoneDecoration(); }
             catch (System.Exception ex) { Debug.LogWarning("[Track] limpeza da area do pit ignorada: " + ex.Message); }
             try { CombineDecoration(); }
@@ -168,6 +183,20 @@ namespace RaceX.Track
                 }
             }
             return CreateMeshObject(name, verts, uvs, tris, mat, surface, collider);
+        }
+
+        /// <summary>Material com FOTO (Resources/Env/Textures/&lt;res&gt;) e tinta; null se a textura não existir no build (quem chama cai na
+        /// cor lisa). As faixas da pista têm UV v = distância ÷ largura: 1 repetição = 1 largura (~12 m no asfalto, 9 m na grama).</summary>
+        static Material Textured(string key, string res, Color tint, float smoothness)
+        {
+            try
+            {
+                var tex = Resources.Load<Texture2D>("Env/Textures/" + res);
+                if (tex == null) return null;
+                var m = MaterialLibrary.Get(key, tint, smoothness, 0f, null, tex);
+                return m;
+            }
+            catch (System.Exception ex) { Debug.LogWarning("[Track] textura " + res + ": " + ex.Message); return null; }
         }
 
         GameObject AddStripBanded(string name, float from, float to, float height, Material matA, Material matB, SurfaceType surface, bool collider, int bandSegments)

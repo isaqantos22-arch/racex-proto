@@ -269,6 +269,8 @@ namespace RaceX.Core
             // libera conjuntos cujo carro saiu da lista (exceto os que estão terminando a saída)
             foreach (var s in sets)
                 if (s.Car != null && !s.Leaving && !candidates.Contains(s.Car)) s.Release();
+            // v99 (pedido do usuário): UM box por carro, equipe do companheiro no box vizinho — cada carro tem a sua equipe, inclusive
+            // ao lado do jogador. A regra antiga "box vizinho do jogador sem equipe" foi desfeita.
             foreach (var c in candidates)
             {
                 bool has = false;
@@ -277,7 +279,9 @@ namespace RaceX.Core
                 // UMA equipe por box: com os dois carros da equipe no box ("double stack"), a do 1º carro ainda saindo é
                 // dispensada quando o 2º chega; se o 1º ainda está parado, o 2º espera atrás (PitLaneSystem) sem equipe
                 // própria. Antes surgiam duas equipes sobrepostas, uma com a cor do outro carro.
-                int box = PitLaneSystem.BoxIndexOf(c);
+                // UMA equipe por grupo: no treino o grupo é o próprio box (um carro); na corrida é a dupla da equipe (marca única,
+                // double stack: a equipe do 1º carro ainda saindo é dispensada quando o 2º chega).
+                int box = PitLaneSystem.CrewGroupOf(c);
                 bool busy = false;
                 foreach (var s in sets)
                 {
@@ -611,7 +615,7 @@ namespace RaceX.Core
         void Prepare(CarController car, Color team)
         {
             Car = car;
-            Box = PitLaneSystem.BoxIndexOf(car);
+            Box = PitLaneSystem.CrewGroupOf(car);
             for (int i = 0; i < Count; i++) dodge[i] = Vector3.zero;
             leaveT = 0f; idleT = 0f; lightState = -1; lastT = -1f;
             garageStop = PitLaneSystem.PracticeSession;
@@ -717,17 +721,20 @@ namespace RaceX.Core
                 waitPos[Off + i] = L(wl[i].x + s * 0.95f, wl[i].z + (front ? 0.6f : -0.6f));
                 // pneu velho: lado da garagem (esquerdo) vai para a boca da garagem; lado da faixa rápida vai para o meio
                 // do carro, encostado — nunca para a faixa rápida
-                workPos[Off + i] = s < 0f ? L(wl[i].x - 2.6f, wl[i].z + (front ? 1.0f : -1.0f)) : L(wl[i].x + 1.6f, midZ + (front ? 0.9f : -0.9f));
+                // v99: lado da garagem mais compacto (2,6 → 1,9 m): com boxes de ~10 m e o carro a 45°, os mecânicos atravessavam a
+                // parede do box vizinho (relato do usuário, 03/11).
+                workPos[Off + i] = s < 0f ? L(wl[i].x - 1.5f, wl[i].z + (front ? 1.0f : -1.0f)) : L(wl[i].x + 1.6f, midZ + (front ? 0.9f : -0.9f));
                 waitPos[On + i] = L(wl[i].x + s * (s > 0f ? 1.45f : 1.8f), wl[i].z + (front ? -0.55f : 0.55f));
                 workPos[On + i] = L(wl[i].x + s * 0.95f, wl[i].z + (front ? -0.45f : 0.45f));
             }
-            waitPos[JackF] = L(0f, frontZ + 2.0f); workPos[JackF] = L(-halfTrack - 1.6f, frontZ + 1.3f);   // sai da frente para o lado da garagem
-            waitPos[JackR] = L(0f, rearZ - 1.7f); workPos[JackR] = waitPos[JackR];
+            // v99: formação mais junta (a garagem tem ~10 m e dois carros a 45°: a equipe entrava nas paredes — relato do usuário).
+            waitPos[JackF] = L(0f, frontZ + 1.5f); workPos[JackF] = L(-halfTrack - 0.8f, frontZ + 0.9f);   // sai da frente para o lado da garagem
+            waitPos[JackR] = L(0f, rearZ - 1.2f); workPos[JackR] = waitPos[JackR];
             waitPos[StabL] = L(-halfTrack - 0.7f, midZ + 0.25f); workPos[StabL] = waitPos[StabL];
             waitPos[StabR] = L(halfTrack + 0.7f, midZ + 0.25f); workPos[StabR] = waitPos[StabR];
-            waitPos[Light] = L(-3.6f, frontZ + 1.9f); workPos[Light] = waitPos[Light];
-            waitPos[NoseA] = L(-1.25f, frontZ + 1.25f); workPos[NoseA] = L(-2.9f, frontZ + 2.0f);
-            waitPos[NoseB] = L(1.7f, frontZ + 1.9f); workPos[NoseB] = L(0.75f, frontZ + 1.3f);
+            waitPos[Light] = L(-1.8f, frontZ + 1.3f); workPos[Light] = waitPos[Light];
+            waitPos[NoseA] = L(-1.25f, frontZ + 1.25f); workPos[NoseA] = L(-1.8f, frontZ + 1.4f);
+            waitPos[NoseB] = L(1.3f, frontZ + 1.4f); workPos[NoseB] = L(0.75f, frontZ + 1.3f);
             gantry.transform.SetPositionAndRotation(W(0f, frontZ + 1.4f), Quaternion.LookRotation(pose.rotation * Vector3.forward, Vector3.up));
         }
 

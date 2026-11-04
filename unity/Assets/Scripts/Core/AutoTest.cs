@@ -62,6 +62,11 @@ namespace RaceX.Core
 
         /// <summary>Previsão forçada pelo teste (null = usar a normal).</summary>
         public static string Weather => Active ? Get("weather", "") : "";
+        /// <summary>stylerecord=1: as voltas do piloto automático gravam o ESTILO (arquivo do teste) — exercita o caminho
+        /// gravar → IA usar sem precisar de alguém jogando.</summary>
+        public static bool StyleFromAutopilot => Active && GetInt("stylerecord", 0) == 1;
+        /// <summary>f2spec=1: todos os fórmulas da corrida de teste com o carro único da F2 (CarSpec.ApplyF2Spec), como na carreira.</summary>
+        public static bool F2Spec => Active && GetInt("f2spec", 0) == 1;
 
         /// <summary>Chamado pelo menu principal: lança a corrida de teste UMA vez por execução.</summary>
         public static bool TryLaunchFromMenu(MonoBehaviour host)
@@ -313,6 +318,8 @@ namespace RaceX.Core
         int scPtUnder, scContacts, scOvertakePen, maxStack, npcBrakeStart;
         bool scWas, pipWas, scHeightDone, garageDone, finishSeen;
         float scStartT = -1f, finishT = -1f, startT = -1f, minPitGrip = 1f, maxUpV, exitWatchT = -1f, exitStillT;
+        readonly Dictionary<CarController, float> brakePrevV = new Dictionary<CarController, float>(), brakePrevT = new Dictionary<CarController, float>();
+        readonly List<float> brakeSamples = new List<float>();
         int scStartLap, exitStops, escape0, passed0, sessionFastShots;
         float sessionFastest;
         readonly List<KeyValuePair<float, string>> pendingShots = new List<KeyValuePair<float, string>>();
@@ -365,6 +372,19 @@ namespace RaceX.Core
             t0 = Time.time;
             AutoTest.Log("inicio pista=" + race.Settings.track + " carros=" + race.entries.Count + " autopiloto=" + (pilot != null) + " skid_shader=" + SkidMarks.ShaderName
                 + " clima=" + (WeatherSystem.Active ? WeatherSystem.StatusText() : "sem"));
+            // v99 (pedido do usuário: "verifique se todos estão com carros iguais"): física de cada carro, agrupada.
+            var specs = new Dictionary<string, List<string>>();
+            foreach (var e in race.entries)
+            {
+                var sp = e.car != null ? e.car.spec : null;
+                if (sp == null) continue;
+                string key = "aderencia=" + sp.sidewaysStiffness.ToString("0.00") + " freio=" + sp.forwardStiffness.ToString("0.00")
+                             + " apoio=" + sp.downforceCoefficient.ToString("0.00") + " massa=" + sp.massKg.ToString("0")
+                             + " torque=" + sp.maxTorqueNm.ToString("0") + " vmax=" + sp.topSpeedKmh.ToString("0");
+                if (!specs.TryGetValue(key, out var names)) specs[key] = names = new List<string>();
+                names.Add(e.name);
+            }
+            foreach (var kv in specs) AutoTest.Log("CARROS " + kv.Value.Count + "x " + kv.Key + " (" + string.Join(", ", kv.Value) + ")");
         }
 
         void V82Checks(CarController car)
@@ -391,6 +411,19 @@ namespace RaceX.Core
                     }
                 }
                 if (stack > maxStack) { maxStack = stack; if (stack > 0) { AutoTest.Log("FISICA carro em cima de outro: " + stack); ShotIn(0.1f, "fisica_empilhado"); } }
+                // v99: FREADA REAL que o carro entrega (pedal ≥ 90%, acima de 100 km/h, em qualquer carro) — calibra o plano da IA.
+                for (int i = 0; i < race.entries.Count; i++)
+                {
+                    var c = race.entries[i].car; if (c == null) continue;
+                    float v = c.ForwardSpeed;
+                    if (brakePrevT.TryGetValue(c, out float pt) && brakePrevV.TryGetValue(c, out float pv) && c.brakeInput >= 0.9f && pv > 28f
+                        && now - pt > 0.05f && now - pt < 0.4f && !c.pitControlled && c.GroundedWheels == 4)
+                    {
+                        float dec = (pv - v) / (now - pt);
+                        if (dec > 0f && dec < 80f && brakeSamples.Count < 20000) brakeSamples.Add(dec);
+                    }
+                    brakePrevV[c] = v; brakePrevT[c] = now;
+                }
             }
             // [15][16][17] safety car
             bool scNow = SafetyCar.Deployed;
@@ -429,7 +462,8 @@ namespace RaceX.Core
                 if (now - exitWatchT < 15f && PitLaneSystem.IsInPitFlow(car))
                 {
                     if (car.SpeedKmh < 2f) exitStillT += Time.deltaTime; else exitStillT = 0f;
-                    if (exitStillT > 1.5f) { exitStops++; exitStillT = -999f; AutoTest.Log("SAIDA DO BOX: carro parado no corredor"); ShotIn(0.1f, "saida_parado"); }
+                    // v99: 1,5 → 4 s — a liberação segura (faixa rápida/quem vem no corredor) leva ~3 s e não é travamento.
+                    if (exitStillT > 4f) { exitStops++; exitStillT = -999f; AutoTest.Log("SAIDA DO BOX: carro parado no corredor"); ShotIn(0.1f, "saida_parado"); }
                 }
                 else exitWatchT = -1f;
             }
@@ -716,6 +750,24 @@ namespace RaceX.Core
 
             if (Time.time - t0 > minutes * 60f || race.State == RaceState.Finished)
             {
+                // v99: ritmo da IA (melhor volta de cada carro) e freada medida — base para comparar com o jogador.
+                var bests = new List<KeyValuePair<string, float>>();
+                foreach (var e in race.entries)
+                    if (e != null && e != me && e.bestLap > 10f) bests.Add(new KeyValuePair<string, float>(e.name, e.bestLap));
+                bests.Sort((a, b) => a.Value.CompareTo(b.Value));
+                var bl = new StringBuilder("MELHORES IA (" + bests.Count + "):");
+                foreach (var kv in bests) bl.Append(' ').Append(kv.Key.Replace(' ', '_')).Append('=').Append(kv.Value.ToString("0.000"));
+                AutoTest.Log(bl.ToString());
+                if (bests.Count > 0)
+                    AutoTest.Log("RITMO IA melhor=" + bests[0].Value.ToString("0.000") + " mediana=" + bests[bests.Count / 2].Value.ToString("0.000")
+                        + " pior=" + bests[bests.Count - 1].Value.ToString("0.000") + " jogador(autopiloto)=" + me.bestLap.ToString("0.000"));
+                if (brakeSamples.Count > 0)
+                {
+                    brakeSamples.Sort();
+                    AutoTest.Log("FREADA medida (pedal>=90%, >100 km/h): mediana=" + brakeSamples[brakeSamples.Count / 2].ToString("0.0")
+                        + " p90=" + brakeSamples[(int)(brakeSamples.Count * 0.9f)].ToString("0.0") + " max=" + brakeSamples[brakeSamples.Count - 1].ToString("0.0")
+                        + " m/s2 amostras=" + brakeSamples.Count);
+                }
                 // v89: zigue-zague na reta (reversões ≥ 0,5 m acima de 108 km/h, fora da fila do SC) por km de reta e por motivo.
                 float kmP = CarAI.ZigDistPlayer / 1000f, kmN = CarAI.ZigDistNpc / 1000f;
                 var zr = new StringBuilder();

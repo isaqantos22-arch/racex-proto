@@ -33,6 +33,11 @@ namespace RaceX.Core
         static string refreshToken;
         static bool busy;
 
+        // Aba GLOBAL (GlobalBoard): mesmo projeto Supabase e mesma sessão.
+        internal static string RestUrl => SupabaseUrl + "/rest/v1";
+        internal static string PublicKey => AnonKey;
+        internal static string AccessToken => accessToken;
+
         public static void RestoreSession()
         {
             accessToken = PlayerPrefs.GetString(KeyAccess, "");
