@@ -1194,7 +1194,9 @@ namespace RaceX.UI
             for (int r = 0; r < LapsPerPage && first + r < laps.Count; r++)
             {
                 var l = laps[first + r];
-                float y = -150f - r * 46f;
+                // 12 linhas de 44 px a partir de −142: a última acaba a 156 px do rodapé, acima da legenda (90–118 px).
+                // Com 46 px a partir de −150 a 12ª linha descia até 104 px e as letras da legenda ficavam em cima da tabela.
+                float y = -142f - r * 44f;
                 var rowBg = UIFactory.Panel("Row" + r, brt, top, top, new Vector2(0f, y), new Vector2(1220f, 40f), new Color(1f, 1f, 1f, r % 2 == 0 ? 0.05f : 0.02f));
                 rowBg.raycastTarget = false;
                 UIFactory.Label("N" + r, brt, l.lapNo.ToString(), 24, TextAnchor.MiddleCenter, top, top, new Vector2(colX[0], y), new Vector2(200f, 40f), MenuTheme.Text);

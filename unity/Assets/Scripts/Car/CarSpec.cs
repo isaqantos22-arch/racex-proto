@@ -72,6 +72,30 @@ namespace RaceX.Car
         public float wheelMass = 20f;
         public float forwardStiffness = 1.5f;
         public float sidewaysStiffness = 1.6f;
+        /// <summary>v100: perda de atrito com a carga, µ = µ0·(Fz/Fz0)^−expoente, Fz0 = peso por roda (0 = desligado, GT).
+        /// Slick de corrida: expoente ~0,20 (pesquisa 04/11, reports/Forças G e aderência F1 F2.md). Sem ela o apoio virava
+        /// aderência 1:1 e toda curva acima de ~138 m de raio era de pé embaixo em qualquer velocidade.</summary>
+        public float tyreLoadSensitivity;
+        /// <summary>v100: teto de aceleração lateral e de freada (g) da categoria (0 = sem teto). F2: 3,9/3,5 g; F1 2026: 6,0/4,0 g.</summary>
+        public float lateralCapG, brakeCapG;
+
+        /// <summary>Fator de atrito de uma roda com carga fz (N), sendo fz0 a carga estática por roda (peso/4).</summary>
+        public float TyreLoadFactor(float fz, float fz0)
+        {
+            if (tyreLoadSensitivity <= 0f || fz0 <= 1f) return 1f;
+            return Mathf.Pow(Mathf.Max(fz / fz0, 0.25f), -tyreLoadSensitivity);
+        }
+
+        /// <summary>Aceleração máxima (m/s²) que o pneu dá na velocidade v: µ0 × fator de carga × (peso + apoio·v²) / massa,
+        /// limitada pelo teto da categoria. MESMA lei que o CarController aplica nas rodas — a IA planeja por aqui.</summary>
+        public float GripAccel(float mu0, float v, float mass, float aeroShare, float capG)
+        {
+            float m = mass > 50f ? mass : Mathf.Max(50f, massKg);
+            float w = m * 9.81f;
+            float fz = w + Mathf.Max(0f, downforceCoefficient) * aeroShare * v * v;
+            float a = mu0 * TyreLoadFactor(fz * 0.25f, w * 0.25f) * fz / m;
+            return capG > 0f ? Mathf.Min(a, capG * 9.81f) : a;
+        }
 
         [Header("Geometria")]
         public Vector3 bodySize = new Vector3(1.8f, 1.3f, 4.3f);
@@ -171,7 +195,16 @@ namespace RaceX.Car
         /// usuário entre o carro (100% do apoio) e a conta antiga da IA (55%). Referência real: F1 tem picos de ~6 g nas curvas
         /// mais rápidas (Silverstone 2016, Maggots 6,1 g — telemetria via The Drive) e ~2 g nas lentas; com pneu 2,3 o F1 2022
         /// do jogo (4,0 × 0,78) fica ACIMA disso em alta (escolha de jogabilidade, não medição).</summary>
-        const float FormulaAeroScale = 0.78f;
+        // v100 (04/11, pedido do usuário: "sempre tudo de 2026"): apoio do F1 2026. Referência 2022–25 em alta carga: CL·A ~5 ×
+        // ½ρ → k ≈ 4,5 (Mercedes: apoio = peso a ~150 km/h; Symonds). Regra 2026: −30% de apoio e −55% de arrasto (FIA, via
+        // ESPN/F1 Chronicle). 4,5 × 0,70 = 3,15 para o modelo de referência (downforce 4,0 em DataFor) → escala 0,7875. Este é o
+        // nível de ALTA carga; a pista aplica o próprio nível (TrackLibrary.F1AeroLevel: Monza 0,67 ... Mônaco 1,0).
+        const float FormulaAeroScale = 4.5f * 0.70f / 4.0f;
+        /// <summary>Pneu do F1 2026: µ0 lateral 1,70 e longitudinal 1,65 (pesquisa 04/11). Pirelli 2026: 25 mm mais estreito na
+        /// frente e 30 mm atrás "com perda mínima de aderência" (Autosport/The Race) — mantido o µ0 do relatório.</summary>
+        public const float F1MuLat = 1.70f, F1MuLong = 1.65f, F1CapLatG = 6.0f, F1CapBrakeG = 4.0f;
+        public const float F2MuLat = 1.60f, F2MuLong = 1.55f, F2CapLatG = 3.9f, F2CapBrakeG = 3.5f;
+        public const float SlickLoadSensitivity = 0.20f;
 
         /// <summary>Física do monoposto a partir dos dados reais. O jogo foi calibrado no F1 2022 (340 Nm
         /// "de jogo" ≈ 1000 cv): a potência entra em PROPORÇÃO a ele; peso e velocidade máxima são diretos.</summary>
@@ -211,6 +244,8 @@ namespace RaceX.Car
             massKg = F2MassKg;
             topSpeedKmh = F2TopKmh;
             downforceCoefficient = F2Downforce;
+            sidewaysStiffness = F2MuLat; forwardStiffness = F2MuLong;
+            tyreLoadSensitivity = SlickLoadSensitivity; lateralCapG = F2CapLatG; brakeCapG = F2CapBrakeG;
             gearRatios = ComputeGearRatios(8, topSpeedKmh, rpmLimit, wheelRadius, 3.2f);
             zeroToHundredSeconds = Mathf.Clamp(2.6f * (F2MassKg / 798f) / (F2Hp / 1000f), 2.4f, 4.5f); // estimativa (peso/potência)
         }
@@ -487,7 +522,10 @@ namespace RaceX.Car
                     // de uma corrida, fórum F1Technical), mas com 1,8 o carro "derrapa muito, ficou sem aderência" (usuário, 03/11)
                     // e a IA saía e batia sem parar no autoteste; 2,3 = a MÉDIA que o usuário pediu entre o carro (2,9) e a conta
                     // antiga da IA (1,74). Vale para TODOS os monopostos (herdam esta base).
-                    forwardStiffness = 1.8f; sidewaysStiffness = 2.3f;
+                    // v100 (04/11): pneu realista — µ0 1,70/1,65 com perda pela carga (expoente 0,20) e tetos 6,0/4,0 g do F1 2026.
+                    // Antes µ 2,3 fixo: 4,6 g a 200 km/h e toda curva rápida de pé (pesquisa: F2 real ~2,8 g a 200 km/h).
+                    forwardStiffness = F1MuLong; sidewaysStiffness = F1MuLat;
+                    tyreLoadSensitivity = SlickLoadSensitivity; lateralCapG = F1CapLatG; brakeCapG = F1CapBrakeG;
                     tractionControl = 0.35f; abs = 0.7f;
                     bodySize = new Vector3(1.9f, 0.8f, 5.0f);
                     wheelbase = 3.40f; trackWidth = 1.68f;

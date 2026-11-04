@@ -320,6 +320,9 @@ namespace RaceX.Core
         float scStartT = -1f, finishT = -1f, startT = -1f, minPitGrip = 1f, maxUpV, exitWatchT = -1f, exitStillT;
         readonly Dictionary<CarController, float> brakePrevV = new Dictionary<CarController, float>(), brakePrevT = new Dictionary<CarController, float>();
         readonly List<float> brakeSamples = new List<float>();
+        // v100: g lateral REAL por faixa de 25 km/h (v × guinada, 4 rodas no chão, sem contato) — compara com a tabela do relatório.
+        readonly List<float>[] latBands = new List<float>[14];
+        int capLatSamples, capBrakeSamples, capTotalSamples;
         int scStartLap, exitStops, escape0, passed0, sessionFastShots;
         float sessionFastest;
         readonly List<KeyValuePair<float, string>> pendingShots = new List<KeyValuePair<float, string>>();
@@ -423,6 +426,16 @@ namespace RaceX.Core
                         if (dec > 0f && dec < 80f && brakeSamples.Count < 20000) brakeSamples.Add(dec);
                     }
                     brakePrevV[c] = v; brakePrevT[c] = now;
+                    if (c.GroundedWheels == 4 && !c.pitControlled && c.Body != null && v > 14f)
+                    {
+                        float aLat = Mathf.Abs(v * c.Body.angularVelocity.y) / 9.81f;
+                        int band = Mathf.Clamp((int)(v * 3.6f / 25f), 0, latBands.Length - 1);
+                        if (latBands[band] == null) latBands[band] = new List<float>();
+                        if (aLat < 9f && latBands[band].Count < 20000) latBands[band].Add(aLat);
+                        capTotalSamples++;
+                        if (c.LateralCapActive) capLatSamples++;
+                        if (c.BrakeCapActive) capBrakeSamples++;
+                    }
                 }
             }
             // [15][16][17] safety car
@@ -768,6 +781,19 @@ namespace RaceX.Core
                         + " p90=" + brakeSamples[(int)(brakeSamples.Count * 0.9f)].ToString("0.0") + " max=" + brakeSamples[brakeSamples.Count - 1].ToString("0.0")
                         + " m/s2 amostras=" + brakeSamples.Count);
                 }
+                var gl = new StringBuilder("G LATERAL p95/max por faixa (km/h):");
+                for (int bnd = 0; bnd < latBands.Length; bnd++)
+                {
+                    var lb = latBands[bnd]; if (lb == null || lb.Count < 20) continue;
+                    lb.Sort();
+                    gl.Append(' ').Append(bnd * 25).Append('-').Append(bnd * 25 + 25).Append('=')
+                      .Append(lb[(int)(lb.Count * 0.95f)].ToString("0.00")).Append('/').Append(lb[lb.Count - 1].ToString("0.00")).Append('g');
+                }
+                AutoTest.Log(gl.ToString());
+                if (capTotalSamples > 0)
+                    AutoTest.Log("TETO de g ativo: lateral " + (100f * capLatSamples / capTotalSamples).ToString("0.0") + "% freada "
+                        + (100f * capBrakeSamples / capTotalSamples).ToString("0.0") + "% das amostras");
+                AutoTest.Log("SAIDAS DE FRENTE corrigidas pela IA: " + CarAI.UndersteerEvents);
                 // v89: zigue-zague na reta (reversões ≥ 0,5 m acima de 108 km/h, fora da fila do SC) por km de reta e por motivo.
                 float kmP = CarAI.ZigDistPlayer / 1000f, kmN = CarAI.ZigDistNpc / 1000f;
                 var zr = new StringBuilder();

@@ -53,7 +53,7 @@ namespace RaceX.Car
         /// <summary>Muda a cada volta gravada: a IA troca de perfil no meio da sessão (o jogador melhorou no treino).</summary>
         public static int Version { get; private set; }
 
-        static string FilePath => Path.Combine(Application.persistentDataPath, AutoTest.Active ? "player_style_autotest.json" : "player_style.json");
+        static string FilePath => Path.Combine(Application.persistentDataPath, AutoTest.Active ? "player_style3_autotest.json" : "player_style3.json");
 
         static Store Data
         {

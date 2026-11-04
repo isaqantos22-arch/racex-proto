@@ -54,6 +54,20 @@ namespace RaceX.Car
         WheelFrictionCurve baseForward, baseSideways;
         readonly float[] wheelGrip = { 1f, 1f, 1f, 1f };
         readonly float[] fwdStiff = { 1f, 1f, 1f, 1f };
+        readonly float[] sideStiff = { 1f, 1f, 1f, 1f };
+        readonly float[] wheelLoadMul = { 1f, 1f, 1f, 1f };
+        readonly float[] wheelFz = { 0f, 0f, 0f, 0f };
+        /// <summary>v100: o teto lateral/de freada da categoria está limitando agora (telemetria do autoteste).</summary>
+        public bool LateralCapActive { get; private set; }
+        public bool BrakeCapActive { get; private set; }
+        /// <summary>v100: escorregamento lateral médio (WheelHit.sidewaysSlip) das rodas da frente / de trás, e o pico da curva.</summary>
+        public float FrontSideSlip { get; private set; }
+        public float RearSideSlip { get; private set; }
+        public float SidePeakSlip => baseSideways.extremumSlip * sideSlipScale;
+        float sideSlipScale = 1f;
+        const bool UseSideSlipScale = false;
+        /// <summary>v100: fator médio de perda de atrito pela carga nas rodas no chão (1 = sem perda).</summary>
+        public float AvgLoadMul { get { float t = 0f; int n = 0; for (int i = 0; i < 4; i++) if (wheelFz[i] > 0f) { t += wheelLoadMul[i]; n++; } return n > 0 ? t / n : 1f; } }
 
         public Rigidbody Body => rb;
         public float SpeedKmh => Velocity.magnitude * 3.6f;
@@ -123,7 +137,9 @@ namespace RaceX.Car
 
             baseForward = new WheelFrictionCurve
             {
-                extremumSlip = 0.4f, extremumValue = 1f, asymptoteSlip = 0.8f, asymptoteValue = 0.5f, stiffness = spec.forwardStiffness
+                extremumSlip = 0.4f, extremumValue = 1f, asymptoteSlip = 0.8f,
+                // v100: slick com perda pela carga → deslizamento longitudinal mais progressivo (0,5 → 0,7; pesquisa 04/11).
+                asymptoteValue = spec.tyreLoadSensitivity > 0f ? 0.7f : 0.5f, stiffness = spec.forwardStiffness
             };
             baseSideways = new WheelFrictionCurve
             {
@@ -258,12 +274,24 @@ namespace RaceX.Car
                 if (damage != null) g *= damage.WheelGripMul(i);
                 wheelGrip[i] = g;
             }
+            float frontSide = 0f, rearSide = 0f;
+            // apoio/peso agora (L/P): só monopostos com o pneu da pesquisa (GT mantém a curva de sempre)
+            // DESLIGADO (medido 04/11): com a escala o treino F2 de 12 min foi de 1 PT/64 batidas (v100) para 5–8 PT/240–330 batidas
+            // (v100c–e) — o pneu dá menos força com o mesmo esterço em alta e o carro abre na saída da última curva (bico da mureta).
+            sideSlipScale = UseSideSlipScale && spec.tyreLoadSensitivity > 0f && rb.mass > 50f
+                ? 1f + Mathf.Max(0f, spec.downforceCoefficient) * rb.linearVelocity.sqrMagnitude / (rb.mass * 9.81f) : 1f;
+            float fz0 = rb.mass * 9.81f * 0.25f;   // carga estática por roda (com combustível)
+            float sumLat = 0f, sumLong = 0f;
             for (int i = 0; i < 4; i++)
             {
                 var w = wheels[i];
+                wheelLoadMul[i] = 1f;
+                wheelFz[i] = 0f;
                 if (w.GetGroundHit(out WheelHit hit))
                 {
                     grounded++;
+                    wheelFz[i] = Mathf.Max(0f, hit.force);
+                    wheelLoadMul[i] = spec.TyreLoadFactor(wheelFz[i], fz0);
                     hit.collider.TryGetComponent<TrackSurface>(out var surface);
                     surfaces[i] = surface;
                     surfaceGrip[i] = surface != null ? surface.FrictionMultiplier : 1f;
@@ -276,6 +304,7 @@ namespace RaceX.Car
                     if (surface != null && surface.IsOffTrack && !InPitAreaNow()) offTrack++;
                     float slip = Mathf.Max(Mathf.Abs(hit.forwardSlip), Mathf.Abs(hit.sidewaysSlip));
                     WheelSlip[i] = slip;
+                    if (i <= FR) frontSide += Mathf.Abs(hit.sidewaysSlip); else rearSide += Mathf.Abs(hit.sidewaysSlip);
                     maxSlip = Mathf.Max(maxSlip, slip);
                 }
                 else
@@ -297,12 +326,42 @@ namespace RaceX.Car
                 bool mateOff = damage != null && damage.Detached((int)DamageZone.WheelFL + mate);
                 bool selfOff = damage != null && damage.Detached((int)DamageZone.WheelFL + i);
                 float axleGrip = selfOff || mateOff ? tireGrip : (tireGrip + wheelGrip[mate]) * 0.5f;
-                var f = baseForward; f.stiffness = spec.forwardStiffness * surfaceGrip[i] * axleGrip * extraGrip[i];
+                // v100: perda de atrito com a carga (apoio aerodinâmico + transferência), por roda — o PhysX multiplica o atrito
+                // pela carga da roda; aqui a rigidez cai com (Fz/Fz0)^−0,20 (só monopostos; GT sem perda).
+                float lm = wheelLoadMul[i];
+                var f = baseForward; f.stiffness = spec.forwardStiffness * surfaceGrip[i] * axleGrip * extraGrip[i] * lm;
                 fwdStiff[i] = f.stiffness;
-                var s = baseSideways; s.stiffness = spec.sidewaysStiffness * surfaceGrip[i] * sideFactor * tireGrip * extraGrip[i];
+                var s = baseSideways; s.stiffness = spec.sidewaysStiffness * surfaceGrip[i] * sideFactor * tireGrip * extraGrip[i] * lm;
+                // v100 (pesquisa 04/11, receita da comunidade Unity — "The dark art of Unity wheel colliders", Unity Discussions):
+                // o escorregamento lateral da roda cresce com a velocidade para o MESMO ângulo; em alta o pneu passava do pico com
+                // pouco esterço e caía para 75% da força — o carro saía de frente e ia reto. Pico e assíntota laterais × (1 + apoio/peso).
+                s.extremumSlip = baseSideways.extremumSlip * sideSlipScale;
+                s.asymptoteSlip = baseSideways.asymptoteSlip * sideSlipScale;
+                sideStiff[i] = s.stiffness;
+                sumLat += s.stiffness * wheelFz[i];
+                sumLong += f.stiffness * wheelFz[i];
                 w.forwardFriction = f;
                 w.sidewaysFriction = s;
             }
+            // v100: TETOS da categoria (F2 3,9 g lateral / 3,5 g freada; F1 2026 6,0 / 4,0 g): a força que os 4 pneus podem
+            // dar não passa de teto × peso. Atuam só em alta (F2 acima de ~290 km/h na curva, ~240 km/h na freada).
+            float mg = rb.mass * 9.81f;
+            float latMul = spec.lateralCapG > 0f && sumLat > spec.lateralCapG * mg ? spec.lateralCapG * mg / sumLat : 1f;
+            float lonMul = spec.brakeCapG > 0f && sumLong > spec.brakeCapG * mg ? spec.brakeCapG * mg / sumLong : 1f;
+            if (latMul < 1f || lonMul < 1f)
+            {
+                for (int i = 0; i < 4; i++)
+                {
+                    var w = wheels[i];
+                    if (w == null) continue;
+                    var f = w.forwardFriction; f.stiffness *= lonMul; fwdStiff[i] = f.stiffness; w.forwardFriction = f;
+                    var sd = w.sidewaysFriction; sd.stiffness *= latMul; sideStiff[i] = sd.stiffness; w.sidewaysFriction = sd;
+                }
+            }
+            FrontSideSlip = frontSide * 0.5f;
+            RearSideSlip = rearSide * 0.5f;
+            LateralCapActive = latMul < 0.999f;
+            BrakeCapActive = lonMul < 0.999f;
             GroundedWheels = grounded;
             IsOffTrack = offTrack >= 2;
             MaxWheelSlip = maxSlip;

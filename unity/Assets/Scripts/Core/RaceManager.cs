@@ -134,6 +134,10 @@ namespace RaceX.Core
         public RaceEntry SpawnCar(CarSpec spec, int colorIndex, string driverName, int slot, bool human, int playerIndex, Pose? customPose = null)
         {
             Pose pose = customPose ?? Track.GetGridPose(slot);
+            // v100: nível de apoio do F1 2026 pela PISTA (asa de Monza ≠ asa de Mônaco) — todos os carros da corrida, todos os
+            // modos. O F2 (carro único) fica com o apoio dele: não há dado público de asa por pista na F2.
+            if (spec != null && CarSpec.IsFormula(spec.model) && spec.displayName != CarSpec.F2Name && GameManager.Settings != null)
+                spec.downforceCoefficient *= RaceX.Track.TrackLibrary.F1AeroLevel(GameManager.Settings.track);
             var car = CarFactory.Create(spec, colorIndex, (human ? "Player_" : "NPC_") + driverName, pose.position, pose.rotation);
             car.inputLocked = true;
             var bounds = car.gameObject.AddComponent<TrackBounds>();

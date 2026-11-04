@@ -18,7 +18,7 @@ namespace RaceX.Core
     public static class GlobalBoard
     {
         /// <summary>Versão da física: v99 = pneu µ 1,8 e apoio recalibrado. Tempo de antes não é comparável.</summary>
-        public const int Physics = 99;
+        public const int Physics = 100;   // v100: pneu com perda pela carga + apoio 2026 por pista
 
         [Serializable] public class Rec { public string name; public string car; public string car_name; public string category; public int lap_ms; public int compound; public bool wet; public string set_at; }
         [Serializable] public class PlayerRow { public string name; public string photo; public int avatar_color; public int wins; public int podiums; public int titles; public int races; public int records; }

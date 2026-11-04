@@ -56,6 +56,41 @@ namespace RaceX.Track
             TrackId.EstadioCentral, TrackId.NeonStrip
         };
 
+        /// <summary>v100 (04/11): nível de apoio do F1 por pista, em fração da configuração de ALTA carga (Mônaco = 1,0), pela sede
+        /// real que inspirou cada traçado. Extremos com número: Monza ≈ 0,67 (k ~3,0 contra ~4,5 em alta carga, relatório de 04/11).
+        /// Grupos pelas fontes: Monza = menor apoio do ano (Mercedes/Pirelli 2026); Las Vegas "como Baku ou Monza" (Isola, Pirelli);
+        /// Spa, Canadá, Baku, Miami = baixo apoio; Silverstone virou pista de baixo apoio (F1.com, Tech Tuesday); Hungria "perto de
+        /// Mônaco"; Singapura, Interlagos = alto (scuderiafans, análise de carga aerodinâmica). Os degraus intermediários (0,78 / 0,87
+        /// / 0,95) são ESCOLHA DE PROJETO entre os dois extremos, e as pistas sem sede real usam o nível médio (Circuito Verde, sinuoso,
+        /// alto).</summary>
+        public static float F1AeroLevel(TrackId id)
+        {
+            switch (id)
+            {
+                case TrackId.Velocita:          // Monza
+                case TrackId.NeonStrip:         // Las Vegas
+                    return 0.67f;
+                case TrackId.Fortaleza:         // Baku
+                case TrackId.Ardenne:           // Spa
+                case TrackId.IlhaDasCascatas:   // Montreal
+                case TrackId.CornicheDaNoite:   // Jeddah
+                case TrackId.PortoSul:          // Miami
+                case TrackId.CampoDoNorte:      // Silverstone
+                    return 0.78f;
+                case TrackId.Principado:        // Mônaco
+                case TrackId.JardimDaBaia:      // Singapura
+                case TrackId.CurvasDoDanubio:   // Hungaroring
+                    return 1.0f;
+                case TrackId.SerraDoCafe:       // Interlagos
+                case TrackId.DunasDoNorte:      // Zandvoort
+                case TrackId.ValeDourado:       // Barcelona
+                case TrackId.ForestCircuit:     // Circuito Verde (fictícia, sinuosa)
+                    return 0.95f;
+                default:                        // Melbourne, Xangai, Bahrein, Red Bull Ring, Austin, Suzuka e fictícias
+                    return 0.87f;
+            }
+        }
+
         /// <summary>Voltas de prova REAL (regra F1: 305 km de corrida, Mônaco 260 km). Pista curta → muitas voltas.</summary>
         public static int RealLaps(TrackId id)
         {
