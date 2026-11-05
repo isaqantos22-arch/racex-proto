@@ -146,7 +146,7 @@ namespace RaceX.Core
             if (!EntryGuideOn || instance == null || instance.spline == null) return false;
             float L = instance.spline.Length;
             float rel = Mathf.Repeat(d - instance.laneStart + L * 0.5f, L) - L * 0.5f;
-            return rel > -100f && rel < instance.laneLength;
+            return rel > -170f && rel < instance.laneLength;   // v105: caminho de entrada começa 170 m antes (era 100)
         }
 
         /// <summary>Box pedido/chamado para o jogador: o tracejado do traçado vira o caminho AZUL até o box.</summary>
@@ -162,10 +162,16 @@ namespace RaceX.Core
             if (instance == null || instance.spline == null) return 0f;
             float L = instance.spline.Length;
             float rel = Mathf.Repeat(d - instance.laneStart + L * 0.5f, L) - L * 0.5f;
-            if (rel <= -100f || rel > instance.laneLength) return 0f;
-            if (rel <= -30f) return -Mathf.Lerp(0f, 7.0f, Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(-100f, -30f, rel)));
-            if (rel <= -12f) return -Mathf.Lerp(7.0f, 10.6f, Mathf.InverseLerp(-30f, -12f, rel));
-            if (rel <= 8f) return -Mathf.Lerp(10.6f, FastLaneLat + 0.6f, Mathf.InverseLerp(-12f, 8f, rel));
+            // v105 (pedido do usuário em 05/11, depois da saída: "faça o mesmo na entrada do pit" — entrar quase paralelo, não na
+            // diagonal): vai para a BORDA do lado do pit cedo (170 → 95 m antes), segue colado nela até 50 m antes (a grama acaba em
+            // −45 m) e entra no corredor numa diagonal reta de ~6° (−5,5 → −11,6 m em 58 m), passando do lado de dentro do bico da
+            // mureta (−7,8 m). Antes: 0 → −7 m em 70 m e −7 → −10,6 m em 18 m (~11°).
+            if (rel <= -170f || rel > instance.laneLength) return 0f;
+            float halfG = instance.race != null && instance.race.Track != null && instance.race.Track.Definition != null ? instance.race.Track.Definition.roadWidth * 0.5f : 6f;
+            float edgeG = Mathf.Max(1.5f, halfG - 1.0f), hugG = Mathf.Max(1.5f, halfG - 0.5f);
+            if (rel <= -95f) return -Mathf.Lerp(0f, edgeG, Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(-170f, -95f, rel)));
+            if (rel <= -50f) return -Mathf.Lerp(edgeG, hugG, Mathf.InverseLerp(-95f, -50f, rel));
+            if (rel <= 8f) return -Mathf.Lerp(hugG, FastLaneLat + 0.6f, Mathf.InverseLerp(-50f, 8f, rel));
             return -(FastLaneLat + 0.6f);
         }
         float laneStart;
@@ -837,6 +843,9 @@ namespace RaceX.Core
         /// <summary>Voltas desta saída do box no treino (programa da equipe).</summary>
         public static int PracticeRunLaps(CarController car)
         {
+            // Autoteste: runlaps=N fixa as voltas por saída (dica do usuário em 05/11: "para testar mais voltas, uma ou duas paradas —
+            // toda troca de pneu custa ~2 voltas para aquecer").
+            if (RaceX.Core.AutoTest.Active) { int o = RaceX.Core.AutoTest.GetIntPublic("runlaps", 0); if (o > 0) return o; }
             var st = instance != null ? instance.Find(car) : null;
             return st != null ? Mathf.Max(2, st.runLaps) : 3;
         }
@@ -1383,11 +1392,23 @@ namespace RaceX.Core
             // 4) Fim da mureta laranja -> rampa de saída gradual até a pista;
             var pe = spline.PoseAtDistance(Mathf.Repeat(laneStart + laneLength - 4f, spline.Length));
             st.route.Add(pe.position - pe.rotation * new Vector3(FastLaneLat, 0f, 0f) + Vector3.up * 0.05f);
-            var px = spline.PoseAtDistance(Mathf.Repeat(laneStart + laneLength + 12f, spline.Length));
-            st.route.Add(px.position - px.rotation * new Vector3(5.5f, 0f, 0f) + Vector3.up * 0.05f);
-            // 5) Na pista — ponto de merge adiante na reta.
-            var pMerge = spline.PoseAtDistance(Mathf.Repeat(laneStart + laneLength + 28f, spline.Length));
-            st.route.Add(pMerge.position + Vector3.up * 0.05f);
+            // Rampa longa e quase paralela à pista (v105): −11 m → −5,8 m em ~50 m (antes −11 → −5,5 em 16 m, ~19°: "entra na
+            // diagonal"). A rampa de asfalto vai até +45 m (BuildVisuals).
+            float[] rampRel = { 10f, 22f, 34f, 45f };
+            float[] rampLat = { 9.6f, 8.2f, 6.9f, 5.8f };
+            for (int i = 0; i < rampRel.Length; i++)
+            {
+                var px = spline.PoseAtDistance(Mathf.Repeat(laneStart + laneLength + rampRel[i], spline.Length));
+                st.route.Add(px.position - px.rotation * new Vector3(rampLat[i], 0f, 0f) + Vector3.up * 0.05f);
+            }
+            // 5) Na pista — ponto de merge adiante, RENTE À BORDA DO LADO DO PIT (v105, pedido do usuário em 05/11: "ao sair do box o
+            // carro deve sair rente à zebra, não caminhando para o centro"). Antes o último ponto era o CENTRO da pista: a própria rota
+            // atravessava o carro de −5,5 m até o meio em 16 m e o soltava apontando para o outro lado (autoteste de 05/11: −10 → −0,5 m
+            // em 2 s, depois fora da pista pelo lado do pit ao corrigir). A IA segura essa borda até o fim da 1ª curva (CarAI.StartExitHold).
+            float halfR = race != null && race.Track != null && race.Track.Definition != null ? race.Track.Definition.roadWidth * 0.5f : 6f;
+            float mergeLat = Mathf.Max(1.5f, halfR - 1.2f);
+            var pMerge = spline.PoseAtDistance(Mathf.Repeat(laneStart + laneLength + 65f, spline.Length));
+            st.route.Add(pMerge.position - pMerge.rotation * new Vector3(mergeLat, 0f, 0f) + Vector3.up * 0.05f);
             st.routeIdx = 0;
             st.stuckTimer = 0f; st.reverseTimer = 0f; st.stillTimer = 0f; st.waitTimer = 0f; st.reverseCount = 0f; st.exitHoldTimer = 0f;
             st.car.extThrottle = 0f; st.car.extBrake = 0f; st.car.extSteer = 0f;
@@ -2541,7 +2562,9 @@ namespace RaceX.Core
                 {
                     float baseS = Mathf.Repeat(k == 0 ? entryS - 40f : exitS - 15f, spline.Length);
                     var p0 = spline.PoseAtDistance(baseS);
-                    var p1 = spline.PoseAtDistance(Mathf.Repeat(baseS + (k == 0 ? 50f : 30f), spline.Length));
+                    // v105: rampa de SAÍDA de 30 → 60 m (até +45 m, onde acaba o vão sem grama — OpenRunoffGap): o carro entra na
+                    // pista quase PARALELO (~7°) em vez de atravessado (pedido do usuário: "entra quase na diagonal da pista").
+                    var p1 = spline.PoseAtDistance(Mathf.Repeat(baseS + (k == 0 ? 50f : 60f), spline.Length));
                     Vector3 r0 = p0.rotation * Vector3.right;
                     Vector3 r1 = p1.rotation * Vector3.right;
                     var apron = new GameObject("PitApron" + k, typeof(MeshFilter), typeof(MeshRenderer));
@@ -2551,7 +2574,10 @@ namespace RaceX.Core
                     var vB = p1.position - r1 * laneOffset + Vector3.up * 0.03f; // centro do pit lane
                     var vC = p0.position - r0 * 6.5f + (p1.position - p0.position) + Vector3.up * 0.03f;
                     var vD = p1.position - r1 * laneOffset + (p0.position - p1.position) + Vector3.up * 0.03f;
-                mf.sharedMesh = new Mesh { vertices = new[] { vA, vB, vC, vD }, triangles = new[] { 0, 1, 2, 1, 3, 2 } };
+                // v105: os dois triângulos eram (A,B,C) e (B,D,C) — ambos do mesmo lado da diagonal: sobrava um BURACO triangular no
+                // começo da rampa (grama), justamente onde o caminho de entrada passa (print do usuário de 05/11: carro na grama
+                // entrando no box). Agora (A,B,C) + (A,D,B) = o retângulo inteiro, normal para cima.
+                mf.sharedMesh = new Mesh { vertices = new[] { vA, vB, vC, vD }, triangles = new[] { 0, 1, 2, 0, 3, 1 } };
                 mf.sharedMesh.RecalculateNormals();
                 apron.GetComponent<MeshRenderer>().sharedMaterial = new Material(shader) { color = new Color(0.16f, 0.16f, 0.18f) };
                 // Collider + asfalto: rampa de entrada/saída com grip da pista (não grama).

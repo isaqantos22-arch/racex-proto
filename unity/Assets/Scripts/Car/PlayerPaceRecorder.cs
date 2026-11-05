@@ -185,6 +185,11 @@ namespace RaceX.Car
         float sampleTimer;
         readonly float[] lapBuf = new float[PlayerPaceLearner.Segments];
         bool lapDirty = true; // primeira volta (largada/saída do box) nunca conta
+        readonly bool[] secDirty = { true, true, true };
+        readonly float[] secStartT = { 0f, -1f, -1f };
+        float lapStartT;
+        int curSec;
+        void MarkDirty() { lapDirty = true; secDirty[Mathf.Clamp(curSec, 0, 2)] = true; }
         int lastLap = -1;
         CarAI aiPilot;
         // v99: ESTILO da volta atual (PlayerStyle) — traçado, freio, tirar o pé, desaceleração e volante por trecho.
@@ -278,7 +283,7 @@ namespace RaceX.Car
 
         void OnCollided(float relative, Vector3 point)
         {
-            if (relative > 12f) lapDirty = true;
+            if (relative > 12f) MarkDirty();
         }
 
         int prevSeg = -1;
@@ -298,6 +303,8 @@ namespace RaceX.Car
             lapWet = RaceX.Core.WeatherSystem.Wetness >= PlayerStyle.WetFrom;
             lapMixed = false;
             lapDirty = dirtyStart;
+            secDirty[0] = dirtyStart; secDirty[1] = false; secDirty[2] = false;
+            curSec = 0; lapStartT = Time.time; secStartT[1] = secStartT[2] = -1f;
         }
 
         void OnLap(RaceEntry e, float lapTime, bool best)
@@ -316,7 +323,16 @@ namespace RaceX.Car
                     PlayerPaceLearner.CommitLap(trackId, lapBuf, lapTime);
                 // Estilo: melhor volta limpa NESTA condição (pista, tipo de carro, pneu, seco/molhado) — volta que mudou de pneu
                 // ou atravessou o limite de pista molhada não conta.
-                if (!lapDirty && !lapMixed && covered && lapCompound >= 0) PlayerStyle.Commit(BuildStyle(lapTime));
+                // Estilo por SETOR (v105): setor limpo e mais rápido que o melhor guardado entra (linha, velocidade e pedais dele);
+                // volta inteira limpa e mais rápida continua entrando inteira.
+                if (!lapMixed && covered && lapCompound >= 0)
+                {
+                    float[] secT = null;
+                    if (secStartT[1] > lapStartT && secStartT[2] > secStartT[1])
+                        secT = new[] { secStartT[1] - lapStartT, secStartT[2] - secStartT[1], lapTime - (secStartT[2] - lapStartT) };
+                    if (secT != null && secT[2] > 0.5f) PlayerStyle.CommitSectors(BuildStyle(lapTime), secT, new[] { !secDirty[0], !secDirty[1], !secDirty[2] });
+                    else if (!lapDirty) PlayerStyle.Commit(BuildStyle(lapTime));
+                }
                 // Aba GLOBAL: só volta limpa e completa vira recorde (pessoal → nuvem, com conta).
                 if (!lapDirty && covered) RaceX.Core.GlobalBoard.OnCleanLap(trackId, car.spec, lapTime, lapCompound, lapWet);
             }
@@ -376,7 +392,7 @@ namespace RaceX.Car
                 int lap = p != null ? p.lap : 0;
                 // Volta mudou sem passar pelo OnLap (volta de saída, cruzamento pós-pit): descarta.
                 if (lap != lastLap) { if (lastLap >= 0) ResetLap(entry.outLap); lastLap = lap; }
-                if (entry.outLap) lapDirty = true;
+                if (entry.outLap) MarkDirty();
             }
             sampleTimer -= Time.deltaTime;
             if (sampleTimer > 0f) return;
@@ -391,14 +407,18 @@ namespace RaceX.Car
             // Piloto automático (autoteste) no carro do jogador: NÃO é pilotagem do jogador — não grava (exceto stylerecord=1,
             // que testa o caminho do estilo num arquivo separado).
             if (aiPilot == null) aiPilot = car.GetComponent<CarAI>();
-            if (aiPilot != null && aiPilot.enabled && !RaceX.Core.AutoTest.StyleFromAutopilot) { lapDirty = true; return; }
-            if (RaceX.Core.PitLaneSystem.IsInPitFlow(car) || car.pitControlled) { lapDirty = true; return; }
-            if (car.IsOffTrack || car.IsReversing) { lapDirty = true; return; }
+            if (aiPilot != null && aiPilot.enabled && !RaceX.Core.AutoTest.StyleFromAutopilot) { MarkDirty(); return; }
+            if (RaceX.Core.PitLaneSystem.IsInPitFlow(car) || car.pitControlled) { MarkDirty(); return; }
+            if (car.IsOffTrack || car.IsReversing) { MarkDirty(); return; }
             if (car.GroundedWheels < 4) { prevT = -1f; return; }
             float v = car.ForwardSpeed;
             if (v < 5f) { prevT = -1f; return; }
             float along = waypoints.DistanceAlong(car.transform.position, ref hint);
             int seg = PlayerPaceLearner.Seg(along, waypoints.Spline.Length);
+            // SETORES (v105, pedido do usuário: "por setor, reproduzir o traçado do meu melhor setor"): 3 terços da pista; marca a
+            // passagem de cada um (tempo) — o estilo guarda o MELHOR de cada setor, não só a melhor volta inteira.
+            int secNow = Mathf.Clamp(seg * 3 / PlayerPaceLearner.Segments, 0, 2);
+            if (secNow > curSec) { for (int k = curSec + 1; k <= secNow; k++) if (secStartT[k] < 0f) secStartT[k] = Time.time; curSec = secNow; }
             // Estilo: onde ele passa (lateral), freio, só tirando o pé, desaceleração na freada e ritmo do volante.
             var pose = waypoints.Spline.PoseAtDistance(along);
             float latNow = Vector3.Dot(car.transform.position - pose.position, pose.rotation * Vector3.right);

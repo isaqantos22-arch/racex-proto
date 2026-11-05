@@ -38,6 +38,7 @@ namespace RaceX.Car
             public float[] coast = new float[Segments];      // fração do trecho SÓ tirando o pé (sem freio nem acelerador)
             public float[] decel = new float[Segments];      // m/s² — maior desaceleração medida freando
             public float[] steerRate = new float[Segments];  // volante por segundo (|Δ comando| médio; ±1 = batente)
+            public float[] secT = new float[3];              // v105: tempo de cada setor (terço da pista) — perfil = melhor de cada setor
             [NonSerialized] public float[] zoneMax;
             [NonSerialized] public float zoneL;
         }
@@ -93,6 +94,63 @@ namespace RaceX.Car
             try { File.WriteAllText(FilePath, JsonUtility.ToJson(Data)); }
             catch (Exception ex) { Debug.LogWarning("[PlayerStyle] gravação falhou: " + ex.Message); }
             Debug.Log($"[PlayerStyle] volta gravada pista={p.track} formula={p.formula} pneu={TyreModel.Letter(p.compound)} molhada={p.wet} tempo={p.lapTime:0.000}");
+            if (AutoTest.Active) AutoTest.Log($"ESTILO volta gravada pneu={TyreModel.Letter(p.compound)} tempo={p.lapTime:0.000}");
+            return true;
+        }
+
+        /// <summary>v105 (pedido do usuário: "por setor, reproduzir o traçado que eu fiz no melhor setor"): para cada setor LIMPO desta
+        /// volta mais rápido que o guardado, copia a linha, a velocidade e os pedais daquele terço da pista. Perfil antigo sem tempos
+        /// por setor: os tempos dele são ESTIMADOS pela divisão desta volta (proporção) — aproximação, só para comparar.</summary>
+        public static bool CommitSectors(Profile p, float[] secT, bool[] secClean)
+        {
+            if (p == null || secT == null || secT.Length != 3) return false;
+            bool allClean = secClean[0] && secClean[1] && secClean[2];
+            var old = Find(p.track, p.formula, p.compound, p.wet);
+            if (old == null)
+            {
+                // Primeiro perfil: entram só os setores LIMPOS; setor sujo fica sem dado (n = 0, tempo 9999) até uma volta limpa nele.
+                // (Conferência no autoteste de 05/11: exigir os 3 limpos na mesma volta = o estilo nunca começava.)
+                if (!secClean[0] && !secClean[1] && !secClean[2]) return false;
+                p.secT = new float[3];
+                for (int k = 0; k < 3; k++)
+                {
+                    if (secClean[k] && secT[k] > 0.5f) { p.secT[k] = secT[k]; continue; }
+                    p.secT[k] = 9999f;
+                    int a = k * Segments / 3, b = (k + 1) * Segments / 3;
+                    for (int i = a; i < b; i++) { p.n[i] = 0; p.v[i] = 0f; }
+                }
+                p.lapTime = p.secT[0] + p.secT[1] + p.secT[2];
+                if (AutoTest.Active) AutoTest.Log($"ESTILO primeiro perfil pneu={TyreModel.Letter(p.compound)} setores={p.secT[0]:0.000}/{p.secT[1]:0.000}/{p.secT[2]:0.000}");
+                return Commit(p);
+            }
+            if (old.secT == null || old.secT.Length != 3) old.secT = new float[3];
+            if (old.secT[0] <= 0f || old.secT[1] <= 0f || old.secT[2] <= 0f)
+            {
+                float tot = secT[0] + secT[1] + secT[2];
+                for (int k = 0; k < 3; k++) old.secT[k] = old.lapTime * secT[k] / Mathf.Max(1f, tot);
+            }
+            bool changed = false;
+            for (int k = 0; k < 3; k++)
+            {
+                if (!secClean[k] || secT[k] <= 0.5f || secT[k] >= old.secT[k] - 0.001f) continue;
+                int a = k * Segments / 3, b = (k + 1) * Segments / 3;
+                for (int i = a; i < b; i++)
+                {
+                    old.v[i] = p.v[i]; old.lat[i] = p.lat[i]; old.n[i] = p.n[i]; old.brake[i] = p.brake[i];
+                    old.coast[i] = p.coast[i]; old.decel[i] = p.decel[i]; old.steerRate[i] = p.steerRate[i];
+                }
+                Debug.Log($"[PlayerStyle] setor {k + 1} novo melhor pista={p.track} pneu={TyreModel.Letter(p.compound)} {old.secT[k]:0.000} -> {secT[k]:0.000}");
+                if (AutoTest.Active) AutoTest.Log($"ESTILO setor {k + 1} novo melhor pneu={TyreModel.Letter(p.compound)} {old.secT[k]:0.000} -> {secT[k]:0.000}");
+                old.secT[k] = secT[k];
+                changed = true;
+            }
+            if (!changed) return false;
+            old.lapTime = old.secT[0] + old.secT[1] + old.secT[2];
+            old.when = DateTime.Now.ToString("s");
+            old.zoneMax = null;
+            Version++;
+            try { File.WriteAllText(FilePath, JsonUtility.ToJson(Data)); }
+            catch (Exception ex) { Debug.LogWarning("[PlayerStyle] gravação falhou: " + ex.Message); }
             return true;
         }
 

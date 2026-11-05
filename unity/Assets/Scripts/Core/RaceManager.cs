@@ -421,7 +421,9 @@ namespace RaceX.Core
             e.retired = true;
             e.retireReason = reason;
             EntryRetired?.Invoke(e);
-            if (e.isHuman && HumansDone() && !endQueued && State == RaceState.Racing) { endQueued = true; StartCoroutine(EndRaceRoutine()); }
+            // Autoteste com keeprunning=1: o carro do autoteste fora NÃO encerra a sessão — as IAs seguem até o fim (coleta de dados).
+            bool keepRunning = RaceX.Core.AutoTest.Active && RaceX.Core.AutoTest.GetIntPublic("keeprunning", 0) == 1;
+            if (e.isHuman && HumansDone() && !endQueued && State == RaceState.Racing && !keepRunning) { endQueued = true; StartCoroutine(EndRaceRoutine()); }
         }
 
         /// <summary>Penalidade de tempo: soma no tempo final (se já cruzou a linha, soma direto no tempo).</summary>
