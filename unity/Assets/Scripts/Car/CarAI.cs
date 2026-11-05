@@ -219,6 +219,7 @@ namespace RaceX.Car
         float unlockTime = -999f;
         float lateralAtUnlock;
         bool lateralSeeded;          // 1º pensamento: lateral parte de onde o carro está (piloto automático ligado em movimento)
+        bool blueHold; float blueLat; // bandeira azul: abriu na reta e segura a faixa na curva
         float playerLineEdge = 4.75f; // limite da lateral quando segue a linha do jogador (até 0,6 m da borda)
         bool wasLocked = true;
         float committedLateral;
@@ -293,6 +294,11 @@ namespace RaceX.Car
         void OnOwnLap(RaceEntry e, float lapTime, bool best)
         {
             if (e == null || e.car != car) return;
+            // v104: tempo de volta de CADA carro da IA no log (pedido do usuário: "diferença discrepante de habilidade" — na corrida
+            // de 04/11 ele deu 3 voltas no 2º colocado e não havia como medir o ritmo das IAs: só a telemetria dele era gravada).
+            if (!e.isHuman && lapTime > 10f && !AutoTest.Active)
+                Debug.Log("[VOLTA-IA] " + e.name + " " + lapTime.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) + "s suja=" + (ownLapDirty ? 1 : 0)
+                          + " pneu=" + TyreModel.Letter(PitLaneSystem.CompoundOf(car)) + " agua=" + WeatherSystem.Wetness.ToString("0.00") + " bandeira=" + RaceControl.FlagOf(car));
             int filled = 0;
             foreach (float v in ownLap) if (v > 5f) filled++;
             if (!ownLapDirty && filled >= PlayerPaceLearner.Segments * 0.85f && lapTime > 10f)
@@ -621,6 +627,17 @@ namespace RaceX.Car
             // Traçado ideal: na zona do pit a linha fica a ≥ 3 m da borda esquerda (mureta laranja e o bico da entrada).
             if (RaceX.Core.PitLaneSystem.LaneInfo(out float pzs, out float pzl)) RacingLine.SetPitZone(pzs - 150f, pzs + pzl + 20f, -(half - 3f));
             float edge = Mathf.Max(1.5f, half - 1.25f); // centro do carro NUNCA mirado além disto
+            // MODO CALMO (v104, pedido do usuário em 04/11 depois de perder a corrida com o piloto automático rodando na chuva:
+            // "todos devem andar no traçado, respeitando a velocidade da bandeira — sem ultrapassar, sem zigue-zague; só acelerar,
+            // virar e tirar o pé"). Vale na fila do SC, sob amarela/VSC e no piloto automático do jogador: linha ideal da pista (não a
+            // do jogador, que usa a zebra) a ≥ 1,6 m da borda, lateral devagar, volante sem serra, acelerador no máximo 60% (45% com
+            // pista molhada ou pneu frio). Telemetria da batida: pneu de chuva a 0,30 de temperatura, água 0,80, acelerador 1,00 a
+            // 100–109 km/h e volante −1,00 → +0,91 → −0,89 → +1,00 em 3 s: rodou e bateu na mureta da saída do box a 76 km/h.
+            var flagEarly = RaceX.Core.RaceControl.FlagOf(car);
+            bool calm = !car.pitControlled && (RaceX.Core.SafetyCar.QueueMode(car)
+                        || flagEarly == RaceFlag.Yellow || flagEarly == RaceFlag.DoubleYellow || flagEarly == RaceFlag.VSC || flagEarly == RaceFlag.SafetyCar
+                        || (isHumanCar && RaceX.Core.SafetyCar.AutopilotOn(car)));
+            float calmEdge = Mathf.Max(1.5f, half - 1.6f);
             // DIAGNÓSTICO (piloto automático no carro do jogador): fora da pista, registra o porquê (1x/s).
             if (Mathf.Abs(myLat) > half + 0.5f && Time.time - diagLogT > 1f && race != null && race.GetEntry(car) != null && race.GetEntry(car).isHuman)
             {
@@ -656,7 +673,7 @@ namespace RaceX.Car
             // TRAÇADO DO JOGADOR (v99, pedido do usuário: "se souberem como e onde faço as curvas"): com volta limpa dele nesta
             // condição, a base da lateral é onde ELE passa — abre, tangencia, sai. Tráfego, box, bandeira e obstáculo continuam
             // mandando por cima (targetLat); metade do desvio de consistência e um fio da faixa do pelotão (ninguém copia ao centímetro).
-            float lineHere = style != null ? PlayerStyle.LatAt(style, along, L) : float.NaN;
+            float lineHere = style != null && !calm ? PlayerStyle.LatAt(style, along, L) : float.NaN;   // modo calmo: linha da pista
             bool playerLine = !float.IsNaN(lineHere);
             // Sem volta do jogador nesta condição: o TRAÇADO IDEAL da pista (RacingLine, menor curvatura dentro da pista). Antes o
             // "C por dentro" de cada curva — zigue-zague nas seções sinuosas com o carro de aderência real.
@@ -670,6 +687,7 @@ namespace RaceX.Car
             float lineEdge = playerLine ? Mathf.Max(edge, half - 0.6f) : edge;
             if (learnedLine) desiredLateral = Mathf.Clamp(lineHere + deviation * 0.5f + lane * 0.15f, -lineEdge, lineEdge);
             if (playerLine) playerLineEdge = lineEdge;
+            if (calm) desiredLateral = Mathf.Clamp(desiredLateral, -calmEdge, calmEdge);
             // Primeiro pensamento (piloto automático ligado com o carro ANDANDO, no meio da curva): parte de onde o carro está —
             // antes partia de lateral 0 e puxava o volante para o meio da pista a 110 km/h (jogador fora da pista, 04/11).
             if (!lateralSeeded) { lateralSeeded = true; committedLateral = myLat; lineAnchor = myLat; lateralAtUnlock = myLat; latVel = 0f; }
@@ -887,7 +905,7 @@ namespace RaceX.Car
                 // UMA tentativa por carro por reta: desistiu, só tenta de novo depois da próxima curva (ou se ele tiver problema de
                 // verdade). Antes a tentativa expirava em 4,5 s, o carro voltava para trás dele e já abria de novo — o vaivém.
                 bool retryBlocked = aheadCar == lastPassCar && lastPassStraight == straightId && !bigOpportunity;
-                bool wantsPass = (!scQueue || queueObstacle) && !pracYield && !pitPrep && launchBlend > 0.3f && aheadGap < trigger
+                bool wantsPass = ((!scQueue && !calm) || queueObstacle) && !pracYield && !pitPrep && launchBlend > 0.3f && aheadGap < trigger
                                  && reasonOk && !retryBlocked
                                  && (queueObstacle || RaceX.Core.RaceControl.MayOvertake(car, aheadCar)); // amarela/VSC/devolução
                 if (wantsPass && (passCar != aheadCar || passSide == 0f))
@@ -1045,12 +1063,13 @@ namespace RaceX.Car
             // FILA DO SC EM FILA INDIANA (como na F1): colado (até 25 m) no carro da frente, segue a MESMA linha dele — quando ele
             // contorna um destroço, quem vem atrás passa pelo mesmo caminho. Antes cada carro só via o destroço quando o da frente saía
             // do caminho, já perto: freava, desviava devagar e o de trás repetia (v93: a fila arrastou 25 s abaixo de 10 km/h).
+            // v104: só quando o da frente está CONTORNANDO um destroço — copiar a lateral dele o tempo todo era uma fonte de
+            // zigue-zague na fila (o alvo pulava entre a linha e a lateral do carro da frente; jogador a ±7 m a 100 km/h, 04/11).
             if (scQueue && !passing && aheadCar != null && !RaceX.Core.SafetyCar.Is(aheadCar) && aheadGap < 25f
-                && !aheadCar.wrecked && !IsRetired(aheadCar))
+                && !aheadCar.wrecked && !IsRetired(aheadCar) && aheadCar.Ai != null && aheadCar.Ai.latReason == LatObstacle)
             {
                 trafficLat = aheadLat;
-                var aLead = aheadCar.Ai;
-                if (aLead != null && aLead.latReason == LatObstacle) { latReason = LatObstacle; forcedLat = true; }
+                latReason = LatObstacle; forcedLat = true;
             }
 
             // DEFESA: carro mais rápido colado atrás antes de uma curva de verdade → fecha por dentro (UM movimento POR RETA, como
@@ -1058,7 +1077,7 @@ namespace RaceX.Car
             // antes voltava ao traçado depois de 2 s sem ameaça (o segundo movimento: o "zague"). Nunca fecha quem já está saindo
             // de trás para o lado (CutsOff).
             if (inCorner) { defendUsed = false; defendActive = false; }   // na curva: libera
-            if (behindCar != null && !passing && !scQueue && !startPhase && behindGap < 16f && behindSpeed > speed + 0.5f && !defendUsed
+            if (behindCar != null && !passing && !scQueue && !calm && !startPhase && behindGap < 16f && behindSpeed > speed + 0.5f && !defendUsed
                 && Defending > 0.45f && insideSide != 0f && launchBlend >= 1f)
             {
                 defendUsed = true;
@@ -1068,12 +1087,21 @@ namespace RaceX.Car
             if (defendActive && !passing) { trafficLat = defendLat; latReason = LatDefend; }
 
             // BANDEIRA AZUL: retardatário abre o traçado para o líder (vai para o lado em que já está).
-            if (RaceX.Core.RaceControl.BlueFlag(car) && !passing)
+            // v103 (relato do usuário, 04/11: "na corrida os retardatários saem da PISTA para eu passar"): o movimento era feito em
+            // qualquer ponto, inclusive no meio da curva, na velocidade de corrida → carro fora. Como na F1: sai da LINHA na reta
+            // (lado oposto ao traçado, até 70% da borda), tira o pé (SpeedFactor 0,94) e, na curva, SEGURA a faixa em que já abriu
+            // — sem novo movimento. Continua competitivo: nada disso vale sem carro a até 40 m atrás (BlueFor).
+            if (RaceX.Core.RaceControl.BlueFlag(car) && !passing && !calm)
             {
-                trafficLat = (myLat >= 0f ? 1f : -1f) * edge * 0.75f;
+                if (straightAhead || !blueHold)
+                {
+                    float sideB = learnedLine && Mathf.Abs(lineHere) > 0.3f ? -Mathf.Sign(lineHere) : (myLat >= 0f ? 1f : -1f);
+                    if (straightAhead) { blueLat = sideB * edge * 0.7f; blueHold = true; }
+                }
+                if (blueHold) { trafficLat = blueLat; latReason = LatBlue; }
                 defendActive = false;   // encerra a defesa (sem liberar outra até a curva)
-                latReason = LatBlue;
             }
+            else blueHold = false;
             lastPracYield = pracYield;
             if (pracYield && !passing) { trafficLat = pracLat; defendActive = false; latReason = LatYield; }
             float targetLat = float.IsNaN(trafficLat) ? desiredLateral : trafficLat;
@@ -1148,6 +1176,8 @@ namespace RaceX.Car
             // Traçado do jogador: a linha é suave por construção (média da volta dele) — a lateral acompanha sem o freio do perfil
             // em S, senão o carro ficava metros atrás da linha nas curvas encadeadas.
             if (learnedLine && latReason == LatLine && !forcedLat) { latRate = 4.5f; latAcc = 8f; }
+            // Modo calmo: lateral devagar (1,2 m/s, 0,8 m/s²) — o movimento de 1 m leva ~1,5 s, sem serra no volante.
+            if (calm && !forcedLat && latReason != LatObstacle) { latRate = Mathf.Min(latRate, 1.2f); latAcc = Mathf.Min(latAcc, 0.8f); }
             if (startPhase) latRate = Mathf.Min(latRate, passing && launchMode ? 2.5f : 1.2f);   // desvio da largada: mais rápido
             // LARGADA: tráfego não segura ninguém (sem distância de seguimento, sem esperar atrás) — o alvo volta ao limite da curva, mas
             // SEMPRE dá para parar atrás do da frente (~0,8 g). v91 liberava tudo: o pelotão chegou de pé embaixo na curva 1, o da
@@ -1182,6 +1212,7 @@ namespace RaceX.Car
             // (e contornando carro parado, que pede resposta curta) a mira de antes.
             float straightness = latReason == LatObstacle || latReason == LatPit ? 0f : 1f - Mathf.Clamp01(Mathf.Max(Mathf.Abs(near01), Mathf.Abs(far01)) / 0.3f);
             float ld = Mathf.Lerp(Mathf.Clamp(7f + 0.42f * speed, 9f, 36f), Mathf.Clamp(10f + 0.6f * speed, 12f, 60f), straightness);
+            if (calm && latReason != LatObstacle) ld = Mathf.Max(ld, 12f + 0.7f * speed);   // modo calmo: mira longa, volante suave
             float pursuitLat = committedLateral;
             // Seguindo o traçado do jogador: o ponto de mira fica NA LINHA dele lá na frente (a curvatura da linha entra na direção).
             if (learnedLine && latReason == LatLine)
@@ -1197,6 +1228,9 @@ namespace RaceX.Car
             float steer = Mathf.Clamp(deltaDeg / EffectiveMaxSteer(), -1f, 1f);
             // O CarController eleva o comando a 1,15 no volante retangular: compensa para o ângulo sair certo.
             if (car.spec.rectangularSteeringWheel) steer = Mathf.Sign(steer) * Mathf.Pow(Mathf.Abs(steer), 1f / 1.15f);
+            // Modo calmo: o comando do volante muda no máximo 2,5/s (de batente a batente em 0,8 s) — sem a serra −1 → +1 → −1
+            // que rodou o carro do jogador na chuva.
+            if (calm && latReason != LatObstacle) steer = Mathf.MoveTowards(cachedSteer, steer, 2.5f * thinkDt);
 
             // ---------- PEDAIS ----------
             float throttle, brake;
@@ -1208,6 +1242,12 @@ namespace RaceX.Car
                 // Controle de tração do piloto: patinou atrás, alivia o pé.
                 float rearSlip = Mathf.Max(car.WheelSlip[2], car.WheelSlip[3]);
                 if (rearSlip > 0.6f) throttle *= Mathf.Lerp(1f, 0.55f, Mathf.Clamp01((rearSlip - 0.6f) / 0.6f));
+                // Modo calmo: acelerador no máximo 60%; pista molhada ou pneu frio (saída do box) 45% — nada de pé embaixo na fila.
+                if (calm)
+                {
+                    bool slippery = WeatherSystem.Wetness > 0.15f || RaceX.Core.PitLaneSystem.TireTemp(car) < 0.6f;
+                    throttle = Mathf.Min(throttle, slippery ? 0.45f : 0.6f);
+                }
             }
             else
             {
