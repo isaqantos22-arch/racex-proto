@@ -2070,6 +2070,8 @@ namespace RaceX.Car
         static int coachFlag = -1;     // autoteste: nocoach=1 desliga (comparação A/B)
         int obsCorner = -1;
         bool obsValid, obsDirty, obsContact, obsOff, obsOffExit, obsOffOutside, obsSlide, obsSlideExit, obsPush, obsPushExit;
+        bool obsCold;   // passagem com pneu FRIO (só isso fora do normal): ensina só a lição de pneu frio da curva
+        float obsLockT, obsLastT;   // v107g: tempo com o volante ≥ 90% do batente DENTRO da curva (o "P")
         float obsT0, obsEntryF, obsEntryR, obsExitF, obsExitR, obsTurnInOver = -99f;
         float coastPrevV = -1f, coastPrevT;
         int coachErrLap, coachUpLap, coachBackLap, coachHoldLap;
@@ -2201,13 +2203,17 @@ namespace RaceX.Car
             var c = CornerCoach.Zone(coachMap, along);
             if (c == null) return 0f;
             var n = CornerCoach.Find(coachBook, c.id);
-            if (n == null || n.widen < 0.05f) return 0f;
-            float toStart = CornerCoach.Rel(c.start, along, L);
-            float pastStart = CornerCoach.Rel(along, c.start, L);
-            float apexLen = Mathf.Max(5f, CornerCoach.Rel(c.apex, c.start, L));
+            if (n == null) return 0f;
+            float w = n.widen + n.angWiden;
+            if (w < 0.05f) return 0f;
+            // v107g: "virar antes" — o carro deixa o lado de fora e vai para o ápice a partir de turnIn m ANTES do início da curva (arco maior)
+            float turnPt = Mathf.Repeat(c.start - n.turnIn, L);
+            float toStart = CornerCoach.Rel(turnPt, along, L);
+            float pastStart = CornerCoach.Rel(along, turnPt, L);
+            float apexLen = Mathf.Max(5f, CornerCoach.Rel(c.apex, turnPt, L));
             float fade = toStart <= 60f ? Mathf.Clamp01((60f - toStart) / 40f)
                        : pastStart <= apexLen ? Mathf.Clamp01(1f - pastStart / apexLen) : 0f;
-            return -c.dir * n.widen * fade;   // lado de FORA da curva
+            return -c.dir * w * fade;   // lado de FORA da curva
         }
 
         bool CoachExitHold(float along, float L)
@@ -2218,7 +2224,7 @@ namespace RaceX.Car
             return n != null && n.exitDelay > 0.5f && CornerCoach.Rel(along, c.apex, L) < n.exitDelay;
         }
 
-        void CoachObserve(float along, float speed, float L, bool offTrack, float beta, bool contact, bool normalCond)
+        void CoachObserve(float along, float speed, float L, bool offTrack, float beta, bool contact, bool normalCond, bool coldOnly)
         {
             var w = coachOn ? CornerCoach.ObsWindow(coachMap, along) : null;
             int idx = w != null ? w.id : -1;
@@ -2228,7 +2234,8 @@ namespace RaceX.Car
                 obsCorner = idx;
                 // só vale a passagem que começou no início da janela (não respawn/saída do box no meio da curva)
                 obsValid = idx >= 0 && CornerCoach.Rel(along, w.start - 30f, L) < 20f;
-                obsT0 = Time.time; obsDirty = false; obsContact = false; obsOff = obsSlide = obsPush = false;
+                obsT0 = Time.time; obsDirty = false; obsContact = false; obsOff = obsSlide = obsPush = false; obsCold = false;
+                obsLockT = 0f; obsLastT = Time.time;
                 obsEntryF = obsEntryR = obsExitF = obsExitR = 0f; obsTurnInOver = -99f;
                 obsPullState = 0; obsPeakSteer = 0f; obsPulls = 0; obsRelAlong = obsRepullAlong = obsPullEndAlong = -1f;
                 obsMaxOut = obsMaxIn = -99f; obsHoldUsed = false; obsSpeedRel = 0f; obsMinV = 999f;
@@ -2240,7 +2247,8 @@ namespace RaceX.Car
             // Qualquer BANDEIRA (amarela, dupla, VSC, SC, azul) também: sob bandeira a IA anda mais devagar por regra e a passagem
             // parecia "pneu sobrando" (pedido do usuário em 05/11: "considere as bandeiras no julgamento").
             var flagObs = RaceX.Core.RaceControl.FlagOf(car);
-            string why = !normalCond ? (PitLaneSystem.TireTemp(car) <= 0.70f ? "pneu" : "condicao") : (mergeTimer > 0f || Time.time - coachPitT < 8f || exitHoldActive || exitBlendT > 0f) ? "box"
+            if (!normalCond && coldOnly) obsCold = true;   // pneu frio e o resto normal: observa (a lição vai só para o pneu frio)
+            string why = !normalCond && !coldOnly ? (PitLaneSystem.TireTemp(car) <= 0.70f ? "pneu" : "condicao") : (mergeTimer > 0f || Time.time - coachPitT < 8f || exitHoldActive || exitBlendT > 0f) ? "box"
                        : (flagObs == RaceFlag.Yellow || flagObs == RaceFlag.DoubleYellow || flagObs == RaceFlag.Blue || flagObs == RaceFlag.White
                           || flagObs == RaceFlag.Debris || flagObs == RaceFlag.VSC || flagObs == RaceFlag.SafetyCar) ? "bandeira" : null;
             if (why != null) { obsValid = false; DiscardCount(why); return; }
@@ -2264,9 +2272,13 @@ namespace RaceX.Car
                     else if (obsPullState == 1 && obsPeakSteer > 3f && sIn < 0.5f * obsPeakSteer) { obsPullState = 2; obsRelAlong = pc; obsSpeedRel = speed; }
                     else if (obsPullState == 2 && sIn > 0.7f * obsPeakSteer) { obsPullState = 1; obsPulls++; obsRepullAlong = pc; }
                     if (obsPullState == 1) obsPullEndAlong = pc;
+                    // v107g: volante no batente (≥ 90% do máximo nesta velocidade) virando PARA DENTRO da curva
+                    float dtObs = Mathf.Clamp(Time.time - obsLastT, 0f, 0.3f);
+                    if (pc <= clen && sIn >= 0.9f * EffectiveMaxSteer()) obsLockT += dtObs;
                     if (holdDirT != 0) obsHoldUsed = true;
                     if (pc <= clen) obsMinV = Mathf.Min(obsMinV, speed);
                 }
+                obsLastT = Time.time;
                 float outLat = -c.dir * lastMyLat;    // + = para FORA da curva
                 obsMaxOut = Mathf.Max(obsMaxOut, outLat); obsMaxIn = Mathf.Max(obsMaxIn, -outLat);
             }
@@ -2343,6 +2355,75 @@ namespace RaceX.Car
                     string lineH = "APRENDE " + (enH != null ? enH.name : name) + " C" + c.id + " volante: " + hc;
                     if (AutoTest.Active) AutoTest.Log(lineH); else Debug.Log("[CADERNO] " + lineH);
                 }
+            }
+            // ÂNGULO DE ENTRADA (v107g, pedido do usuário em 06/11: "entrando nesse ângulo a curva semiaberta vira fechada; na próxima vou
+            // tentar angular melhor"): volante ≥ 90% do batente por mais de AngLockSeconds (0,6 s) dentro da curva = o "P" (seguiu reto e virou tarde, num arco
+            // fechado). Próxima passagem: abre 0,5 m a mais pelo lado de fora e começa a ir para o ápice 5 m antes (arco maior). A passagem
+            // seguinte MEDE: precisou de menos volante (−30% de tempo no batente) ou fez a curva mais rápido → fica (e, se ainda travou, mais
+            // um passo); piorou → volta ao anterior. Vale no treino, na classificação, na corrida (é corrigir um erro) e com pneu frio.
+            if (AutoTest.Active && obsLockT > 0.3f)
+            {
+                var enL = race != null ? race.GetEntry(car) : null;
+                AutoTest.Log("BATENTE " + (enL != null ? enL.name : name) + " C" + c.id + " " + obsLockT.ToString("0.0") + "s sujo=" + (obsDirty ? 1 : 0) + " toque=" + (obsContact ? 1 : 0)
+                    + " frio=" + (obsCold ? 1 : 0) + " saiu=" + (obsOff ? 1 : 0) + " frente=" + (obsPush ? 1 : 0) + " curva=" + t.ToString("0.00") + "s abrir=" + n.angWiden.ToString("0.0") + " virarAntes=" + n.turnIn.ToString("0"));
+            }
+            if (!obsDirty && !obsContact)
+            {
+                float halfA = RoadHalf();
+                string ac = null;
+                bool reverted = false;
+                if (n.angTry)
+                {
+                    n.angTry = false;
+                    bool better = obsLockT < n.angLockRef * 0.7f || t < n.angTRef * 0.997f;
+                    if (!better && (obsOff || obsLockT > n.angLockRef * 1.1f || t > n.angTRef * 1.003f))
+                    {
+                        ac = "angulo piorou (batente " + obsLockT.ToString("0.0") + " s contra " + n.angLockRef.ToString("0.0") + ", curva " + t.ToString("0.00") + " contra " + n.angTRef.ToString("0.00") + " s): volta ao anterior";
+                        n.angWiden = n.angPrevWiden; n.turnIn = n.angPrevTurn; n.angBacks++; AngleBacks++; reverted = true;
+                    }
+                    else { ac = "angulo " + (better ? "melhorou" : "igual") + " (batente " + obsLockT.ToString("0.0") + " s contra " + n.angLockRef.ToString("0.0") + ", curva " + t.ToString("0.00") + " contra " + n.angTRef.ToString("0.00") + " s): fica"; if (better) AngleKeeps++; }
+                }
+                if (!reverted && obsLockT > AngLockSeconds)
+                {
+                    float wMax = Mathf.Min(AngWidenMax, Mathf.Max(0f, halfA - 1.5f));
+                    if (n.angWiden < wMax - 0.01f || n.turnIn < AngTurnInMax - 0.01f)
+                    {
+                        n.angPrevWiden = n.angWiden; n.angPrevTurn = n.turnIn;
+                        n.angWiden = Mathf.Min(wMax, n.angWiden + 0.5f);
+                        n.turnIn = Mathf.Min(AngTurnInMax, n.turnIn + 5f);
+                        n.angTry = true; n.angLockRef = obsLockT; n.angTRef = t; n.angLessons++; AngleLessons++;
+                        ac = (ac != null ? ac + "; " : "") + "volante no batente " + obsLockT.ToString("0.0") + " s (P): abrir " + n.angWiden.ToString("0.0") + " m e virar " + n.turnIn.ToString("0") + " m antes";
+                    }
+                }
+                if (ac != null)
+                {
+                    CornerCoach.MarkDirty();
+                    var enA = race != null ? race.GetEntry(car) : null;
+                    string lineA = "APRENDE " + (enA != null ? enA.name : name) + " C" + c.id + " angulo: " + ac;
+                    if (AutoTest.Active) AutoTest.Log(lineA); else Debug.Log("[CADERNO] " + lineA);
+                }
+            }
+            // PNEU FRIO (v107f): erro → margem e "tirar o pé antes" SÓ de pneu frio nesta curva; passagem limpa devolve 0,5%. Não mexe no
+            // caderno de pneu quente (escala, experimentos, ritmo sobre o jogador).
+            if (obsCold)
+            {
+                bool errC = (obsOff || obsSlide || obsPush) && !obsContact;
+                if (errC && !obsDirty)
+                {
+                    bool exitC = obsOff ? obsOffExit : obsSlide ? obsSlideExit : obsPushExit;
+                    float cs0 = n.coldScale;
+                    n.coldScale = Mathf.Max(0.80f, n.coldScale - (obsOff ? 0.04f : 0.02f));
+                    if (!exitC) n.coldLift = Mathf.Min(40f, n.coldLift + 8f);
+                    n.coldErrors++; ColdLessons++; coachErrLap++; CornerCoach.MarkDirty();
+                    var enC = race != null ? race.GetEntry(car) : null;
+                    string lineC = "APRENDE " + (enC != null ? enC.name : name) + " C" + c.id + " pneu frio (" + PitLaneSystem.TireTemp(car).ToString("0.00") + "): "
+                        + (obsOff ? "saiu" : obsSlide ? "rodou" : "frente escorregou") + (exitC ? " na saida" : " na entrada")
+                        + " -> escalaFrio " + cs0.ToString("0.00") + "->" + n.coldScale.ToString("0.00") + " tirarAntesFrio=" + n.coldLift.ToString("0") + "m";
+                    if (AutoTest.Active) AutoTest.Log(lineC); else Debug.Log("[CADERNO] " + lineC);
+                }
+                else if (!errC && !obsDirty && !obsContact && n.coldScale < 1f) n.coldScale = Mathf.Min(1f, n.coldScale + 0.005f);
+                DiscardCount("pneu");
+                return;
             }
             float sk = Mathf.InverseLerp(0.95f, 1.16f, skill);
             // Margem depois do erro e passo de melhora pelo NÍVEL do piloto: o bom volta para perto do limite e melhora mais rápido.
@@ -2535,10 +2616,12 @@ namespace RaceX.Car
                           && !RaceX.Core.RaceControl.Neutralized(car) && mergeTimer <= 0f;
             // Caderno (v105): condição para aprender a curva — vale também na chuva (caderno separado seco/molhado); pneu frio,
             // furado, carro batido e neutralização não ensinam.
-            bool coachNormal = !RaceX.Core.PitLaneSystem.HasPuncture(car) && RaceX.Core.PitLaneSystem.TireTemp(car) > 0.70f   // 05/11: 0,85 bloqueava quase tudo (3 lições em 5 min)
-                               && (car.damage == null || car.damage.MaxLevel < 0.5f) && !RaceX.Core.RaceControl.Neutralized(car)
-                               && Time.time - unlockTime > 12f;
-            CoachObserve(along, speed, L, offTrack, beta, contact, coachNormal);
+            bool coachOther = !RaceX.Core.PitLaneSystem.HasPuncture(car)
+                              && (car.damage == null || car.damage.MaxLevel < 0.5f) && !RaceX.Core.RaceControl.Neutralized(car)
+                              && Time.time - unlockTime > 12f;
+            bool coachCold = RaceX.Core.PitLaneSystem.TireTemp(car) <= 0.70f;   // 05/11: 0,85 bloqueava quase tudo (3 lições em 5 min)
+            bool coachNormal = coachOther && !coachCold;
+            CoachObserve(along, speed, L, offTrack, beta, contact, coachNormal, coachOther && coachCold);
             if (((offTrack && !wasOffTrack) || bigSlide) && normal && !contact && speed > 15f && Time.time - unlockTime > 12f)
             {
                 // Com o caderno ligado quem aprende é o caderno (o motivo do erro), não o teto "7% abaixo" do trecho.
@@ -2827,7 +2910,9 @@ namespace RaceX.Car
                 if (vCorner >= float.MaxValue) continue;
                 // Freada até a curva planejada com o apoio na velocidade DA CURVA (a menor do trecho: conta conservadora).
                 float decelPlan = StyleDecel(along + s, L, BrakePlanDecel(Mathf.Min(vCorner, speed)));
-                float sEff = Mathf.Max(0f, s - 4f - (cn != null ? cn.liftEarly : 0f));
+                // Lição de pneu frio da curva (v107f): pesa 100% com o pneu ≤ 70% e some até 90%.
+                float coldW = cn != null && (cn.coldScale < 0.999f || cn.coldLift > 0.5f) ? Mathf.InverseLerp(0.9f, 0.7f, PitLaneSystem.TireTemp(car)) : 0f;
+                float sEff = Mathf.Max(0f, s - 4f - (cn != null ? cn.liftEarly + cn.coldLift * coldW : 0f));
                 bool liftPlan = false;
                 if (cn != null)
                 {
@@ -2850,6 +2935,9 @@ namespace RaceX.Car
                 {
                     float cm = ColdTyreMul();
                     if (cm < 0.999f) vCorner = Mathf.Max(vCorner * cm, Mathf.Min(vCorner, ColdFloorSpeed));
+                    // A lição de pneu frio vem de um ERRO real nesta curva: vale também abaixo do piso de 110 km/h (o piso anulava a
+                    // margem nas curvas lentas — o carro entrava como se o pneu estivesse quente e fazia o "P").
+                    if (coldW > 0f) vCorner *= Mathf.Lerp(1f, cn.coldScale, coldW);
                 }
                 float vAllowed = Mathf.Sqrt(vCorner * vCorner + 2f * decelPlan * sEff);
                 if (vAllowed < best) { best = vAllowed; bestLift = liftPlan; }
@@ -2944,6 +3032,13 @@ namespace RaceX.Car
         float holdPeakF;
         /// <summary>Autoteste: lições de "segurar o volante" aprendidas.</summary>
         public static int HoldLessons;
+        /// <summary>Autoteste (v107f): lições de pneu frio aprendidas (erro com o pneu frio numa curva).</summary>
+        public static int ColdLessons;
+        /// <summary>Autoteste (v107g): lições de ângulo de entrada (o "P"), passos que ficaram e que voltaram.</summary>
+        public static int AngleLessons, AngleKeeps, AngleBacks;
+        const float AngWidenMax = 3f, AngTurnInMax = 25f;
+        /// <summary>Tempo com o volante no batente dentro da curva que conta como "P" (v107h: 1 s não disparou em 6 voltas — 0,6 s).</summary>
+        const float AngLockSeconds = 0.6f;
         /// <summary>Autoteste (v106g): passos de +1% e de −0,5%/−1% sobre a velocidade do jogador nas curvas.</summary>
         public static int OverUps, OverDowns;
         /// <summary>Autoteste: passagens limpas em que o volante soltou e puxou de novo dentro da curva (e quantas chegaram perto da borda).</summary>

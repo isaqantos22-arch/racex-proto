@@ -555,16 +555,13 @@ namespace RaceX.UI
         static readonly Color DeltaPurple = new Color(0.88f, 0.62f, 1f);
         static readonly Color DeltaGreen = new Color(0.35f, 1f, 0.5f);
         static readonly Color DeltaYellow = new Color(1f, 0.86f, 0.25f);
-        static readonly Color DeltaRed = new Color(1f, 0.38f, 0.32f);
         static readonly Color DeltaPill = new Color(0.03f, 0.03f, 0.06f, 0.62f);
         Image[] secDeltaBg;
-        Image deltaBg;
         static readonly Color SecGreen = new Color(0.2f, 0.8f, 0.3f, 0.92f);
         static readonly Color SecYellow = new Color(1f, 0.78f, 0.1f, 0.92f);
         static readonly Color SecNone = new Color(0.1f, 0.11f, 0.14f, 0.8f);
         Image[] secBg;
         Text[] secText;
-        Text deltaText;
         Text[] secDelta;
         float secTimer;
         readonly Dictionary<RaceEntry, Vector3Int> towerGapKey = new Dictionary<RaceEntry, Vector3Int>();
@@ -601,12 +598,8 @@ namespace RaceX.UI
                 Emphasize(dl);
                 secDelta[i] = dl;
             }
-            deltaBg = UIFactory.Panel("DeltaBg", root, tl, tl, new Vector2(270f * s, -194f * s), new Vector2(214f * s, 38f * s), DeltaPill);
-            deltaBg.sprite = MenuTheme.RoundedSprite(107, 19, 9);
-            deltaBg.enabled = false;
-            deltaText = UIFactory.Label("Delta", deltaBg.transform, "", Mathf.RoundToInt(26 * s), TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(214f * s, 38f * s), Color.white);
-            deltaText.raycastTarget = false;
-            Emphasize(deltaText);
+            // v107g: a pílula "DELTA" (soma das diferenças dos setores) saiu — pedido do usuário, 06/11: "completamente não usual".
+            // As diferenças de cada setor continuam embaixo de S1/S2/S3.
         }
 
         /// <summary>Texto de tempo legível sem pesar: sombra escura fina (1 px), peso normal. O contorno grosso + negrito da versão
@@ -626,8 +619,6 @@ namespace RaceX.UI
             secTimer = 0.1f;
             var st = SectorTimer.Instance;
             int cur = race.State == RaceState.Racing && !entry.finished ? st.CurrentSector(entry) : -1;
-            float acc = 0f, pbAcc = 0f;
-            bool anyDelta = false;
             for (int k = 0; k < 3; k++)
             {
                 string txt;
@@ -665,20 +656,7 @@ namespace RaceX.UI
                 if (secText[k].text != txt) secText[k].text = txt;
                 if (secBg[k].color != col) secBg[k].color = col;
                 secText[k].color = col == SecYellow ? new Color(0.08f, 0.08f, 0.1f) : Color.white;
-                float pb = st.PersonalBest(entry, k);
-                if (done > 0f && pb > 0f) { acc += done; pbAcc += pb; anyDelta = true; }
             }
-            string dtx = "";
-            if (anyDelta)
-            {
-                float d = acc - pbAcc;
-                dtx = "DELTA " + (d >= 0f ? "+" : "-") + Mathf.Abs(d).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture);
-                // abaixo do seu melhor = volta recorde pessoal em andamento → roxo (pedido do usuário: era verde)
-                deltaText.color = d > 0.0005f ? DeltaRed : d < -0.0005f ? DeltaPurple : Color.white;
-            }
-            if (deltaText.text != dtx) deltaText.text = dtx;
-            bool showDelta = dtx.Length > 0;
-            if (deltaBg.enabled != showDelta) deltaBg.enabled = showDelta;
         }
 
         void BuildTower(RectTransform root, float s)
@@ -1317,7 +1295,7 @@ namespace RaceX.UI
                     float d = pitOn ? RaceX.Core.PitLaneSystem.DistanceToPitEntry(car) : 0f;
                     if (pitOn) UpdatePitRadio(car, d, lapNo);
                     bool inPitRoute = entry != null && entry.car != null && entry.car.pitControlled;
-                    bool wanted = pitOn && entry != null && !entry.retired && (inPitRoute || RaceX.Core.PitLaneSystem.EntryGuideFor(car));   // fora da corrida: oculto
+                    bool wanted = pitOn && entry != null && !entry.retired && !entry.finished && (inPitRoute || RaceX.Core.PitLaneSystem.EntryGuideFor(car));   // fora da corrida ou depois da bandeirada: oculto
                     int token = !wanted ? -3
                         : inPitRoute ? -2
                         : d < 0f ? -1 : Mathf.RoundToInt(d);

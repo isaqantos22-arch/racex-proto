@@ -66,6 +66,21 @@ namespace RaceX.Car
             // quanto da velocidade do JOGADOR nesta curva o piloto pode usar (1,00 = a dele; até o teto do piloto, 1,01–1,10).
             public float overPlayer = 1f;
             public int overUps, overDowns;
+            // v107f (pedido do usuário em 06/11: "ele não aprende com os erros; faz um P em vez do C e sai sempre na mesma curva"): lição de
+            // PNEU FRIO desta curva — escala da velocidade e metros a mais de "tirar o pé antes" que só valem com o pneu frio (somem até
+            // 90% da temperatura). Antes toda passagem com pneu frio era descartada, inclusive os erros: o carro do autoteste (médio a
+            // 31 °C, pneu 0,52–0,67 a corrida inteira) saiu 3 vezes na mesma curva a 85 km/h com o volante no batente e o caderno
+            // terminou com erros=0.
+            public float coldScale = 1f, coldLift;
+            public int coldErrors;
+            // v107g (pedido do usuário em 06/11: "entrando num ângulo em que a curva semiaberta vira fechada — na próxima tenho de angular
+            // melhor para pegar a curva como ela é"): ÂNGULO DE ENTRADA aprendido — metros a mais pelo lado de FORA antes da curva
+            // (angWiden) e metros ANTES do início da curva em que o carro começa a ir para o ápice (turnIn). angTry = a próxima passagem
+            // mede o passo novo contra a referência (tempo com o volante no batente e tempo da curva).
+            public float angWiden, turnIn;
+            public bool angTry;
+            public float angLockRef, angTRef, angPrevWiden, angPrevTurn;
+            public int angLessons, angBacks;
         }
 
         [Serializable]

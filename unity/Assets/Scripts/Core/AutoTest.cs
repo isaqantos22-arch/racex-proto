@@ -168,6 +168,7 @@ namespace RaceX.Core
             r.autopilot = GetInt("autopilot", 1) == 1;
             r.crashTest = GetInt("crashtest", 0) >= 1;
             r.crashOnTrack = GetInt("crashtest", 0) == 2;
+            r.incidentTest = GetInt("incidenttest", 0) == 1;
             r.pitLap = GetInt("pitlap", 0);
             r.pitSlowmo = float.TryParse(Get("pitslowmo", "1"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float sm) ? Mathf.Clamp(sm, 0.05f, 1f) : 1f;
             r.celebTest = GetInt("celebtest", 0) == 1;
@@ -311,6 +312,10 @@ namespace RaceX.Core
         public bool crashTest;
         /// <summary>crashtest=2: além disso, deixa os dois carros que abandonam EM CIMA da pista à frente do jogador (testa o contorno).</summary>
         public bool crashOnTrack;
+        /// <summary>incidenttest=1 (v107d): aos 45 s anota um incidente NPC × autoteste (autoteste atingido) e aos 75 s autoteste × NPC
+        /// (autoteste culpado) — testa o "INCIDENTE ANOTADO — em análise" e a DECISÃO para os dois lados sem depender de batida real.</summary>
+        public bool incidentTest;
+        int incidentStep;
         public int pitLap;
         public float pitSlowmo = 1f;
         public bool celebTest, shots, garageTest;
@@ -553,7 +558,7 @@ namespace RaceX.Core
         }
         void OnNotice(RaceEntry e, string msg)
         {
-            if (msg.StartsWith("PENALIDADE")) penalties++;
+            if (msg.StartsWith(RaceControl.PenaltyPrefix)) penalties++;
             if (msg.Contains("ultrapassou sob SAFETY CAR")) scOvertakePen++;
             if (msg.StartsWith("VSC") && e != me) return; // um aviso de VSC por carro polui o log
             AutoTest.Log("DIRECAO " + e.name + ": " + msg);
@@ -708,6 +713,17 @@ namespace RaceX.Core
                 AutoTest.Log("DESTROCO " + e.name + " along=" + wa.ToString("0") + " lat=" + wl.ToString("0.0") + " angulo=" + ang.ToString("0") + "° meiaPista=" + (race.Track.Definition != null ? (race.Track.Definition.roadWidth * 0.5f).ToString("0.0") : "-"));
             }
             if (crashTest && !crashDone && Time.time - t0 > 40f && race.Settings.laps < 900) CrashTest();   // só em corrida
+            if (incidentTest && incidentStep < 2 && race.Settings.laps < 900 && me != null && Time.time - t0 > (incidentStep == 0 ? 45f : 75f))
+            {
+                RaceEntry npc = null;
+                foreach (var e in race.entries) if (e != me && e.car != null && !e.retired && !e.finished) { npc = e; if (incidentStep == 1) continue; break; }
+                if (npc != null)
+                {
+                    if (incidentStep == 0) RaceControl.TestIncident(npc, me); else RaceControl.TestIncident(me, npc);
+                    AutoTest.Log("incidenttest " + (incidentStep + 1) + ": " + (incidentStep == 0 ? npc.name + " x " + me.name : me.name + " x " + npc.name));
+                }
+                incidentStep++;
+            }
             // Piloto automático obedece a bandeira preta e laranja como as IAs (o jogador de verdade usa o botão PIT).
             if (pilot != null && car.damage != null && car.damage.NeedsPit && !PitLaneSystem.IsPitActiveOrRequested(car)) PitLaneSystem.RequestPit(car);
             int dmgCars = 0, retired = 0;
@@ -807,7 +823,7 @@ namespace RaceX.Core
                     + " | paradosAtivosMax=" + maxStoppedActive + " parados6s=" + longStops);
                 AutoTest.Log("ULTRAPASSAGENS tentativas=" + CarAI.PassTries + " feitas=" + CarAI.PassesDone + " mantidasNaCurva=" + CarAI.PassesInCorner
                     + " | VOLANTE licoes de segurar=" + CarAI.HoldLessons + " soltouEPuxou=" + CarAI.RepullPasses + " (perto da borda " + CarAI.RepullNearOut + ")"
-                    + " | RITMO curva +1%=" + CarAI.OverUps + " recuos=" + CarAI.OverDowns);
+                    + " | RITMO curva +1%=" + CarAI.OverUps + " recuos=" + CarAI.OverDowns + " | PNEU FRIO licoes=" + CarAI.ColdLessons + " | ANGULO licoes=" + CarAI.AngleLessons + " ficou=" + CarAI.AngleKeeps + " voltou=" + CarAI.AngleBacks);
                 AutoTest.Log("V82 resumo: largada_npcFreando=" + npcBrakeStart + " sc_toquesNaFila=" + scContacts + " sc_PTnaFila=" + scPtUnder
                     + " sc_penalUltrapassagem=" + scOvertakePen + " empilhadosMax=" + maxStack + " subidaMax=" + maxUpV.ToString("0.0") + "m/s"
                     + " gripMinNoBox=" + minPitGrip.ToString("0.00") + " saidaBox_recolocado=" + (PitLaneSystem.EscapeResets - escape0)

@@ -30,6 +30,9 @@ namespace RaceX.Core
         public static event Action<RaceEntry, string> Notice;
 
         public const float PenaltySeconds = 5f;
+        /// <summary>Início do aviso de PUNIÇÃO de tempo. A carreira (superlicença) e o autoteste contam punições por ele — mudar o texto
+        /// aqui muda em todos (no v107 o texto virou "PUNIÇÃO DE" e a carreira, que procurava "PENALIDADE", parou de contar).</summary>
+        public const string PenaltyPrefix = "PUNIÇÃO DE ";
         public const float GiveBackSeconds = 10f;
         /// <summary>VSC: teto = esta fração da velocidade FINAL do carro. Medido (OpenF1, 2023–2025): volta 1,37–1,42× a normal; nas
         /// retas 45–60% da velocidade normal, nas curvas lentas 80–100% (pesquisa de 02/11, research_notes/…/vsc.md). 0,52 da final
@@ -78,6 +81,9 @@ namespace RaceX.Core
             public string greenText = "";
             public bool pitAsked;
             public float wreckAt = -1f;
+            /// <summary>Empurrão dos fiscais: início (−1 = esperando o carro assentar), melhor avanço para fora e tempo sem avançar.</summary>
+            public float pushStartAt = -1f, pushBestOut, pushStallT;
+            public bool pushDone;
         }
 
         RaceManager race;
@@ -185,8 +191,9 @@ namespace RaceX.Core
         /// <summary>VSC nos últimos 10 s (a F1 avisa "VIRTUAL SAFETY CAR ENDING" 10–15 s antes do verde).</summary>
         public static bool VscEnding => VscActive && Time.time > Instance.vscUntil - 10f;
         bool vscEndingSaid, pitOpenSaid, wetSaid, chequeredSaid;
-        /// <summary>Punição por colisão: primeiro "INCIDENTE ANOTADO", a punição sai 8 s depois (como a F1: anotado → decisão).</summary>
-        readonly List<(RaceEntry e, string why, float at)> pendingPens = new List<(RaceEntry, string, float)>();
+        /// <summary>Incidente anotado (a = quem bateu, b = quem foi atingido): a DECISÃO sai 8 s depois para os dois (como a F1:
+        /// anotado → decisão). Nunca fica sem resposta (pedido do usuário, 06/11: "não deve ter pontas soltas").</summary>
+        readonly List<(RaceEntry a, RaceEntry b, string curve, float at)> pendingIncidents = new List<(RaceEntry, RaceEntry, string, float)>();
 
         void OnEntryFinished(RaceEntry e)
         {
@@ -205,13 +212,43 @@ namespace RaceX.Core
             float w = WeatherSystem.Wetness;
             if (!wetSaid && w > 0.12f) { wetSaid = true; Broadcast("PISTA ESCORREGADIA — pouca aderência"); }
             else if (wetSaid && w < 0.04f) { wetSaid = false; Broadcast("ADERÊNCIA NORMAL — a pista secou"); }
-            for (int k = pendingPens.Count - 1; k >= 0; k--)
+            for (int k = pendingIncidents.Count - 1; k >= 0; k--)
             {
-                if (now < pendingPens[k].at) continue;
-                var p = pendingPens[k];
-                pendingPens.RemoveAt(k);
-                Penalize(p.e, p.why);
+                if (now < pendingIncidents[k].at) continue;
+                var p = pendingIncidents[k];
+                pendingIncidents.RemoveAt(k);
+                DecideIncident(p.a, p.b, p.curve);
             }
+        }
+
+        /// <summary>Autoteste (incidenttest=1): anota um incidente a × b como se a tivesse batido em b (o resto é o caminho normal).</summary>
+        public static void TestIncident(RaceEntry a, RaceEntry b)
+        {
+            var rc = Instance;
+            if (rc == null || a == null || b == null || a.car == null) return;
+            var sa = rc.S(a.car);
+            if (sa == null) return;
+            string curve = rc.CurveSuffix(sa.along);
+            string inc = "INCIDENTE ANOTADO" + curve + ": " + a.name + " × " + b.name + " — em análise";
+            rc.Say(a, inc);
+            rc.Say(b, inc);
+            rc.pendingIncidents.Add((a, b, curve, Time.time + 8f));
+        }
+
+        /// <summary>Decisão do incidente anotado: quem bateu leva a punição e quem foi atingido fica sabendo; sem punição possível
+        /// (penalidades desligadas, culpado fora da corrida) os dois recebem SEM AÇÃO com o motivo.</summary>
+        void DecideIncident(RaceEntry a, RaceEntry b, string curve)
+        {
+            if (a == null || b == null) return;
+            string where = curve.Trim().ToLowerInvariant();   // "na curva 3" (vazio fora do mapa de curvas)
+            if (Penalize(a, "causou colisão com " + b.name))
+            {
+                Say(b, "DECISÃO: " + a.name + " PUNIDO COM " + PenaltySeconds.ToString("0") + " s — colisão" + (where.Length > 0 ? " " + where : ""));
+                return;
+            }
+            string why = !PenaltiesEnabled ? "penalidades desligadas" : a.retired ? a.name + " fora da corrida" : "incidente de corrida";
+            Say(a, "DECISÃO: SEM AÇÃO — " + why);
+            Say(b, "DECISÃO: SEM AÇÃO — " + why);
         }
 
         /// <summary>Texto da bandeira PARA ESTE CARRO (com setor do perigo, quem vai dar a volta, VSC terminando).</summary>
@@ -279,13 +316,15 @@ namespace RaceX.Core
 
         float lastTotaledAt = -99f;
 
-        void Penalize(RaceEntry e, string why)
+        /// <summary>Aplica a punição de tempo; false = não aplicou (fora da corrida, penalidades desligadas, carro remoto).</summary>
+        bool Penalize(RaceEntry e, string why)
         {
-            if (!IsRace || e == null || e.retired || !PenaltiesEnabled) return;
-            if (e.car != null && e.car.IsRemote) return;   // online: quem pune é o aparelho dono do carro
+            if (!IsRace || e == null || e.retired || !PenaltiesEnabled) return false;
+            if (e.car != null && e.car.IsRemote) return false;   // online: quem pune é o aparelho dono do carro
             race.AddPenalty(e, PenaltySeconds);
             Debug.Log("[PENALIDADE] " + e.name + " +" + PenaltySeconds + " s — " + why);
-            Say(e, "PUNIÇÃO DE " + PenaltySeconds.ToString("0") + " s: " + why + " — somada ao tempo final");   // F1: "5 SECOND TIME PENALTY FOR CAR N - CAUSING A COLLISION"
+            Say(e, PenaltyPrefix + PenaltySeconds.ToString("0") + " s: " + why + " — somada ao tempo final");   // F1: "5 SECOND TIME PENALTY FOR CAR N - CAUSING A COLLISION"
+            return true;
         }
 
         // ---------------- Eventos de dano ----------------
@@ -361,11 +400,14 @@ namespace RaceX.Core
             long key = ((long)striker.GetInstanceID() << 32) ^ (uint)victim.GetInstanceID();
             if (pairCooldown.TryGetValue(key, out float until) && Time.time < until) return;
             pairCooldown[key] = Time.time + 10f;
-            // Como a F1 (pesquisa de 06/11): primeiro "INCIDENTE ANOTADO" para os dois envolvidos, a punição sai 8 s depois.
-            string inc = "INCIDENTE ANOTADO" + CurveSuffix(a.along) + ": " + a.e.name + " × " + b.e.name + " — em análise";
+            // Online com o culpado REMOTO: quem decide é o aparelho dono do carro — aqui o "em análise" ficaria sem resposta.
+            if (striker.IsRemote) return;
+            // Como a F1 (pesquisa de 06/11): primeiro "INCIDENTE ANOTADO" para os dois envolvidos, a decisão sai 8 s depois.
+            string curve = CurveSuffix(a.along);
+            string inc = "INCIDENTE ANOTADO" + curve + ": " + a.e.name + " × " + b.e.name + " — em análise";
             Say(a.e, inc);
             Say(b.e, inc);
-            if (PenaltiesEnabled) pendingPens.Add((a.e, "causou colisão com " + b.e.name, Time.time + 8f));
+            pendingIncidents.Add((a.e, b.e, curve, Time.time + 8f));
         }
 
         // ---------------- Laço da direção de prova (5 Hz) ----------------
@@ -644,6 +686,8 @@ namespace RaceX.Core
         /// fazem com carro parado na pista. Pior caso do autoteste (dois carros atravessados de borda a borda): a fila esperava os 30 s
         /// inteiros — agora espera alguns segundos. Valores de projeto.</summary>
         const float MarshalDelay = 4f, MarshalPushSpeed = 1.5f;
+        /// <summary>Espera máxima pelo carro ASSENTAR (parado e sem girar) antes de empurrar.</summary>
+        const float MarshalMaxWait = 10f;
         /// <summary>Zona do pit (v99): o lado "de fora" da pista ali é a ENTRADA e o corredor do box — empurrar o destroço para lá
         /// bloqueava todo mundo (autoteste 03/11: carro destruído a 7,9 m de lateral no bico da mureta, 96 resgates e o piloto
         /// automático parando na entrada). Os fiscais do pit levam o carro para o lado das garagens (3 m/s) e o retiram em 12 s.</summary>
@@ -667,9 +711,22 @@ namespace RaceX.Core
                 var s = kv.Value;
                 var e = s.e;
                 if (e == null || !e.retired || e.isHuman || s.wreckAt <= 0f || e.car == null || !e.car.gameObject.activeSelf) continue;
-                if (now - s.wreckAt < MarshalDelay || (now - s.wreckAt > WreckClearSeconds)) continue;
+                if (s.pushDone || now - s.wreckAt < MarshalDelay || (now - s.wreckAt > WreckClearSeconds)) continue;
                 var c = e.car;
                 if (c.IsRemote) continue;   // online: o carro de outro aparelho é tratado lá
+                var rb = c.Body;
+                if (rb == null || rb.isKinematic) continue;
+                // Só empurra depois que o carro ASSENTOU (parado e sem girar; no máximo MarshalMaxWait s). Antes virava CINEMÁTICO aos
+                // 4 s, ainda girando/inclinado: sem gravidade, congelava no ar e deslizava de lado "pendurado por um guindaste
+                // invisível" (print do usuário, 06/11) — e ficava assim até sumir.
+                if (s.pushStartAt < 0f)
+                {
+                    bool settled = BodyVel(rb).magnitude < 1f && rb.angularVelocity.magnitude < 0.6f;
+                    if (!settled && now - s.wreckAt < MarshalMaxWait) continue;
+                    s.pushStartAt = now; s.pushBestOut = -1f; s.pushStallT = 0f;
+                    if (AutoTest.Active) AutoTest.Log("EMPURRAO " + e.name + " inicio " + (now - s.wreckAt).ToString("0.0") + "s assentou=" + (settled ? 1 : 0) +
+                        " inclinacao=" + Vector3.Angle(c.transform.up, Vector3.up).ToString("0") + "° vy=" + BodyVel(rb).y.ToString("0.00"));
+                }
                 int h = s.hint;
                 float a = wp.DistanceAlong(c.transform.position, ref h);
                 s.hint = h;
@@ -677,12 +734,42 @@ namespace RaceX.Core
                 Vector3 right = pose.rotation * Vector3.right;
                 float lat = Vector3.Dot(c.transform.position - pose.position, right);
                 bool pitZone = lat < 0f && PitLaneSystem.LaneInfo(out float pls, out float pll) && Mathf.Repeat(a - pls + 60f, trackLen) < pll + 80f;
-                if (pitZone ? lat <= -(half + 16f) : Mathf.Abs(lat) >= half + 3f) continue;   // já fora do asfalto (com folga) / já no lado das garagens
-                var rb = c.Body;
-                if (rb != null && !rb.isKinematic) rb.isKinematic = true;   // empurrado pelos fiscais: não "briga" com a física
-                Vector3 np = c.transform.position + right * (pitZone ? -1f : (lat >= 0f ? 1f : -1f)) * (pitZone ? PitMarshalPushSpeed : MarshalPushSpeed) * dt;
-                if (rb != null) rb.MovePosition(np); else c.transform.position = np;
+                if (pitZone ? lat <= -(half + 16f) : Mathf.Abs(lat) >= half + 3f) { s.pushDone = true; LogPushEnd(s, c, rb, "fora", lat); continue; }   // já fora do asfalto (com folga) / já no lado das garagens
+                float dir = pitZone ? -1f : (lat >= 0f ? 1f : -1f);
+                // Encostou num muro/barreira (não ganha 5 cm em 2 s): para de empurrar — antes atravessava o muro.
+                float outNow = lat * dir;
+                if (outNow > s.pushBestOut + 0.05f) { s.pushBestOut = outNow; s.pushStallT = 0f; }
+                else if ((s.pushStallT += dt) > 2f) { s.pushDone = true; LogPushEnd(s, c, rb, "muro", lat); continue; }
+                // Empurrão só HORIZONTAL com a física ligada: a gravidade continua e o carro fica no chão do jeito que caiu.
+                Vector3 flat = new Vector3(right.x, 0f, right.z).normalized * dir * (pitZone ? PitMarshalPushSpeed : MarshalPushSpeed);
+                Vector3 v = BodyVel(rb);
+                SetBodyVel(rb, new Vector3(flat.x, v.y, flat.z));
             }
+        }
+
+        void LogPushEnd(State s, CarController c, Rigidbody rb, string why, float lat)
+        {
+            if (!AutoTest.Active) return;
+            AutoTest.Log("EMPURRAO " + s.e.name + " fim=" + why + " apos " + (Time.time - s.pushStartAt).ToString("0.0") + "s lat=" + lat.ToString("0.0") +
+                " inclinacao=" + Vector3.Angle(c.transform.up, Vector3.up).ToString("0") + "° vy=" + BodyVel(rb).y.ToString("0.00") + " cinematico=" + (rb.isKinematic ? 1 : 0));
+        }
+
+        static Vector3 BodyVel(Rigidbody rb)
+        {
+#if UNITY_6000_0_OR_NEWER
+            return rb.linearVelocity;
+#else
+            return rb.velocity;
+#endif
+        }
+
+        static void SetBodyVel(Rigidbody rb, Vector3 v)
+        {
+#if UNITY_6000_0_OR_NEWER
+            rb.linearVelocity = v;
+#else
+            rb.velocity = v;
+#endif
         }
 
         /// <summary>Saiu da pista DESVIANDO de um incidente (carro parado/destruído ou destroços a até 60 m): motivo justificável —

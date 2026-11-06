@@ -295,7 +295,7 @@ namespace RaceX.Career
             RaceControl.Notice += (e, msg) =>
             {
                 if (!Active || e == null || !e.isHuman || msg == null) return;
-                if (msg.StartsWith("PENALIDADE")) { W.racePenalties++; W.raceLicencePts += LicencePointsFor(msg); }
+                if (msg.StartsWith(RaceControl.PenaltyPrefix)) { W.racePenalties++; W.raceLicencePts += LicencePointsFor(msg); }
             };
             RaceX.Car.CarDamage.Impact += (c, g, zone, wall) =>
             {
