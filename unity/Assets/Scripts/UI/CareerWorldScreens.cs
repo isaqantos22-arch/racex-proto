@@ -254,8 +254,18 @@ namespace RaceX.UI
             py += 8f;
             Txt(b, "O QUE OS FÃS ESTÃO DIZENDO", 20, x, py, 600, 28, MenuTheme.Accent); py += 30f;
             string promise = W.promises.Count > 0 ? W.promises[0].text : "";
+            // Contexto para os fãs (v108): equipe, categoria, posição no campeonato, vitórias e pódios da temporada.
+            string fanTeam = CareerMode.TeamOfDriver(d.pilotName) ?? "";
+            int champPos = 0;
+            if (d.standings != null && d.standings.Count > 0)
+            {
+                var ordered = d.standings.OrderByDescending(s => s.points).ToList();
+                int idx = ordered.FindIndex(s => s.isPlayer || s.driverName == d.pilotName);
+                if (idx >= 0 && ordered[idx].points > 0) champPos = idx + 1;
+            }
             for (int i = 0; i < 2; i++)
-                Txt(b, "\"" + CareerWorldText.FanPost(W.sentiment, me.form, (int)W.following, d.pilotName, promise, d.round * 7 + i * 13 + d.season) + "\"", 17, x, py + i * 46f, 840, 44, MenuTheme.TextDim);
+                Txt(b, "\"" + CareerWorldText.FanPost(W.sentiment, me.form, (int)W.following, d.pilotName, promise, d.round * 7 + i * 13 + d.season,
+                    fanTeam, d.category, champPos, d.seasonWins, d.seasonPodiums) + "\"", 17, x, py + i * 46f, 840, 44, MenuTheme.TextDim);
         }
 
         // ---------------- BANDEJA ----------------

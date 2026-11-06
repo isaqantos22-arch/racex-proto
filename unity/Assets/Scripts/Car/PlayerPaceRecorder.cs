@@ -220,11 +220,12 @@ namespace RaceX.Car
         }
 
         // ---------- TELEMETRIA BRUTA DO JOGADOR (v100, 04/11, pedido: "observe tudo") ----------
-        // Desktop, carro humano, fora do autoteste: 10 Hz em persistentDataPath/telemetry/tele_<data>_<pista>.csv — posição na
+        // Desktop, carro humano, fora do autoteste: 100 Hz (v108; era 10 Hz) em persistentDataPath/telemetry/tele_<data>_<pista>.csv — posição na
         // pista, pedais, volante (comando e ângulo real), guinada, g lateral/longitudinal, escorregamento de cada roda e dos
         // eixos, perda de atrito pela carga, temperatura e composto do pneu, água, marcha, rpm, fora/box/volta suja.
-        System.IO.StreamWriter tele;
-        float teleFlush, telePrevV = -1f, telePrevT = -1f;
+        System.IO.StreamWriter tele, inp;
+        float teleFlush, inpFlush, teleAlong, teleKmh;
+        RaceX.Input.PlayerInputHandler teleInput;
         public static string LastTelemetryPath { get; private set; }
 
         void OpenTelemetry()
@@ -236,7 +237,10 @@ namespace RaceX.Car
                 System.IO.Directory.CreateDirectory(dir);
                 string path = System.IO.Path.Combine(dir, "tele_" + System.DateTime.Now.ToString("yyyyMMdd_HHmmss") + "_t" + trackId + ".csv");
                 tele = new System.IO.StreamWriter(path, false, System.Text.Encoding.UTF8);
-                tele.WriteLine("t;volta;along;lat;kmh;acel;freio;volanteCmd;volanteGraus;guinadaGrausS;gLat;gLong;slipFL;slipFR;slipRL;slipRR;fSide;rSide;cargaMul;pneuTemp;composto;agua;marcha;rpm;fora;box;voltaSuja;carro;massa;apoio;aderLat;aderLong");
+                tele.WriteLine("t;volta;along;lat;kmh;acel;freio;volanteCmd;volanteGraus;guinadaGrausS;gLat;gLong;slipFL;slipFR;slipRL;slipRR;fSide;rSide;cargaMul;pneuTemp;composto;agua;marcha;rpm;fora;box;voltaSuja;carro;massa;apoio;aderLat;aderLong;volanteBruto;acelBruto;freioBruto");
+                // v108: eventos da entrada BRUTA (cada mudança, com o instante do quadro em ms) — toques mais curtos que o passo de 10 ms
+                inp = new System.IO.StreamWriter(System.IO.Path.Combine(dir, "inp_" + System.DateTime.Now.ToString("yyyyMMdd_HHmmss") + "_t" + trackId + ".csv"), false, System.Text.Encoding.UTF8);
+                inp.WriteLine("tMs;volanteBruto;acelBruto;freioBruto;along;kmh");
                 LastTelemetryPath = path;
                 Debug.Log("[Telemetria] gravando em " + path);
             }
@@ -246,7 +250,8 @@ namespace RaceX.Car
         void CloseTelemetry()
         {
             try { if (tele != null) { tele.Flush(); tele.Dispose(); } } catch (System.Exception) { }
-            tele = null;
+            try { if (inp != null) { inp.Flush(); inp.Dispose(); } } catch (System.Exception) { }
+            tele = null; inp = null;
         }
 
         void WriteTelemetry(float along, float lat)
@@ -258,13 +263,14 @@ namespace RaceX.Car
                 float v = car.ForwardSpeed, now = Time.time;
                 float yaw = rb != null ? rb.angularVelocity.y : 0f;
                 float gLat = Mathf.Abs(v * yaw) / 9.81f;
-                float gLong = telePrevT > 0f && now - telePrevT > 0.04f ? (v - telePrevV) / (now - telePrevT) / 9.81f : 0f;
-                telePrevV = v; telePrevT = now;
+                float gLong = car.LocalAcceleration.z / 9.81f;   // v108: aceleração do passo de física (100 Hz)
+                teleAlong = along; teleKmh = v * 3.6f;
+                if (teleInput == null) teleInput = car.GetComponent<RaceX.Input.PlayerInputHandler>();
                 var ci = System.Globalization.CultureInfo.InvariantCulture;
                 var prog = race != null && entry != null ? race.GetProgress(entry) : null;
                 var sp = car.spec;
                 tele.WriteLine(string.Join(";", new string[] {
-                    now.ToString("0.00", ci), (prog != null ? prog.lap : 0).ToString(ci), along.ToString("0.0", ci), lat.ToString("0.00", ci),
+                    now.ToString("0.000", ci), (prog != null ? prog.lap : 0).ToString(ci), along.ToString("0.0", ci), lat.ToString("0.00", ci),
                     (v * 3.6f).ToString("0.0", ci), car.throttleInput.ToString("0.00", ci), car.brakeInput.ToString("0.00", ci),
                     car.steerInput.ToString("0.000", ci), car.SteerAngle.ToString("0.0", ci), (yaw * Mathf.Rad2Deg).ToString("0.0", ci),
                     gLat.ToString("0.00", ci), gLong.ToString("0.00", ci),
@@ -274,12 +280,41 @@ namespace RaceX.Car
                     RaceX.Core.WeatherSystem.Wetness.ToString("0.00", ci), car.Gear.ToString(ci), car.Rpm.ToString("0", ci),
                     car.IsOffTrack ? "1" : "0", (RaceX.Core.PitLaneSystem.IsInPitFlow(car) || car.pitControlled) ? "1" : "0", lapDirty ? "1" : "0",
                     sp != null ? sp.displayName : "", sp != null ? sp.massKg.ToString("0", ci) : "", sp != null ? sp.downforceCoefficient.ToString("0.00", ci) : "",
-                    sp != null ? sp.sidewaysStiffness.ToString("0.00", ci) : "", sp != null ? sp.forwardStiffness.ToString("0.00", ci) : "" }));
-                teleFlush += 0.1f;
+                    sp != null ? sp.sidewaysStiffness.ToString("0.00", ci) : "", sp != null ? sp.forwardStiffness.ToString("0.00", ci) : "",
+                    teleInput != null ? teleInput.RawSteer.ToString("0.000", ci) : "", teleInput != null ? teleInput.RawThrottle.ToString("0.00", ci) : "",
+                    teleInput != null ? teleInput.RawBrake.ToString("0.00", ci) : "" }));
+                teleFlush += Time.fixedDeltaTime;
                 if (teleFlush >= 2f) { teleFlush = 0f; tele.Flush(); }
             }
             catch (System.Exception) { CloseTelemetry(); }
         }
+
+        /// <summary>v108: evento da entrada bruta (chamado pelo PlayerInputHandler a cada mudança) com o instante do quadro em ms.</summary>
+        public void InputEvent(float steer, float throttle, float brake)
+        {
+            if (inp == null || (race != null && race.State != RaceState.Racing)) return;
+            try
+            {
+                var ci = System.Globalization.CultureInfo.InvariantCulture;
+                inp.WriteLine((Time.timeAsDouble * 1000.0).ToString("0", ci) + ";" + steer.ToString("0.000", ci) + ";" + throttle.ToString("0.00", ci) + ";"
+                    + brake.ToString("0.00", ci) + ";" + teleAlong.ToString("0.0", ci) + ";" + teleKmh.ToString("0.0", ci));
+                inpFlush += 1f;
+                if (inpFlush >= 200f) { inpFlush = 0f; inp.Flush(); }
+            }
+            catch (System.Exception) { try { inp.Dispose(); } catch (System.Exception) { } inp = null; }
+        }
+
+        /// <summary>v108 (pedido do usuário em 06/11: "precisão de milissegundos"): telemetria a CADA passo da física (100 Hz, 10 ms);
+        /// antes 10 Hz no Update (toques rápidos no volante não apareciam).</summary>
+        void FixedUpdate()
+        {
+            if (tele == null || car == null || waypoints == null || waypoints.Spline == null || RaceX.Core.ReplaySystem.IsPlaying) return;
+            if (race != null && race.State != RaceState.Racing) return;
+            float alongT = waypoints.DistanceAlong(car.transform.position, ref teleHint);
+            var poseT = waypoints.Spline.PoseAtDistance(alongT);
+            WriteTelemetry(alongT, Vector3.Dot(car.transform.position - poseT.position, poseT.rotation * Vector3.right));
+        }
+        int teleHint = -1;
 
         void OnCollided(float relative, Vector3 point)
         {
@@ -398,12 +433,6 @@ namespace RaceX.Car
             if (sampleTimer > 0f) return;
             sampleTimer = 0.1f;
             if (race != null && race.State != RaceState.Racing) return;
-            if (tele != null && waypoints != null)
-            {
-                float alongT = waypoints.DistanceAlong(car.transform.position, ref hint);
-                var poseT = waypoints.Spline.PoseAtDistance(alongT);
-                WriteTelemetry(alongT, Vector3.Dot(car.transform.position - poseT.position, poseT.rotation * Vector3.right));
-            }
             // Piloto automático (autoteste) no carro do jogador: NÃO é pilotagem do jogador — não grava (exceto stylerecord=1,
             // que testa o caminho do estilo num arquivo separado).
             if (aiPilot == null) aiPilot = car.GetComponent<CarAI>();
@@ -450,8 +479,8 @@ namespace RaceX.Car
             if ((RaceX.Core.WeatherSystem.Wetness >= PlayerStyle.WetFrom) != lapWet || RaceX.Core.PitLaneSystem.CompoundOf(car) != lapCompound) lapMixed = true;
         }
 
-        void OnDisable() { PlayerPaceLearner.Flush(); try { if (tele != null) tele.Flush(); } catch (System.Exception) { } }
-        void OnApplicationPause(bool p) { if (p) { PlayerPaceLearner.Flush(); try { if (tele != null) tele.Flush(); } catch (System.Exception) { } } }
+        void OnDisable() { PlayerPaceLearner.Flush(); try { if (tele != null) tele.Flush(); if (inp != null) inp.Flush(); } catch (System.Exception) { } }
+        void OnApplicationPause(bool p) { if (p) { PlayerPaceLearner.Flush(); try { if (tele != null) tele.Flush(); if (inp != null) inp.Flush(); } catch (System.Exception) { } } }
         void OnApplicationQuit() { CloseTelemetry(); }
     }
 }

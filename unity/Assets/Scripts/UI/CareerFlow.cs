@@ -1312,7 +1312,8 @@ namespace RaceX.UI
             for (int i = 0; i < rm.entries.Count; i++)
             {
                 var e = rm.entries[i];
-                if (e.car != null && !RaceX.Core.PitLaneSystem.IsInPitFlow(e.car)) n++;
+                // v108: destruído / abandonou / retirado da pista não conta como "na pista" (relato do usuário, 06/11)
+                if (e.car != null && !e.retired && !e.car.wrecked && e.car.gameObject.activeInHierarchy && !RaceX.Core.PitLaneSystem.IsInPitFlow(e.car)) n++;
             }
             label.text = "PISTA AO VIVO — " + n + " NA PISTA";
         }

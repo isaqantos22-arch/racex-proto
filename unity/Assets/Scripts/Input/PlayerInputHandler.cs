@@ -72,6 +72,10 @@ namespace RaceX.Input
         }
 #endif
 
+        /// <summary>Último valor BRUTO do dispositivo (antes do freio progressivo e dos limites do carro) — telemetria.</summary>
+        public float RawSteer, RawThrottle, RawBrake;
+        PlayerPaceRecorder recorder;
+
         void Update()
         {
             if (UnityEngine.Input.GetKeyDown(KeyCode.P) && car != null)
@@ -109,6 +113,14 @@ namespace RaceX.Input
             // FREIO PROGRESSIVO (pedido do usuário: "o freio trava o carro; deve frear de acordo com o toque e com o tempo
             // que estamos freando"): botão/tecla (0 ou 1) não manda 100% na hora — começa em 35% e chega a 100% em 0,6 s
             // segurando; soltou, solta na hora. Gatilho analógico (controle) continua com o valor real.
+            // ENTRADA BRUTA (v108, pedido do usuário em 06/11: "precisão de milissegundos — eu dou vários toques simultâneos no volante"):
+            // cada mudança do volante/acelerador/freio do dispositivo vira um EVENTO com o instante do quadro (telemetria inp_*.csv).
+            if (Mathf.Abs(s - RawSteer) > 0.005f || Mathf.Abs(th - RawThrottle) > 0.02f || Mathf.Abs(br - RawBrake) > 0.02f)
+            {
+                RawSteer = s; RawThrottle = th; RawBrake = br;
+                if (recorder == null) recorder = car.GetComponent<PlayerPaceRecorder>();
+                if (recorder != null) recorder.InputEvent(s, th, br);
+            }
             if (br >= 0.99f) brakeRamp = brakeRamp < 0.35f ? 0.35f : Mathf.MoveTowards(brakeRamp, 1f, Time.deltaTime / 0.6f);
             else brakeRamp = 0f;
             float brOut = br >= 0.99f ? brakeRamp : br;

@@ -5,13 +5,19 @@ using UnityEngine.UI;
 
 namespace RaceX.Car
 {
+    /// <summary>v108 (teste de câmeras de 06/11, referência dos jogos oficiais de F1): 0 perseguição distante, 1 cockpit, 2 perseguição
+    /// PRÓXIMA (antes "volante", olhando 19° para baixo — não dava para dirigir), 3 bico (monoposto) / capô (GT), 4 T-cam / teto.
+    /// Os nomes do enum ficaram (save e menus guardam o número).</summary>
     public enum CameraView { ThirdPerson = 0, FirstPerson = 1, SteeringWheel = 2, Front = 3, TCam = 4 }
 
     public class CarCamera : MonoBehaviour
     {
         [Header("Terceira pessoa")]
-        public float distance = 8.4f;
-        public float height = 3.4f;
+        // v108: perseguição distante BAIXA como nos jogos de F1 (antes 8,4 m atrás e 3,4 m de altura — carro pequeno, visão de TV)
+        public float distance = 6.6f;
+        public float height = 2.0f;
+        public float nearDistance = 4.4f;
+        public float nearHeight = 1.35f;
         public float positionLerp = 6f;
         public float rotationLerp = 4f;
         public float thirdPersonFov = 66f;
@@ -42,6 +48,7 @@ namespace RaceX.Car
 
         Vector3 smoothPos;
         Quaternion smoothRot;
+        Vector3 smoothFwd;   // v108: direção suavizada da perseguição (a DISTÂNCIA fica fixa)
         float headTilt, headBob, dip;
         bool switching;
 
@@ -142,33 +149,58 @@ namespace RaceX.Car
             return true;
         }
 
+        /// <summary>Autoteste de câmeras (camtest): passa a MESMA câmera para outro carro (o carro antigo volta a mostrar o piloto).</summary>
+        public void Retarget(CarController target)
+        {
+            if (target == null) return;
+            if (visuals != null)
+            {
+                if (visuals.driverHead != null) visuals.driverHead.SetActive(true);
+                if (visuals.steeringWheel != null) visuals.steeringWheel.gameObject.SetActive(false);
+            }
+            car = target;
+            visuals = target.GetComponent<CarVisuals>();
+            SetView(View);
+        }
+
         public void SetView(CameraView view)
         {
             View = view;
             if (persistSelection) SettingsManager.LastCamera = (int)view;
+            // v108: o volante procedural (aro preto) tapava o meio da tela no cockpit dos GT — escondido em todas as câmeras.
             if (visuals != null && visuals.steeringWheel != null)
-                visuals.steeringWheel.gameObject.SetActive(view == CameraView.SteeringWheel || view == CameraView.FirstPerson);
+                visuals.steeringWheel.gameObject.SetActive(false);
             if (visuals != null && visuals.driverHead != null)
-                visuals.driverHead.SetActive(view == CameraView.ThirdPerson || view == CameraView.TCam);
+                visuals.driverHead.SetActive(view == CameraView.ThirdPerson || view == CameraView.SteeringWheel || view == CameraView.TCam);
             Snap();
         }
 
         void Snap()
         {
             if (car == null) return;
+            smoothFwd = Vector3.zero;
             ComputeThirdPerson(out smoothPos, out smoothRot);
             headTilt = headBob = dip = 0f;
         }
+
+        bool Chase => View == CameraView.ThirdPerson || View == CameraView.SteeringWheel;
 
         void ComputeThirdPerson(out Vector3 pos, out Quaternion rot)
         {
             Vector3 fwd = Vector3.ProjectOnPlane(car.transform.forward, Vector3.up).normalized;
             if (fwd.sqrMagnitude < 0.01f) fwd = car.transform.forward;
+            // v108 (teste de câmeras de 06/11): a posição seguia o carro com "elástico" (lerp) — a 120–190 km/h a câmera ficava 5–9 m
+            // além da distância e o carro aparecia pequeno e longe. Agora só a DIREÇÃO é suavizada; a distância é fixa.
+            if (smoothFwd.sqrMagnitude < 0.5f) smoothFwd = fwd;
+            fwd = smoothFwd;
             bool inGarage = RaceX.Core.PitLaneSystem.IsInGarageView(car);
-            float d = inGarage ? 3.8f : distance;
-            float h = inGarage ? 1.85f : height;
+            bool near = View == CameraView.SteeringWheel;
+            // distância medida a partir da TRASEIRA do carro (carro longo não "engole" a câmera)
+            float rear = visuals != null && visuals.body.size.z > 0.5f ? Mathf.Max(0f, -visuals.body.min.z - 2.2f) : 0f;
+            float d = inGarage ? 3.8f : (near ? nearDistance : distance) + rear;
+            float h = inGarage ? 1.85f : near ? nearHeight : height;
             pos = car.transform.position - fwd * d + Vector3.up * h;
-            Vector3 look = car.transform.position + Vector3.up * (inGarage ? 0.85f : 1.0f) + fwd * (inGarage ? 4.5f : 6f);
+            Vector3 look = car.transform.position + Vector3.up * (inGarage ? 0.85f : near ? 0.75f : 0.85f) + fwd * (inGarage ? 4.5f : near ? 9f : 11f);
             rot = Quaternion.LookRotation(look - pos, Vector3.up);
         }
 
@@ -182,39 +214,45 @@ namespace RaceX.Car
             switch (View)
             {
                 case CameraView.ThirdPerson:
+                case CameraView.SteeringWheel:
                 {
+                    Vector3 fwdNow = Vector3.ProjectOnPlane(car.transform.forward, Vector3.up).normalized;
+                    if (fwdNow.sqrMagnitude > 0.5f)
+                        smoothFwd = smoothFwd.sqrMagnitude < 0.5f ? fwdNow : Vector3.Slerp(smoothFwd, fwdNow, 1f - Mathf.Exp(-rotationLerp * 1.5f * dt)).normalized;
                     ComputeThirdPerson(out Vector3 desired, out Quaternion desiredRot);
-                    smoothPos = Vector3.Lerp(smoothPos, desired, 1f - Mathf.Exp(-positionLerp * dt));
-                    Vector3 fwd = Vector3.ProjectOnPlane(car.transform.forward, Vector3.up).normalized;
-                    Vector3 lookTarget = car.transform.position + Vector3.up * 1.0f + fwd * 4f;
+                    smoothPos = desired;
+                    Vector3 fwd = smoothFwd.sqrMagnitude > 0.5f ? smoothFwd : fwdNow;
+                    Vector3 lookTarget = car.transform.position + Vector3.up * 0.8f + fwd * 4f;
                     Vector3 pos = ResolveCollision(lookTarget, smoothPos);
                     Quaternion targetRot = Quaternion.LookRotation(lookTarget + (desiredRot * Vector3.forward) * 3f - pos, Vector3.up);
                     smoothRot = Quaternion.Slerp(smoothRot, targetRot, 1f - Mathf.Exp(-rotationLerp * 2f * dt));
                     t.SetPositionAndRotation(pos, smoothRot);
                     float boost = Mathf.Clamp01((car.SpeedKmh - 150f) / 100f) * highSpeedFovBoost;
-                    Cam.fieldOfView = Mathf.Lerp(Cam.fieldOfView, thirdPersonFov + boost, 1f - Mathf.Exp(-3f * dt));
+                    Cam.fieldOfView = Mathf.Lerp(Cam.fieldOfView, (View == CameraView.SteeringWheel ? thirdPersonFov + 4f : thirdPersonFov) + boost, 1f - Mathf.Exp(-3f * dt));
                     break;
                 }
                 case CameraView.FirstPerson:
-                case CameraView.SteeringWheel:
                 {
                     Vector3 acc = car.LocalAcceleration;
                     float targetTilt = Mathf.Clamp(-acc.x / 9.81f * maxHeadTilt, -maxHeadTilt, maxHeadTilt);
                     headTilt = Mathf.Lerp(headTilt, targetTilt, 1f - Mathf.Exp(-5f * dt));
                     float targetBob = Mathf.Clamp(-acc.y * 0.002f, -maxHeadBob, maxHeadBob);
                     headBob = Mathf.Lerp(headBob, targetBob, 1f - Mathf.Exp(-12f * dt));
-                    bool wheel = View == CameraView.SteeringWheel;
-                    Transform anchor = visuals != null ? (wheel ? visuals.wheelCamAnchor : visuals.eyeAnchor) : car.transform;
-                    float pitch = wheel ? -19f : -3f;
-                    t.SetPositionAndRotation(anchor.position + car.transform.up * headBob, car.transform.rotation * Quaternion.Euler(pitch, 0f, headTilt));
-                    Cam.fieldOfView = wheel ? wheelFov : firstPersonFov;
+                    Transform anchor = visuals != null ? visuals.eyeAnchor : car.transform;
+                    // v108: monoposto olha um pouco para baixo (bico e pista à frente, por cima do cockpit); GT quase reto.
+                    float pitch = visuals != null && visuals.formula ? 4f : 2f;
+                    // GT: 20 cm à frente do olho — sai do encosto (cockpit do Bugatti ficava preto) e mostra mais pista pelo para-brisa.
+                    Vector3 cockpitFwd = visuals != null && !visuals.formula ? car.transform.forward * 0.2f : Vector3.zero;
+                    t.SetPositionAndRotation(anchor.position + cockpitFwd + car.transform.up * headBob, car.transform.rotation * Quaternion.Euler(pitch, 0f, headTilt));
+                    Cam.fieldOfView = firstPersonFov;
                     break;
                 }
                 case CameraView.TCam:
                 {
-                    // T-CAM: acima e atrás do capacete (o piloto aparece na tela), como a câmera da TV.
-                    Vector3 eye = visuals != null && visuals.eyeAnchor != null ? visuals.eyeAnchor.position : car.transform.position + car.transform.up;
-                    t.SetPositionAndRotation(eye + car.transform.up * 0.55f - car.transform.forward * 0.45f, car.transform.rotation * Quaternion.Euler(7f, 0f, 0f));
+                    // T-CAM (monoposto): acima e atrás do capacete, halo à frente. TETO (GT): logo acima do teto, sobre o para-brisa.
+                    Vector3 local = visuals != null && visuals.roofCamLocal != Vector3.zero ? visuals.roofCamLocal : new Vector3(0f, 1.5f, -0.4f);
+                    float tPitch = visuals != null && visuals.formula ? 6f : 4f;
+                    t.SetPositionAndRotation(car.transform.TransformPoint(local), car.transform.rotation * Quaternion.Euler(tPitch, 0f, 0f));
                     Cam.fieldOfView = 72f;
                     break;
                 }
@@ -224,8 +262,8 @@ namespace RaceX.Car
                     dip = Mathf.MoveTowards(dip, hardBrake ? 1f : 0f, dt / brakeDipReturn);
                     Transform anchor = visuals != null ? visuals.hoodAnchor : car.transform;
                     t.SetPositionAndRotation(anchor.position - car.transform.up * brakeDipDrop * dip,
-                        car.transform.rotation * Quaternion.Euler(2f + brakeDipAngle * dip, 0f, 0f));
-                    Cam.fieldOfView = frontFov;
+                        car.transform.rotation * Quaternion.Euler((visuals != null && visuals.formula ? 1f : 2f) + brakeDipAngle * dip, 0f, 0f));
+                    Cam.fieldOfView = visuals != null && visuals.formula ? 78f : frontFov;
                     break;
                 }
             }
@@ -235,7 +273,7 @@ namespace RaceX.Car
             {
                 lookingBack = back;
                 if (visuals != null && visuals.driverHead != null)
-                    visuals.driverHead.SetActive(back || View == CameraView.ThirdPerson || View == CameraView.TCam);
+                    visuals.driverHead.SetActive(back || Chase || View == CameraView.TCam);
                 if (!back) Snap();
             }
         }
@@ -249,7 +287,7 @@ namespace RaceX.Car
         {
             Vector3 fwd = Vector3.ProjectOnPlane(car.transform.forward, Vector3.up).normalized;
             if (fwd.sqrMagnitude < 0.01f) fwd = car.transform.forward;
-            bool far = View == CameraView.ThirdPerson;
+            bool far = Chase;
             Vector3 pos = car.transform.position + fwd * (far ? 6.5f : 2.4f) + Vector3.up * (far ? 2.3f : 1.25f);
             Vector3 look = car.transform.position - fwd * 14f + Vector3.up * 0.8f;
             t.SetPositionAndRotation(pos, Quaternion.LookRotation(look - pos, Vector3.up));

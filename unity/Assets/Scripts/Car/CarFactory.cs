@@ -12,6 +12,13 @@ namespace RaceX.Car
         public Transform hoodAnchor;
         public SteeringWheelView steeringWheel;
         public GameObject driverHead;
+        /// <summary>v108 (teste de câmeras de 06/11): medidas do modelo no espaço do carro (origem = altura do eixo das rodas) para as
+        /// câmeras se posicionarem pelo tamanho real de cada carro. formula = monoposto (cockpit aberto).</summary>
+        public Bounds body;
+        public bool formula;
+        public float groundY, frontAxleZ;
+        /// <summary>Câmera do teto/T-cam (posição no espaço do carro).</summary>
+        public Vector3 roofCamLocal;
 
         public readonly List<KeyValuePair<Renderer, int>> paintSlots = new List<KeyValuePair<Renderer, int>>();
 
@@ -31,6 +38,8 @@ namespace RaceX.Car
     {
         const float GroundClearance = 0.12f;
         public const int CarBodyLayer = 21;
+        /// <summary>Altura do olho do piloto de monoposto acima do chão (m): F1 ~0,95 m de altura total, capacete acima da borda do cockpit.</summary>
+        public const float FormulaEyeHeight = 0.80f;
         public const int WheelLayer = 22;
         public const int DebrisLayer = 23;
 
@@ -215,11 +224,18 @@ namespace RaceX.Car
             TyreDirt.Attach(controller, tire);
 
             bool closed = spec.model == CarModel.Falcon || spec.model == CarModel.Titan;
+            bool formulaCar = CarSpec.IsFormula(spec.model);
             Vector3 eyePos;
             if (imported != null)
             {
                 var lb = imported.localBounds;
                 eyePos = new Vector3(spec.driverEyeLocal.x, lb.min.y + lb.size.y * imported.eyeHeightFraction, lb.size.z * imported.eyeForwardFraction);
+                // v108 (teste de câmeras de 06/11: no Fórmula C2 o olho ficava a 0,59 m do chão — dentro da carroceria, tela vermelha na
+                // primeira pessoa e capacete escondido): monoposto tem o olho do piloto a ~0,80 m do chão (cockpit aberto, capacete acima
+                // da borda). Nunca acima do topo do modelo.
+                // Chão = pelas RODAS (−raio): o F1Legacy tem peça 0,72 m abaixo do eixo e o "chão" pelo modelo enterrava o olho.
+                if (formulaCar)
+                    eyePos.y = Mathf.Min(Mathf.Max(eyePos.y, Mathf.Max(lb.min.y, -wr - 0.03f) + FormulaEyeHeight), lb.max.y - 0.04f);
             }
             else
             {
@@ -242,13 +258,35 @@ namespace RaceX.Car
 
             var hood = new GameObject("HoodAnchor").transform;
             hood.SetParent(root.transform, false);
+            float frontAxle = anchors != null && anchors.Length == 4 ? 0.5f * (anchors[0].z + anchors[1].z) : spec.wheelbase * 0.5f;
             if (imported != null)
-                hood.localPosition = closed
-                    ? new Vector3(0f, imported.localBounds.min.y + imported.localBounds.size.y * 0.72f, size.z * 0.25f)
-                    // Fórmulas: T-cam — acima/atrás da cabeça do piloto, halo à frente (referência de tela do jogo oficial).
-                    : new Vector3(0f, eyePos.y + 0.42f, eyePos.z - 0.55f);
+            {
+                var lb = imported.localBounds;
+                // v108 (referência: câmera do bico dos jogos de F1 — em cima do bico, um pouco atrás do eixo dianteiro, logo acima do topo dos
+                // pneus da frente, que aparecem nos cantos de baixo). GT: câmera do CAPÔ (antes só Corvette/Porsche; os outros GT usavam a
+                // regra dos monopostos e a câmera ia parar no teto, com o capô tapando metade da tela).
+                float groundY = Mathf.Max(lb.min.y, -wr - 0.03f);
+                // GT: no mínimo 14 cm abaixo do TOPO do carro — com 72% da altura a câmera caía DENTRO do capô do Mustang, Revuelto,
+                // Temerario e GT-R (teste de câmeras de 06/11: tela escura / grade vista por dentro).
+                hood.localPosition = formulaCar
+                    ? new Vector3(0f, Mathf.Min(groundY + Mathf.Max(0.70f, 2f * wr + 0.10f), lb.max.y - 0.03f), frontAxle - 0.20f)
+                    : new Vector3(0f, Mathf.Max(lb.min.y + lb.size.y * 0.72f, lb.max.y - 0.14f), size.z * 0.25f);
+                visuals.body = lb;
+                visuals.groundY = groundY;
+                // T-cam (monoposto): acima e atrás do capacete. Teto (GT): logo acima do teto, sobre o para-brisa.
+                visuals.roofCamLocal = formulaCar
+                    ? new Vector3(0f, eyePos.y + 0.40f, eyePos.z - 0.45f)
+                    : new Vector3(0f, lb.max.y + 0.16f, eyePos.z + 0.15f);
+            }
             else
+            {
                 hood.localPosition = new Vector3(0f, bodyBottom + size.y * 0.75f, size.z * 0.3f);
+                visuals.body = new Bounds(new Vector3(0f, bodyBottom + size.y * 0.5f, 0f), size);
+                visuals.groundY = -wr;
+                visuals.roofCamLocal = new Vector3(0f, bodyBottom + size.y + 0.16f, eyePos.z + 0.15f);
+            }
+            visuals.formula = formulaCar;
+            visuals.frontAxleZ = frontAxle;
             visuals.hoodAnchor = hood;
 
             if (imported != null)

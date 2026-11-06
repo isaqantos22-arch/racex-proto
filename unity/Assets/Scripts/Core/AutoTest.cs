@@ -148,6 +148,30 @@ namespace RaceX.Core
                     new PlayerSetup { name = "JOGADOR 2", car = model, colorIndex = 5, startCamera = CameraView.ThirdPerson }
                 };
             }
+            // camtest=1|2 (06/11, pedido do usuário: "testar cada um dos carros e todas as câmeras"): grid com UM modelo diferente em
+            // cada carro (lote 1 = 23 primeiros modelos além do do jogador, lote 2 = o resto) e AutoCamTour passa a câmera por todos.
+            int camBatch = GetInt("camtest", 0);
+            if (camBatch > 0)
+            {
+                var others = new List<CarModel>();
+                foreach (CarModel m in System.Enum.GetValues(typeof(CarModel))) if (m != model) others.Add(m);
+                // cammodels=A,B,C: só esses modelos (conferir correções sem carregar os 29)
+                string only = Get("cammodels", "");
+                if (only.Length > 0)
+                {
+                    var pick = new List<CarModel>();
+                    foreach (var part in only.Split(','))
+                        try { var m = (CarModel)System.Enum.Parse(typeof(CarModel), part.Trim(), true); if (m != model && !pick.Contains(m)) pick.Add(m); } catch (System.Exception) { }
+                    if (pick.Count > 0) others = pick;
+                }
+                int per = TrackBuilder.GridSlots - 1;
+                int from = Mathf.Min((camBatch - 1) * per, others.Count);
+                var batch = others.GetRange(from, Mathf.Min(per, others.Count - from));
+                if (batch.Count == 0) batch.Add(model);
+                s.totalCars = batch.Count + 1;
+                s.formulaOnly = false;
+                RaceBootstrap.PlannedNpcModels = batch;
+            }
             try { File.WriteAllText(LogPath, "# autotest " + System.DateTime.Now.ToString("s") + " track=" + s.track + " laps=" + s.laps + " cars=" + s.totalCars + " weather=" + Weather + "\n"); }
             catch (System.Exception) { }
             Debug.Log("[AUTOTEST] lançando corrida " + s.track + " voltas=" + s.laps + " carros=" + s.totalCars);
@@ -174,6 +198,7 @@ namespace RaceX.Core
             r.celebTest = GetInt("celebtest", 0) == 1;
             r.shots = GetInt("shots", 1) == 1;
             r.garageTest = GetInt("garagetest", 0) == 1;
+            if (GetInt("camtest", 0) > 0) go.AddComponent<AutoCamTour>().race = race;
         }
 
         public static int GetIntPublic(string k, int def) => GetInt(k, def);
@@ -300,6 +325,46 @@ namespace RaceX.Core
                 AutoTest.Log("EMAIL [" + W.news[i].cat + "] " + W.news[i].headline + " :: " + W.news[i].body);
             if (W.hasPress && W.pendingPress != null) AutoTest.Log("IMPRENSA pergunta pendente");
         }
+    }
+
+    /// <summary>camtest (06/11): com a corrida andando, passa a câmera do jogador por TODOS os carros do grid (um modelo diferente em
+    /// cada) e tira um print de cada uma das 5 câmeras — at_cam_MODELO_N.png — e registra onde ficam os pontos de câmera do modelo.</summary>
+    public class AutoCamTour : MonoBehaviour
+    {
+        public RaceManager race;
+
+        IEnumerator Start()
+        {
+            while (race != null && race.State != RaceState.Racing) yield return null;
+            yield return new WaitForSecondsRealtime(GetDelay());
+            var cam = Object.FindAnyObjectByType<CarCamera>();
+            if (cam == null || race == null) { AutoTest.Log("CAMTEST sem CarCamera"); yield break; }
+            var home = cam.car;
+            var seen = new HashSet<CarModel>();
+            foreach (var e in new List<RaceEntry>(race.entries))
+            {
+                if (e == null || e.car == null || e.car.spec == null || !seen.Add(e.car.spec.model)) continue;
+                cam.Retarget(e.car);
+                var vis = e.car.GetComponent<CarVisuals>();
+                for (int v = 0; v < 5; v++)
+                {
+                    cam.SetView((CameraView)v);
+                    yield return new WaitForSecondsRealtime(1.6f);
+                    AutoTest.Shot("cam_" + e.car.spec.model + "_" + v);
+                    yield return new WaitForSecondsRealtime(0.4f);
+                }
+                AutoTest.Log("CAMTEST " + e.car.spec.model + " (" + e.car.spec.displayName + ") v=" + e.car.SpeedKmh.ToString("0") + "km/h"
+                    + (vis != null && vis.eyeAnchor != null ? " olho=" + vis.eyeAnchor.localPosition.ToString("F2") : "")
+                    + (vis != null && vis.wheelCamAnchor != null ? " volante=" + vis.wheelCamAnchor.localPosition.ToString("F2") : "")
+                    + (vis != null && vis.hoodAnchor != null ? " capo=" + vis.hoodAnchor.localPosition.ToString("F2") : "")
+                    + (vis != null ? " teto=" + vis.roofCamLocal.ToString("F2") + " corpoMin=" + vis.body.min.ToString("F2") + " corpoMax=" + vis.body.max.ToString("F2") + " eixoDianteiro=" + vis.frontAxleZ.ToString("0.00") : ""));
+            }
+            if (home != null) cam.Retarget(home);
+            cam.SetView(CameraView.ThirdPerson);
+            AutoTest.Log("CAMTEST FIM modelos=" + seen.Count);
+        }
+
+        static float GetDelay() => Mathf.Max(3, AutoTest.GetIntPublic("camdelay", 12));
     }
 
     public class AutoTestRunner : MonoBehaviour

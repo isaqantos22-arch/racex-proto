@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace RaceX.Career
 {
@@ -113,23 +114,75 @@ namespace RaceX.Career
         }
 
         // ---------------- Fãs (rede social) ----------------
-        public static string FanPost(float sentiment, float form, int following, string name, string promise, int salt)
+        /// <summary>Comentário de fã na rede social, coerente com a carreira (v108, pedido do usuário em 06/11: "fã do Isaque tá comendo bem
+        /// essa semana" não fazia sentido). Usa forma, simpatia do público, promessa em aberto e — quando houver — equipe, categoria, posição
+        /// no campeonato, vitórias e pódios da temporada. Frases que dependem de um dado só entram com o dado.</summary>
+        public static string FanPost(float sentiment, float form, int following, string name, string promise, int salt,
+            string team = "", string category = "", int champPos = 0, int wins = 0, int podiums = 0)
         {
             string f = following >= 1000 ? (following / 1000f).ToString("0.#") + " mil" : following.ToString();
-            string[] pool;
+            bool hasTeam = !string.IsNullOrEmpty(team);
+            string cat = string.IsNullOrEmpty(category) ? "categoria" : category;
+            var pool = new List<string>();
             if (!string.IsNullOrEmpty(promise) && salt % 3 == 0)
-                pool = new[] { "ainda esperando aquele \"" + promise + "\" do " + name + ", não esquecemos", name + " prometeu: \"" + promise + "\". a gente guardou o print" };
+            {
+                pool.Add("ainda esperando aquele \"" + promise + "\" do " + name + ", não esquecemos");
+                pool.Add(name + " prometeu: \"" + promise + "\". a gente guardou o print");
+                pool.Add("e aquele \"" + promise + "\", " + name + "? a torcida tá cobrando");
+            }
             else if (form >= 0.5f)
-                pool = new[] { name + " na melhor fase, vídeo dele em todo lugar", "o " + name + " tá voando e ninguém comenta", "fã do " + name + " tá comendo bem essa semana" };
+            {
+                pool.Add(name + " na melhor fase, vídeo dele em todo lugar");
+                pool.Add("o " + name + " tá voando e ninguém comenta");
+                pool.Add("que ritmo do " + name + " nas últimas corridas, dá gosto de assistir");
+                pool.Add("a ultrapassagem do " + name + " na última corrida já é a mais vista da semana");
+                pool.Add("o " + name + " freia depois de todo mundo e ainda faz a curva, como pode");
+                if (hasTeam) pool.Add("se o " + name + " continuar assim, a " + team + " vai ter que segurar ele com contrato longo");
+                if (hasTeam) pool.Add("quem disse que o carro da " + team + " não anda? o " + name + " tá provando o contrário");
+                if (champPos > 0 && champPos <= 10) pool.Add(name + " em " + champPos + "º no campeonato da " + cat + " e subindo");
+                if (wins > 0) pool.Add(wins + (wins == 1 ? " vitória" : " vitórias") + " na temporada... o " + name + " chegou pra ficar");
+                if (podiums > 1) pool.Add(podiums + " pódios no ano. alguém ainda duvida do " + name + "?");
+            }
             else if (form <= -0.5f)
-                pool = new[] { name + " sumido do ritmo, os comentários estão pesados", "fase difícil pro " + name + ", alguém dá um abraço", name + " precisa de um reset, fato" };
+            {
+                pool.Add(name + " sumido do ritmo, os comentários estão pesados");
+                pool.Add("fase difícil pro " + name + ", mas quem é fã de verdade fica");
+                pool.Add(name + " precisa de um fim de semana limpo pra recuperar a confiança");
+                pool.Add("o " + name + " tá largando atrás e ficando preso no pelotão, a classificação tá custando caro");
+                pool.Add("calma, galera: piloto jovem oscila. o " + name + " volta");
+                if (hasTeam) pool.Add("a " + team + " tem que dar um carro melhor pro " + name + ", não dá pra ser só ele");
+                if (hasTeam) pool.Add("será que o " + name + " e a " + team + " ainda se entendem? os resultados não aparecem");
+            }
             else if (sentiment >= 0.68f)
-                pool = new[] { "para de hate com o " + name + ", é pilotagem boa de verdade", name + " é o piloto mais simpático do grid e ponto", "torcendo pelo " + name + " desde o primeiro dia" };
+            {
+                pool.Add("para de hate com o " + name + ", é pilotagem boa de verdade");
+                pool.Add(name + " é o piloto mais simpático do grid e ponto");
+                pool.Add("torcendo pelo " + name + " desde a primeira corrida");
+                pool.Add("o " + name + " parou pra dar autógrafo na saída do circuito, gente boa demais");
+                pool.Add("ganhando ou perdendo, o " + name + " sempre fala com respeito dos adversários");
+                if (hasTeam) pool.Add("comprei o boné da " + team + " só por causa do " + name);
+                if (champPos > 0) pool.Add("vamo " + name + "! " + champPos + "º no campeonato é só o começo");
+            }
             else if (sentiment <= 0.35f)
-                pool = new[] { name + " de novo? que preguiça", "não aguento mais desculpa do " + name, "o " + name + " fala demais e entrega de menos" };
+            {
+                pool.Add(name + " reclamando do carro de novo? assume o erro");
+                pool.Add("não aguento mais desculpa do " + name);
+                pool.Add("o " + name + " fala demais e entrega de menos");
+                pool.Add("toda corrida o " + name + " se envolve em confusão, tá na hora de amadurecer");
+                pool.Add("o " + name + " fecha a porta de um jeito que um dia vai dar problema");
+                if (hasTeam) pool.Add("a " + team + " merecia um piloto mais constante que o " + name);
+            }
             else
-                pool = new[] { name + "? sinceramente, tô dividido", "uns amam o " + name + ", outros odeiam, não tem meio-termo", "ainda não decidi o que acho do " + name };
-            string post = pool[Math.Abs(salt) % pool.Length];
+            {
+                pool.Add(name + "? sinceramente, tô dividido");
+                pool.Add("uns amam o " + name + ", outros odeiam, não tem meio-termo");
+                pool.Add("ainda não decidi o que acho do " + name);
+                pool.Add("o " + name + " tem talento, falta constância");
+                pool.Add("quero ver o " + name + " numa disputa roda a roda com os de cima");
+                if (champPos > 0) pool.Add(name + " em " + champPos + "º no campeonato da " + cat + "... dá pra subir mais");
+                if (hasTeam) pool.Add("o " + name + " tira tudo do carro da " + team + "? ainda não sei");
+            }
+            string post = pool[Math.Abs(salt) % pool.Count];
             return salt % 2 == 0 ? post : post + "  ·  " + f + " seguidores";
         }
 

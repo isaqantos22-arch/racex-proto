@@ -16,6 +16,8 @@ namespace RaceX.Core
     {
         /// <summary>Sessão da carreira na F2: todos com o carro único da categoria (CarSpec.ApplyF2Spec).</summary>
         static bool CareerF2 => RaceX.Career.CareerData.raceActive && RaceX.Career.CareerMode.data != null && RaceX.Career.CareerMode.data.category == "F2";
+        /// <summary>Corrida de F2 (carreira na F2 ou autoteste f2spec): regras próprias da categoria (ex.: pit lane a 60 km/h).</summary>
+        public static bool F2Race => CareerF2 || AutoTest.F2Spec;
 
         public static readonly string[] DriverNames =
         {

@@ -169,7 +169,10 @@ namespace RaceX.Core
                 }
                 else if (npcCount > 0)
                 {
-                    foreach (var m in RaceBootstrap.PlanNpcModels(npcCount, false))
+                    // Lista já planejada (autoteste de câmeras: um modelo diferente em cada carro) é respeitada — antes era sorteada de novo aqui.
+                    var plan = RaceBootstrap.PlannedNpcModels != null && RaceBootstrap.PlannedNpcModels.Count == npcCount
+                        ? RaceBootstrap.PlannedNpcModels : RaceBootstrap.PlanNpcModels(npcCount, false);
+                    foreach (var m in plan)
                         if (!models.Contains(m)) models.Add(m);
                 }
                 if (models.Count > 0)

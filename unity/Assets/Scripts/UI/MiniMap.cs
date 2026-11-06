@@ -158,8 +158,12 @@ namespace RaceX.UI
             for (int i = 0; i < dots.Length; i++)
             {
                 var car = dotOwners[i];
-                if (car == null) { dots[i].gameObject.SetActive(false); continue; }
-                dots[i].gameObject.SetActive(true);
+                // v108 (relato do usuário, 06/11): carro destruído/que abandonou continuava no mapa no último lugar (um "carro ao lado"
+                // que não existia; e contava na pista no hub). Fora da corrida = sem ponto.
+                var en = i < race.entries.Count ? race.entries[i] : null;
+                bool gone = car == null || car.wrecked || !car.gameObject.activeInHierarchy || (en != null && en.car == car && en.retired);
+                if (gone) { if (dots[i].gameObject.activeSelf) dots[i].gameObject.SetActive(false); continue; }
+                if (!dots[i].gameObject.activeSelf) dots[i].gameObject.SetActive(true);
                 Vector3 p = car.transform.position;
                 float u = (p.x - center.x) * worldScale + TexSize * 0.5f;
                 float v = (p.z - center.y) * worldScale + TexSize * 0.5f;

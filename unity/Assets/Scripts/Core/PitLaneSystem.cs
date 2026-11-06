@@ -12,8 +12,9 @@ namespace RaceX.Core
         public const float LaneSpeedKmh = 80f; // F1 2026: 80 km/h em todas as sessões (formula1.com, "Explained: pit lane speed limits")
         public const float LaneSpeedMonacoKmh = 60f; // pit lane apertado: o diretor de prova baixa para 60 (Mônaco)
         public const float LaneSpeedMs = LaneSpeedKmh / 3.6f;
-        /// <summary>Limite do pit lane DESTA pista (m/s): 60 km/h no Principado (inspirado em Mônaco), 80 nas demais.</summary>
-        float LaneLimitMs => race != null && race.Settings.track == RaceX.Track.TrackId.Principado ? LaneSpeedMonacoKmh / 3.6f : LaneSpeedMs;
+        /// <summary>Limite do pit lane DESTA pista (m/s): 60 km/h no Principado (inspirado em Mônaco), 80 nas demais. F2: 60 km/h no
+        /// evento inteiro (regulamento esportivo F2 2026, art. 22.9 — pesquisa de 06/11, Claude outputs/PESQUISA_FILA_DUPLA_BOX.md).</summary>
+        float LaneLimitMs => race != null && (race.Settings.track == RaceX.Track.TrackId.Principado || RaceBootstrap.F2Race) ? LaneSpeedMonacoKmh / 3.6f : LaneSpeedMs;
         public const float StopSeconds = 4f;
         // FIA: pit lane >= 12 m (fast lane + working lane), separado da pista por muro.
         // Centro do pit a 14 m do centro da pista: pista (~6 m de meia-estrada) + muro + faixa.
@@ -29,6 +30,15 @@ namespace RaceX.Core
         const float ServiceLat = 15.5f;
         /// <summary>Tempo máximo da aproximação final até a marca do box (depois disso encaixa).</summary>
         const float FinalApproachMax = 6f;
+        /// <summary>Fila dupla: o 2º carro da equipe para esta distância ATRÁS da marca enquanto o companheiro é atendido.</summary>
+        const float DoubleStackGap = 8f;
+
+        /// <summary>v108 (relato do usuário, 06/11: "meu carro passa do box, não consegue frear onde os mecânicos estão; passa à frente ou
+        /// atropela os mecânicos"). Telemetria das 2 paradas: vinha a 80 km/h até ~19 m da marca e chegava a 30–53 km/h (a rota planejava
+        /// 0,9 g e só freava com 1–2 m/s acima do alvo); o jogo então "encaixava" o carro de volta na marca. Agora a freada até a marca é
+        /// planejada com a aderência do pneu de hoje: ~0,66 g no seco, até ~0,37 g na chuva forte (valores de projeto, abaixo dos 1,3 g
+        /// medidos na freada do carro no seco — margem para pneu frio e pista suja do pit lane).</summary>
+        static float PitApproachDecel() => 6.5f * (1f - 0.45f * Mathf.Clamp01(WeatherSystem.Wetness / 0.6f));
 
         public static readonly string[] CompoundNames = TyreModel.Names;
 
@@ -64,6 +74,7 @@ namespace RaceX.Core
             public int runIndex;          // treino: índice da saída do box (programa da equipe)
             public int runLaps = 3;       // treino: voltas desta saída antes de recolher
             public float weatherCallTimer = -1f; // reação da equipe à mudança de clima (s)
+            public bool pulledBack;               // v108: passou da marca e está sendo puxado de volta pelos mecânicos
             public bool requested;
             /// <summary>Box pedido mas a entrada desta passagem não dava (rápido demais / longe do lado do pit): fica para a
             /// próxima volta (o pedido continua). Volta a valer quando o carro está longe da entrada.</summary>
@@ -1459,7 +1470,7 @@ namespace RaceX.Core
             }
             float startRel = approachingFromTrack ? 26f : Mathf.Max(12f, rel + 14f);
             // Pela FAIXA RÁPIDA até perto do próprio box (nunca pela faixa interna, onde outras equipes trabalham).
-            for (float r = startRel; r < boxRel - 12f; r += 24f)
+            for (float r = startRel; r < boxRel - (PracticeSession ? 12f : 24f); r += 24f)
             {
                 var pStep = spline.PoseAtDistance(Mathf.Repeat(laneStart + r, spline.Length));
                 st.route.Add(pStep.position - pStep.rotation * new Vector3(FastLaneLat, 0f, 0f) + Vector3.up * 0.05f);
@@ -1473,11 +1484,16 @@ namespace RaceX.Core
             }
             else
             {
-                // Corrida: diagonal mais longa e rasa (10 m antes da marca) e os últimos ~4 m JÁ ALINHADO na faixa
-                // interna — a equipe espera fora do contorno do carro e ele chega reto, sem varrer quem está do lado.
-                st.route.Add(L(-10f, FastLaneLat + 0.3f));
-                st.route.Add(L(-6.5f, 13.1f));
-                st.route.Add(L(-3.6f, ServiceLat - 0.3f));
+                // Corrida (v108, pesquisa da fila dupla de 06/11): sai da faixa rápida 20 m antes da marca e chega à faixa interna
+                // DoubleStackGap (8 m) antes dela; os últimos 8 m são retos na faixa interna. O 2º carro da equipe (fila dupla) espera
+                // exatamente nesse ponto, inteiro FORA da faixa rápida (regra: não se para na faixa rápida — F1 Anexo L cap. IV art. 5,
+                // F2 art. 28.6; Lawson, Holanda 2023: 10 s por atrapalhar) e dentro do espaço da própria equipe (marcas a ~37 m).
+                // Antes a diagonal começava 10 m antes e o carro em espera ficava meio dentro da faixa rápida.
+                st.route.Add(L(-20f, FastLaneLat + 0.3f));
+                st.route.Add(L(-15f, 12.8f));
+                st.route.Add(L(-11f, 14.6f));
+                st.route.Add(L(-DoubleStackGap, ServiceLat));
+                st.route.Add(L(-4f, ServiceLat));
                 st.route.Add(L(-1.2f, ServiceLat));
             }
             st.route.Add(st.boxTarget);
@@ -1766,10 +1782,23 @@ namespace RaceX.Core
             // CORRIDA: o carro chega no limitador e freia forte só nos últimos metros (como na F1 — no vídeo de referência ele
             // entra na posição em ~0,5 s). Antes rastejava a 2–5 m/s os últimos ~10 m. Treino (garagem apertada) como antes.
             bool fastBox = !PracticeSession;
-            if (!st.exiting && ultimo)
-                targetSpeed = fastBox ? Mathf.Clamp(to.magnitude * 0.9f, 2.5f, 9f) : Mathf.Clamp(to.magnitude * 0.40f, 2.0f, 5.0f);
+            if (fastBox && !st.exiting)
+            {
+                // CORRIDA, entrando (v108): velocidade pela distância que FALTA ATÉ A MARCA (rota + fim da rota até a marca), menos a folga
+                // da fila dupla (companheiro sendo atendido → para DoubleStackGap m atrás), com a freada pela aderência real.
+                float remainMark = to.magnitude;
+                for (int ri = st.routeIdx; ri < st.route.Count - 1; ri++) remainMark += Vector3.Distance(st.route[ri], st.route[ri + 1]);
+                if (st.route.Count > 0) { Vector3 endToMark = st.boxTarget - st.route[st.route.Count - 1]; endToMark.y = 0f; remainMark += endToMark.magnitude; }
+                var enDr = race.GetEntry(st.car);
+                bool busy = enDr != null && st.stopTimer <= 0f && BoxBusyByOther(st, enDr);
+                float stopAt = busy ? DoubleStackGap : 0.9f;
+                float vStop = Mathf.Sqrt(2f * PitApproachDecel() * Mathf.Max(0f, remainMark - stopAt));
+                targetSpeed = Mathf.Min(speedLimit, busy ? vStop : Mathf.Max(1.2f, vStop));
+            }
+            else if (!st.exiting && ultimo)
+                targetSpeed = Mathf.Clamp(to.magnitude * 0.40f, 2.0f, 5.0f);
             else if (penultimoEntrada)
-                targetSpeed = fastBox ? Mathf.Clamp(to.magnitude * 0.9f, 4f, 12f) : Mathf.Clamp(to.magnitude * 0.45f, 4.0f, 7.5f);
+                targetSpeed = Mathf.Clamp(to.magnitude * 0.45f, 4.0f, 7.5f);
             else if (st.exiting)
                 targetSpeed = speedLimit; // saída: limitador até a pista (curvas da garagem ficam com o teto de 16 km/h abaixo)
             else
@@ -1778,15 +1807,13 @@ namespace RaceX.Core
                 // que FALTA na rota. Antes: 0,55 × distância até o PRÓXIMO ponto (5–10 m) → 6 m/s ≈ 22 km/h no pit inteiro.
                 float remain = to.magnitude;
                 for (int ri = st.routeIdx; ri < st.route.Count - 1; ri++) remain += Vector3.Distance(st.route[ri], st.route[ri + 1]);
-                targetSpeed = fastBox
-                    ? Mathf.Min(speedLimit, 2.5f + Mathf.Sqrt(2f * 9f * Mathf.Max(0f, remain - 1.5f)))   // freada ~0,9 g
-                    : Mathf.Min(speedLimit, 2.0f + Mathf.Sqrt(2f * 4.5f * Mathf.Max(0f, remain - 6f)));
+                targetSpeed = Mathf.Min(speedLimit, 2.0f + Mathf.Sqrt(2f * 4.5f * Mathf.Max(0f, remain - 6f)));   // treino (garagem)
             }
             float turnAngle = Mathf.Abs(Vector3.SignedAngle(st.car.transform.forward, to.normalized, Vector3.up));
             // 30 km/h só na DIAGONAL DENTRO DO PRÓPRIO BOX (últimos pontos da rota de entrada, ~36°). Na curva de entrada do pit
             // lane (vindo da pista) e nas demais continua 16 km/h — teste 30/10: com 30 km/h ali o carro errou a entrada
             // ("CONTRAMÃO"), voltou para a pista e bateu.
-            bool boxDiagonal = fastBox && !st.exiting && st.routeIdx >= st.route.Count - 5;
+            bool boxDiagonal = fastBox && !st.exiting && st.routeIdx >= st.route.Count - 7;
             if (!ultimo && turnAngle > 22f)
                 targetSpeed = Mathf.Min(targetSpeed, (boxDiagonal && turnAngle < 45f ? 30f : 16f) / 3.6f);
             if (blocker != null)
@@ -1812,6 +1839,13 @@ namespace RaceX.Core
                 }
             }
             float speed = st.car.ForwardSpeed;
+            if (fastBox && !st.exiting)
+            {
+                // v108: segue a curva de freada de perto (antes só freava com 1–2 m/s acima do alvo, proporcional /4 — chegava rápido)
+                st.car.extThrottle = speed < targetSpeed - 0.3f ? 0.85f : 0f;
+                st.car.extBrake = speed > targetSpeed + 0.3f ? Mathf.Clamp((speed - targetSpeed) / 1.5f, 0.4f, 1f) : 0f;
+                return true;
+            }
             st.car.extThrottle = speed < targetSpeed ? 0.85f : 0f;
             // Entrando no box: freia já com 1 m/s acima do alvo (com 2 m/s de folga chegava rápido e passava da equipe).
             float brakeGap = !st.exiting && st.routeIdx >= st.route.Count - 2 ? 1.0f : 2.0f;
@@ -3311,10 +3345,13 @@ namespace RaceX.Core
                 Vector3 laneFwd = StopPose(e).rotation * Vector3.forward; laneFwd.y = 0f; laneFwd.Normalize();
                 Vector3 toMark = st.boxTarget - st.car.transform.position; toMark.y = 0f;
                 float ahead = Vector3.Dot(toMark, laneFwd);
-                if (ahead > 0f && ahead < 35f)
+                // v108 (relato do usuário: "mesmo com o parceiro no box e eu atrás no corredor, meu carro passa dele"): a espera começava a
+                // 35 m da marca com ~0,3 g — de 80 km/h não dava para parar. A rota já freia para DoubleStackGap atrás desde o corredor;
+                // aqui segura a partir de 60 m com a mesma freada.
+                if (ahead > 0f && ahead < 60f)
                 {
-                    const float holdAt = 8f;
-                    float vCap = ahead > holdAt + 1f ? Mathf.Sqrt(2f * 3f * (ahead - holdAt)) : 0f;   // ~0,3 g até parar atrás
+                    const float holdAt = DoubleStackGap;
+                    float vCap = ahead > holdAt + 0.5f ? Mathf.Sqrt(2f * PitApproachDecel() * (ahead - holdAt)) : 0f;
                     if (vCap > 0.8f)
                     {
                         if (!DriveRoute(st, Mathf.Min(LaneLimitMs, vCap)))
@@ -3350,6 +3387,27 @@ namespace RaceX.Core
                     // demorava para voltar (relato do usuário).
                     Vector3 fwdA = st.car.transform.forward; fwdA.y = 0f;
                     bool passed = !garageStop && dBox < 7f && Vector3.Dot(fwdA, toBox) < 0f;
+                    // v108 (pesquisa: ré com o próprio motor é PROIBIDA no pit lane — F1 2026 B1.6.3b, F2 2026 art. 28.3; quem passa da
+                    // marca é puxado de volta pelos mecânicos): passou da marca → a equipe PUXA o carro de volta a 1,2 m/s até a marca.
+                    // Antes o carro era "teleportado" para a marca (parecia atropelar os mecânicos e reaparecer — relato do usuário).
+                    if (passed && dBox > 0.6f && !SpotTaken(StopPose(e).position, st.car))
+                    {
+                        if (!st.pulledBack) { st.pulledBack = true; PassedSnaps++; }
+                        st.car.extThrottle = 0f; st.car.extBrake = 0f; st.car.extSteer = 0f;
+                        var rbP = st.car.Body;
+                        if (rbP != null)
+                        {
+                            Vector3 pull = toBox / Mathf.Max(0.01f, dBox) * Mathf.Min(1.2f, 0.6f + dBox);
+#if UNITY_6000_0_OR_NEWER
+                            rbP.linearVelocity = new Vector3(pull.x, rbP.linearVelocity.y, pull.z);
+#else
+                            rbP.velocity = new Vector3(pull.x, rbP.velocity.y, pull.z);
+#endif
+                        }
+                        st.stuckTimer = 0f; st.stillTimer = 0f; st.finalApproachT = 0f;
+                        st.pitCtrlSince = Time.time;   // ser puxado de volta não é travamento
+                        return;
+                    }
                     bool snap = passed || (garageStop ? ((st.isHuman && st.stillTimer > 1.0f && dBox < 24f) || dBox < 8.5f)
                                            : (st.finalApproachT > FinalApproachMax || dBox > 12f));
                     // Vaga OCUPADA (outro carro parado em cima da marca): espera em vez de "encaixar" — o teletransporte por cima
@@ -3380,13 +3438,14 @@ namespace RaceX.Core
                         st.car.extSteer = Mathf.Clamp(steer, -1f, 1f);
                         // Corrida: velocidade pela distância de FREADA que falta até a marca (~0,7 g, para em 0,9 m).
                         float target = garageStop ? Mathf.Clamp(dBox * 0.38f, 2.0f, 5.0f)
-                                                  : Mathf.Clamp(Mathf.Sqrt(2f * 7f * Mathf.Max(0f, dBox - 0.9f)), 0.8f, 8.0f);
+                                                  : Mathf.Clamp(Mathf.Sqrt(2f * PitApproachDecel() * Mathf.Max(0f, dBox - 0.9f)), 0.8f, 8.0f);
                         st.car.extThrottle = speed < target ? 0.45f : 0f;
                         st.car.extBrake = speed > target + 0.3f ? Mathf.Clamp((speed - target) / 2f, 0.4f, 1f) : 0f;
                         return;
                     }
                 }
                 st.finalApproachT = 0f;
+                st.pulledBack = false;
                 if (st.stopTimer <= 0f)
                 {
                     var pose = StopPose(e);

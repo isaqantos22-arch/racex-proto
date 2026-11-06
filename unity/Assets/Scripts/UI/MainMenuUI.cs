@@ -22,7 +22,7 @@ namespace RaceX.UI
             "Fortaleza Antiga", "Colinas do Texas", "Estádio Central", "Faixa de Neon"
         };
         static readonly string[] DifficultyNames = { "Fácil", "Médio", "Difícil", "Expert" };
-        static readonly string[] CameraNames = { "Terceira pessoa", "Primeira pessoa", "Volante", "Frontal" };
+        static readonly string[] CameraNames = { "Perseguição distante", "Cockpit", "Perseguição próxima", "Bico / capô", "T-cam / teto" };
         static readonly string[] QualityNames = { "Baixa", "Média", "Alta", "Ultra" };
         static readonly string[] ControlNames = { "Botões na tela", "Inclinação", "Joystick virtual" };
 
@@ -1515,7 +1515,7 @@ namespace RaceX.UI
                     ShowRaceSetup();
                 });
 
-            if (!split) CardRow(carCard, "Câmera", row++, () => CameraNames[(int)settings.players[0].startCamera], d => settings.players[0].startCamera = (CameraView)Step((int)settings.players[0].startCamera, d, 4));
+            if (!split) CardRow(carCard, "Câmera", row++, () => CameraNames[(int)settings.players[0].startCamera], d => settings.players[0].startCamera = (CameraView)Step((int)settings.players[0].startCamera, d, 5));
             CardRow(carCard, "Rádio da equipe", row++, () => SettingsManager.PitRadio == 0 ? "DESLIGADO" : "LIGADO", d => SettingsManager.PitRadio = SettingsManager.PitRadio == 0 ? 1 : 0);
 
             for (int p = 0; p < players; p++)
