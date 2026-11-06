@@ -72,6 +72,14 @@ namespace RaceX.Core
             set => PlayerPrefs.SetInt(Prefix + "FormationLap", value ? 1 : 0);
         }
 
+        /// <summary>Mensagens da direção de prova em duas camadas (v107, pesquisa de 06/11): o título curto sempre aparece; a
+        /// explicação da regra (linha menor embaixo) pode ser desligada.</summary>
+        public static bool MessageHints
+        {
+            get => PlayerPrefs.GetInt(Prefix + "MessageHints", 1) != 0;
+            set => PlayerPrefs.SetInt(Prefix + "MessageHints", value ? 1 : 0);
+        }
+
         public static int PitRadio
         {
             get => PlayerPrefs.GetInt(Prefix + "PitRadio", 3) == 0 ? 0 : 1;

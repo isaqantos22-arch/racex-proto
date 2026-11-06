@@ -56,6 +56,16 @@ namespace RaceX.Car
             public bool confirm;             // próxima passagem repete o recorde para confirmar
             public float refRatio;           // velocidade do JOGADOR na curva ÷ limite da conta (0 = sem volta dele)
             public int passes, errors, cool;
+            // v106 (pedido do usuário em 06/11: "deu um puxão de 1 s, soltou, quase saiu, deu outro de 1 s e saiu — tem de aprender a dar
+            // UM puxão de 2 s; se ainda sair quando soltar, 2,5 s, 3 s"): até quantos metros do INÍCIO da curva o volante fica virado sem
+            // soltar (0 = sem regra). Aprendido nos erros de "soltou e puxou de novo".
+            public float holdTo;
+            public int holdLessons;
+            // v106g (pedido do usuário em 06/11: "não passarem do meu limite; na próxima volta em que atingirem a minha velocidade fazendo
+            // a curva certa, +1%; de novo, +1%; se quase derrapou ou quase saiu, volta 0,5% — sempre tentando ser mais rápido sem sair"):
+            // quanto da velocidade do JOGADOR nesta curva o piloto pode usar (1,00 = a dele; até o teto do piloto, 1,01–1,10).
+            public float overPlayer = 1f;
+            public int overUps, overDowns;
         }
 
         [Serializable]

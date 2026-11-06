@@ -761,7 +761,11 @@ namespace RaceX.Core
               .Append(" fps=").Append((1f / Mathf.Max(0.001f, Time.smoothDeltaTime)).ToString("0"));
             AutoTest.Log(sb.ToString());
 
-            if (Time.time - t0 > minutes * 60f || race.State == RaceState.Finished)
+            // v106 (pergunta do usuário em 06/11): com keeprunning e o carro do autoteste FORA (perda total), a corrida não termina por ele
+            // e os carros que já chegaram continuavam rodando até o limite de tempo — as voltas extras entravam nas contas. Agora o teste
+            // acaba quando todos os outros chegaram ou abandonaram (corrida, não treino).
+            bool othersDone = me != null && me.retired && race.Settings.laps < 900 && race.entries.TrueForAll(x => x == null || x == me || x.finished || x.retired);
+            if (Time.time - t0 > minutes * 60f || race.State == RaceState.Finished || othersDone)
             {
                 // v99: ritmo da IA (melhor volta de cada carro) e freada medida — base para comparar com o jogador.
                 var bests = new List<KeyValuePair<string, float>>();
@@ -801,6 +805,9 @@ namespace RaceX.Core
                 AutoTest.Log("ZIGZAG jogador=" + CarAI.ZigPlayer + " em " + kmP.ToString("0.0") + " km de reta (" + (kmP > 0.01f ? CarAI.ZigPlayer / kmP : 0f).ToString("0.0")
                     + "/km) npc=" + CarAI.ZigNpc + " em " + kmN.ToString("0.0") + " km (" + (kmN > 0.01f ? CarAI.ZigNpc / kmN : 0f).ToString("0.0") + "/km) motivos:" + zr
                     + " | paradosAtivosMax=" + maxStoppedActive + " parados6s=" + longStops);
+                AutoTest.Log("ULTRAPASSAGENS tentativas=" + CarAI.PassTries + " feitas=" + CarAI.PassesDone + " mantidasNaCurva=" + CarAI.PassesInCorner
+                    + " | VOLANTE licoes de segurar=" + CarAI.HoldLessons + " soltouEPuxou=" + CarAI.RepullPasses + " (perto da borda " + CarAI.RepullNearOut + ")"
+                    + " | RITMO curva +1%=" + CarAI.OverUps + " recuos=" + CarAI.OverDowns);
                 AutoTest.Log("V82 resumo: largada_npcFreando=" + npcBrakeStart + " sc_toquesNaFila=" + scContacts + " sc_PTnaFila=" + scPtUnder
                     + " sc_penalUltrapassagem=" + scOvertakePen + " empilhadosMax=" + maxStack + " subidaMax=" + maxUpV.ToString("0.0") + "m/s"
                     + " gripMinNoBox=" + minPitGrip.ToString("0.00") + " saidaBox_recolocado=" + (PitLaneSystem.EscapeResets - escape0)

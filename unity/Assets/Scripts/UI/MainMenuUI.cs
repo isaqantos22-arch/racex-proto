@@ -1556,20 +1556,22 @@ namespace RaceX.UI
             var s = NewScreen("CONFIGURAÇÕES");
             ((Image)s.Find("Bg").GetComponent<Image>()).color = new Color(MenuTheme.Bg.r, MenuTheme.Bg.g, MenuTheme.Bg.b, 0.86f);
             bool mobile = Application.isMobilePlatform;
-            var audio = SetupCard(s, "ÁUDIO E JOGO", ContentX - 365f, 8);
+            // 9 linhas (v107: explicação das mensagens) com passo 72 — com 76 o cartão encostava no VOLTAR.
+            var audio = SetupCard(s, "ÁUDIO E JOGO", ContentX - 365f, 9, 350f, 72f);
             var video = SetupCard(s, "VÍDEO E DESEMPENHO", ContentX + 365f, mobile ? 4 : 5);
             int row = 0;
-            CardRow(audio, "Volume geral", row++, () => Pct(SettingsManager.MasterVolume), d => { SettingsManager.MasterVolume = Clamp10(SettingsManager.MasterVolume, d); AudioListener.volume = SettingsManager.MasterVolume; });
-            CardRow(audio, "Volume motor", row++, () => Pct(SettingsManager.EngineVolume), d => SettingsManager.EngineVolume = Clamp10(SettingsManager.EngineVolume, d));
-            CardRow(audio, "Música", row++, () => SettingsManager.MusicOn ? "LIGADA" : "DESLIGADA", d => SettingsManager.MusicOn = !SettingsManager.MusicOn);
-            CardRow(audio, "Efeitos", row++, () => SettingsManager.SfxOn ? "LIGADOS" : "DESLIGADOS", d => SettingsManager.SfxOn = !SettingsManager.SfxOn);
-            CardRow(audio, "Rádio da equipe", row++, () => SettingsManager.PitRadio == 0 ? "DESLIGADO" : "LIGADO", d => SettingsManager.PitRadio = SettingsManager.PitRadio == 0 ? 1 : 0);
-            CardRow(audio, "Nomes nos carros", row++, () => SettingsManager.NameTags ? "LIGADOS" : "DESLIGADOS", d => SettingsManager.NameTags = !SettingsManager.NameTags);
-            CardRow(audio, "Mini-mapa", row++, () => SettingsManager.MinimapDynamic ? "DINÂMICO" : "PISTA INTEIRA", d => SettingsManager.MinimapDynamic = !SettingsManager.MinimapDynamic);
+            CardRow(audio, "Volume geral", row++, () => Pct(SettingsManager.MasterVolume), d => { SettingsManager.MasterVolume = Clamp10(SettingsManager.MasterVolume, d); AudioListener.volume = SettingsManager.MasterVolume; }, 72f);
+            CardRow(audio, "Volume motor", row++, () => Pct(SettingsManager.EngineVolume), d => SettingsManager.EngineVolume = Clamp10(SettingsManager.EngineVolume, d), 72f);
+            CardRow(audio, "Música", row++, () => SettingsManager.MusicOn ? "LIGADA" : "DESLIGADA", d => SettingsManager.MusicOn = !SettingsManager.MusicOn, 72f);
+            CardRow(audio, "Efeitos", row++, () => SettingsManager.SfxOn ? "LIGADOS" : "DESLIGADOS", d => SettingsManager.SfxOn = !SettingsManager.SfxOn, 72f);
+            CardRow(audio, "Rádio da equipe", row++, () => SettingsManager.PitRadio == 0 ? "DESLIGADO" : "LIGADO", d => SettingsManager.PitRadio = SettingsManager.PitRadio == 0 ? 1 : 0, 72f);
+            CardRow(audio, "Explicar mensagens", row++, () => SettingsManager.MessageHints ? "LIGADA" : "DESLIGADA", d => SettingsManager.MessageHints = !SettingsManager.MessageHints, 72f);
+            CardRow(audio, "Nomes nos carros", row++, () => SettingsManager.NameTags ? "LIGADOS" : "DESLIGADOS", d => SettingsManager.NameTags = !SettingsManager.NameTags, 72f);
+            CardRow(audio, "Mini-mapa", row++, () => SettingsManager.MinimapDynamic ? "DINÂMICO" : "PISTA INTEIRA", d => SettingsManager.MinimapDynamic = !SettingsManager.MinimapDynamic, 72f);
             if (mobile)
-                CardRow(audio, "Controles", row++, () => ControlNames[(int)SettingsManager.ControlMode], d => SettingsManager.ControlMode = SettingsManager.ControlMode == ControlMode.Buttons ? ControlMode.Joystick : ControlMode.Buttons);
+                CardRow(audio, "Controles", row++, () => ControlNames[(int)SettingsManager.ControlMode], d => SettingsManager.ControlMode = SettingsManager.ControlMode == ControlMode.Buttons ? ControlMode.Joystick : ControlMode.Buttons, 72f);
             else
-                CardRow(audio, "F1 em GT", row++, () => SettingsManager.AllowF1 ? "SIM" : "NÃO", d => SettingsManager.AllowF1 = !SettingsManager.AllowF1);
+                CardRow(audio, "F1 em GT", row++, () => SettingsManager.AllowF1 ? "SIM" : "NÃO", d => SettingsManager.AllowF1 = !SettingsManager.AllowF1, 72f);
 
             row = 0;
             CardRow(video, "Qualidade", row++, () => QualityNames[(int)SettingsManager.Quality].ToUpperInvariant(), d => { SettingsManager.Quality = (QualityTier)Step((int)SettingsManager.Quality, d, 4); SettingsManager.ApplyQuality(SettingsManager.Quality); });

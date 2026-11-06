@@ -111,6 +111,7 @@ namespace RaceX.Core
             CarDamage.PartDetached += rc.OnPartDetached;
             CarDamage.CarHitCar += rc.OnCarHitCar;
             CarController.CarTouch += rc.OnCarTouch;
+            race.EntryFinished += rc.OnEntryFinished;
             return rc;
         }
 
@@ -120,6 +121,7 @@ namespace RaceX.Core
             CarDamage.PartDetached -= OnPartDetached;
             CarDamage.CarHitCar -= OnCarHitCar;
             CarController.CarTouch -= OnCarTouch;
+            if (race != null) race.EntryFinished -= OnEntryFinished;
             if (Instance == this) Instance = null;
         }
 
@@ -142,6 +144,100 @@ namespace RaceX.Core
             if (e == null) return;
             if (e.isHuman) Debug.Log("[DIREÇÃO] " + e.name + ": " + msg);
             Notice?.Invoke(e, msg);
+        }
+
+        // ---------------- Textos no formato da direção de prova (v107, pesquisa de 06/11: PESQUISA_TEXTOS_DE_TELA_F1.md) ----------------
+        // A F1 real fala curto, com SETOR/CURVA ("YELLOW IN TRACK SECTOR 7", "SAFETY CAR DEPLOYED"); o HUD mostra a parte antes do " — "
+        // grande e a explicação menor embaixo (desligável em Configurações).
+
+        /// <summary>Setor (1–3, terços da volta — os mesmos S1/S2/S3 do cronômetro) do ponto "along".</summary>
+        int SectorOf(float along) => Mathf.Clamp(Mathf.FloorToInt(Mathf.Repeat(along, trackLen) / (trackLen / 3f)), 0, 2) + 1;
+
+        /// <summary>" NA CURVA N" do ponto (curvas numeradas pelo mapa do caderno, a partir de 1); vazio fora de curva.</summary>
+        string CurveSuffix(float along)
+        {
+            try
+            {
+                if (wp == null || wp.Spline == null || race == null || race.Settings == null) return "";
+                var m = CornerCoach.MapFor(wp.Spline, (int)race.Settings.track);
+                var c = CornerCoach.Inner(m, along) ?? CornerCoach.Zone(m, along);
+                return c != null ? " NA CURVA " + (c.id + 1) : "";
+            }
+            catch { return ""; }
+        }
+
+        /// <summary>Setor do perigo (amarela/destroço) mais próximo à frente deste carro (0 = nenhum).</summary>
+        int HazardSectorAhead(State s)
+        {
+            if (s == null) return 0;
+            float best = float.MaxValue; int sec = 0;
+            foreach (var i in incidents)
+            {
+                if (i.car == s.e.car) continue;
+                float d = Ahead(s.along, i.along);
+                if (d > trackLen - 30f) d -= trackLen;
+                if (d >= 300f || d < -30f) continue;
+                if (Mathf.Abs(d) < best) { best = Mathf.Abs(d); sec = SectorOf(i.along); }
+            }
+            return sec;
+        }
+
+        /// <summary>VSC nos últimos 10 s (a F1 avisa "VIRTUAL SAFETY CAR ENDING" 10–15 s antes do verde).</summary>
+        public static bool VscEnding => VscActive && Time.time > Instance.vscUntil - 10f;
+        bool vscEndingSaid, pitOpenSaid, wetSaid, chequeredSaid;
+        /// <summary>Punição por colisão: primeiro "INCIDENTE ANOTADO", a punição sai 8 s depois (como a F1: anotado → decisão).</summary>
+        readonly List<(RaceEntry e, string why, float at)> pendingPens = new List<(RaceEntry, string, float)>();
+
+        void OnEntryFinished(RaceEntry e)
+        {
+            if (chequeredSaid || !IsRace || e == null) return;
+            chequeredSaid = true;
+            // Para os outros: quem venceu e o que fazer (o vencedor vê "CHEGADA!" no HUD).
+            foreach (var kv in states) if (kv.Value.e != e) Say(kv.Value.e, "BANDEIRA QUADRICULADA: " + e.name + " VENCE — complete a volta");
+        }
+
+        /// <summary>Avisos gerais a 5 Hz: VSC terminando, saída do box aberta (treino/classificação), pista escorregadia/aderência normal
+        /// e as punições de colisão que já foram "anotadas".</summary>
+        void UpdateRaceNotices(float now)
+        {
+            if (VscActive && !vscEndingSaid && now > vscUntil - 10f) { vscEndingSaid = true; Broadcast("VSC TERMINANDO — verde em instantes"); }
+            if (!pitOpenSaid && race.Settings.laps >= 900) { pitOpenSaid = true; Broadcast("SAÍDA DO BOX ABERTA — sessão iniciada"); }
+            float w = WeatherSystem.Wetness;
+            if (!wetSaid && w > 0.12f) { wetSaid = true; Broadcast("PISTA ESCORREGADIA — pouca aderência"); }
+            else if (wetSaid && w < 0.04f) { wetSaid = false; Broadcast("ADERÊNCIA NORMAL — a pista secou"); }
+            for (int k = pendingPens.Count - 1; k >= 0; k--)
+            {
+                if (now < pendingPens[k].at) continue;
+                var p = pendingPens[k];
+                pendingPens.RemoveAt(k);
+                Penalize(p.e, p.why);
+            }
+        }
+
+        /// <summary>Texto da bandeira PARA ESTE CARRO (com setor do perigo, quem vai dar a volta, VSC terminando).</summary>
+        public static string FlagTextFor(CarController c, RaceFlag f)
+        {
+            var rc = Instance;
+            if (rc == null || c == null) return FlagText(f);
+            var s = rc.S(c);
+            switch (f)
+            {
+                case RaceFlag.Yellow:
+                case RaceFlag.DoubleYellow:
+                case RaceFlag.Debris:
+                {
+                    int sec = rc.HazardSectorAhead(s);
+                    string where = sec > 0 ? " NO SETOR " + sec : "";
+                    if (f == RaceFlag.Yellow) return "AMARELA" + where + " — reduza, sem ultrapassar";
+                    if (f == RaceFlag.DoubleYellow) return "AMARELA DUPLA" + where + " — reduza bem, sem ultrapassar";
+                    return "DESTROÇOS" + where + " — pista suja, cuidado";
+                }
+                case RaceFlag.Blue:
+                    return "BANDEIRA AZUL: deixe " + (s != null && !string.IsNullOrEmpty(s.blueBy) ? s.blueBy : "quem vem atrás") + " passar";
+                case RaceFlag.VSC:
+                    return VscEnding ? "VSC TERMINANDO — verde em instantes" : "VIRTUAL SAFETY CAR — devagar, sem ultrapassar";
+            }
+            return FlagText(f);
         }
 
         /// <summary>Há perigo na pista (carro destruído/destroços com amarela dupla ainda ativa)? O SC só sai depois.</summary>
@@ -189,7 +285,7 @@ namespace RaceX.Core
             if (e.car != null && e.car.IsRemote) return;   // online: quem pune é o aparelho dono do carro
             race.AddPenalty(e, PenaltySeconds);
             Debug.Log("[PENALIDADE] " + e.name + " +" + PenaltySeconds + " s — " + why);
-            Say(e, "PENALIDADE +" + PenaltySeconds.ToString("0") + " s — " + why);
+            Say(e, "PUNIÇÃO DE " + PenaltySeconds.ToString("0") + " s: " + why + " — somada ao tempo final");   // F1: "5 SECOND TIME PENALTY FOR CAR N - CAUSING A COLLISION"
         }
 
         // ---------------- Eventos de dano ----------------
@@ -201,7 +297,7 @@ namespace RaceX.Core
             s.flag = RaceFlag.Black;
             s.wreckAt = Time.time;
             var ai = car.GetComponent<CarAI>();
-            if (ai != null) ai.enabled = false;
+            if (ai != null) { ai.LearnFromWreck(); ai.enabled = false; }   // v106: a lição geral antes de desligar a IA
             var input = car.GetComponent<RaceX.Input.PlayerInputHandler>();
             if (input != null) input.enabled = false;
             UpdateTrackPos(s);
@@ -215,20 +311,21 @@ namespace RaceX.Core
             // ainda lá a bandeira sumia.
             incidents.Add(new Incident { along = s.along, dbl = true, until = Time.time + (sc ? 45f : onTrack ? WreckClearSeconds + 2f : 15f), car = car });
             string why = car.damage != null ? car.damage.RetireReason : "";
-            Say(s.e, why.Length == 0 ? "PERDA TOTAL — BANDEIRA PRETA: fora da corrida"
-                   : why.StartsWith("PERDA TOTAL") ? why + " — fora da corrida" : "ABANDONO — " + why);
+            Say(s.e, why.Length == 0 ? "PERDA TOTAL — fora da corrida"
+                   : why.StartsWith("PERDA TOTAL") ? why + " — fora da corrida" : "ABANDONO: " + why + " — fora da corrida");
             if (sc)
             {
                 vscUntil = 0f;
                 // Texto claro: o SC entrou POR CAUSA da perda total de outro carro ("SAFETY CAR — X sofreu perda total" foi
                 // lido como "o safety car sofreu perda total").
-                foreach (var kv in states) if (kv.Value.e != s.e) Say(kv.Value.e, "SAFETY CAR NA PISTA — acidente de " + s.e.name + " (perda total" + (multi ? ", acidente múltiplo" : "") + ")");
+                foreach (var kv in states) if (kv.Value.e != s.e) Say(kv.Value.e, "SAFETY CAR ACIONADO: perda total de " + s.e.name + CurveSuffix(s.along).ToLowerInvariant() + (multi ? " (acidente múltiplo)" : "") + " — forme a fila, sem ultrapassar");
             }
             else if (!Online)
             {
                 // Online sem VSC: valeria só neste aparelho (cada um tem a própria direção de prova) e a corrida dessincronizaria.
                 vscUntil = Mathf.Max(vscUntil, Time.time + (onTrack ? WreckClearSeconds + 2f : 25f));
-                foreach (var kv in states) if (kv.Value.e != s.e) Say(kv.Value.e, "VSC — acidente de " + s.e.name + " (perda total)");
+                vscEndingSaid = false;   // VSC novo ou prolongado: o "terminando" vale para o fim novo
+                foreach (var kv in states) if (kv.Value.e != s.e) Say(kv.Value.e, "VSC ACIONADO: perda total de " + s.e.name + CurveSuffix(s.along).ToLowerInvariant() + " — devagar, sem ultrapassar");
             }
         }
 
@@ -264,7 +361,11 @@ namespace RaceX.Core
             long key = ((long)striker.GetInstanceID() << 32) ^ (uint)victim.GetInstanceID();
             if (pairCooldown.TryGetValue(key, out float until) && Time.time < until) return;
             pairCooldown[key] = Time.time + 10f;
-            Penalize(a.e, "causou colisão com " + b.e.name);
+            // Como a F1 (pesquisa de 06/11): primeiro "INCIDENTE ANOTADO" para os dois envolvidos, a punição sai 8 s depois.
+            string inc = "INCIDENTE ANOTADO" + CurveSuffix(a.along) + ": " + a.e.name + " × " + b.e.name + " — em análise";
+            Say(a.e, inc);
+            Say(b.e, inc);
+            if (PenaltiesEnabled) pendingPens.Add((a.e, "causou colisão com " + b.e.name, Time.time + 8f));
         }
 
         // ---------------- Laço da direção de prova (5 Hz) ----------------
@@ -281,6 +382,7 @@ namespace RaceX.Core
             float now = Time.time;
             incidents.RemoveAll(i => now > i.until);
             RefreshDebrisIncidents(now);
+            UpdateRaceNotices(now);
 
             order.Clear();
             foreach (var e in race.entries)
@@ -309,9 +411,9 @@ namespace RaceX.Core
                 // para a azul e a verde nunca era mostrada.
                 if (IsHazard(before) && !IsHazard(s.flag))
                 {
-                    string g = before == RaceFlag.SafetyCar ? "BANDEIRA VERDE — relargada: corrida liberada"
-                             : before == RaceFlag.VSC ? "BANDEIRA VERDE — fim do VSC: corrida liberada"
-                             : before == RaceFlag.Yellow || before == RaceFlag.DoubleYellow || before == RaceFlag.Debris ? "BANDEIRA VERDE — fim da zona de amarela: pode ultrapassar"
+                    string g = before == RaceFlag.SafetyCar ? "BANDEIRA VERDE — corrida liberada"
+                             : before == RaceFlag.VSC ? "BANDEIRA VERDE — fim do VSC"
+                             : before == RaceFlag.Yellow || before == RaceFlag.DoubleYellow || before == RaceFlag.Debris ? "PISTA LIVRE NO SETOR " + SectorOf(s.along) + " — pode ultrapassar"
                              : "";
                     if (g.Length > 0) { s.greenText = g; s.greenUntil = now + 4f; }
                 }
@@ -427,7 +529,7 @@ namespace RaceX.Core
             int lapNow = race.GetProgress(e) != null ? race.GetProgress(e).lap : 1;
             if (s.flag == RaceFlag.BlackOrange)
             {
-                if (s.meatballLap < 0) { s.meatballLap = lapNow; s.pitAsked = false; Say(e, "BANDEIRA PRETA E LARANJA — dano: vá para o BOX"); }
+                if (s.meatballLap < 0) { s.meatballLap = lapNow; s.pitAsked = false; Say(e, "PRETA E LARANJA: BOX — carro danificado"); }
                 if (!e.isHuman && !s.pitAsked && IsRace) { PitLaneSystem.ForcePitRequest(car); s.pitAsked = true; }
                 if (IsRace && PenaltiesEnabled && lapNow - s.meatballLap >= 2 && !inPit)
                 {
@@ -436,7 +538,7 @@ namespace RaceX.Core
                     var ai = car.GetComponent<CarAI>();
                     if (ai != null) ai.enabled = false;
                     car.wrecked = true;
-                    Say(e, "BANDEIRA PRETA — desclassificado (não foi ao box com o carro inseguro)");
+                    Say(e, "BANDEIRA PRETA: DESCLASSIFICADO — não parou no box");
                     return;
                 }
             }
@@ -463,8 +565,8 @@ namespace RaceX.Core
                 if (car.SpeedKmh > 60f && !s.forcedOff)
                 {
                     e.trackLimitStrikes++;
-                    if (e.trackLimitStrikes < 3) Say(e, "LIMITES DE PISTA — advertência " + e.trackLimitStrikes + "/3");
-                    else if (e.trackLimitStrikes == 3) { s.bwUntil = now + 6f; Say(e, "BANDEIRA PRETA E BRANCA — limites de pista (3/3): a próxima é penalidade"); }
+                    if (e.trackLimitStrikes < 3) Say(e, "LIMITES DE PISTA" + CurveSuffix(s.along) + " (" + e.trackLimitStrikes + "/3) — na 4ª, punição");
+                    else if (e.trackLimitStrikes == 3) { s.bwUntil = now + 6f; Say(e, "PRETA E BRANCA: LIMITES DE PISTA" + CurveSuffix(s.along) + " (3/3) — a próxima é punição"); }
                     else Penalize(e, "limites de pista (" + e.trackLimitStrikes + "ª)");
                 }
             }
@@ -525,7 +627,7 @@ namespace RaceX.Core
                     if (warn > s.blueWarn)
                     {
                         s.blueWarn = warn;
-                        if (warn < 3) Say(e, "BANDEIRA AZUL (" + warn + "/3) — deixe " + s.blueBy + " passar");
+                        if (warn < 3) Say(e, "BANDEIRA AZUL (" + warn + "/3): deixe " + s.blueBy + " passar — na 3ª, punição");
                         else { Penalize(e, "ignorou a bandeira azul"); s.bluePenalized = true; }
                     }
                 }
@@ -637,7 +739,7 @@ namespace RaceX.Core
             s.giveBackTo = to;
             s.giveBackWhy = why;
             s.giveBackUntil = now + GiveBackSeconds;
-            Say(s.e, "DEVOLVA A POSIÇÃO a " + to.name + " (" + why + ") — " + GiveBackSeconds.ToString("0") + " s");
+            Say(s.e, "DEVOLVA A POSIÇÃO a " + to.name + " — " + why + ": " + GiveBackSeconds.ToString("0") + " s ou punição");
         }
 
         // ---------------- Consultas (IA e HUD) ----------------
@@ -762,14 +864,14 @@ namespace RaceX.Core
             switch (f)
             {
                 case RaceFlag.Yellow: return "BANDEIRA AMARELA — reduza, sem ultrapassar";
-                case RaceFlag.DoubleYellow: return "AMARELA DUPLA — carro na pista, pronto para parar";
-                case RaceFlag.Blue: return "BANDEIRA AZUL — deixe passar quem vai te dar volta";
+                case RaceFlag.DoubleYellow: return "AMARELA DUPLA — reduza bem, sem ultrapassar";
+                case RaceFlag.Blue: return "BANDEIRA AZUL: DÊ PASSAGEM";
                 case RaceFlag.White: return "BANDEIRA BRANCA — carro lento à frente";
-                case RaceFlag.Debris: return "AMARELA E VERMELHA — destroços na pista";
-                case RaceFlag.BlackOrange: return "PRETA E LARANJA — carro danificado: BOX";
+                case RaceFlag.Debris: return "AMARELA E VERMELHA — pista suja, cuidado";
+                case RaceFlag.BlackOrange: return "PRETA E LARANJA: BOX — carro danificado";
                 case RaceFlag.BlackWhite: return "PRETA E BRANCA — advertência";
                 case RaceFlag.Black: return "BANDEIRA PRETA — fora da corrida";
-                case RaceFlag.VSC: return "VSC — safety car virtual: volta ~40% mais lenta, sem ultrapassar";
+                case RaceFlag.VSC: return "VIRTUAL SAFETY CAR — devagar, sem ultrapassar";
                 case RaceFlag.SafetyCar: return SafetyCar.StatusText();
             }
             return "";

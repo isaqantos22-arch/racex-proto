@@ -36,7 +36,8 @@ namespace RaceX.UI
         bool punctureWarned;
         Image dmgFrontImg, dmgRearImg; // barras de dano frente/trás
         Image dmgLeftImg, dmgRightImg; // laterais (sidepod/assoalho)
-        Image flagBg; Text flagText;   // bandeira atual da direção de prova
+        Image flagBg; Text flagText, flagSubText;   // bandeira atual da direção de prova (título + explicação)
+        Text messageSubText;   // linha menor da mensagem central (explicação da regra)
         Image flagIcon; Text flagIconLabel; string flagIconKey;   // ícone tremulando ao lado do texto (SC/VSC com letreiro)
         GameObject scPipFrame; RawImage scPipImage; Text scPipLabel;  // janela de TV do safety car (entrando/saindo)
         Text penaltyText;              // "+5 s" sob a posição
@@ -451,16 +452,30 @@ namespace RaceX.UI
             wrongWayText = UIFactory.Label("WrongWay", root, "CONTRAMÃO", (int)(90 * s), TextAnchor.MiddleCenter, c, c, new Vector2(0f, 160f * s), new Vector2(900f, 120f), new Color(1f, 0.15f, 0.1f));
             wrongWayText.enabled = false;
             // Abaixo da faixa de bandeira (que desceu para −206..−248 com o ícone em cima): em +260 o rádio ficava por cima dela.
+            // Mensagem em DUAS CAMADAS (pesquisa de 06/11: F1 real e jogos oficiais): título curto no formato da FIA e, embaixo, a
+            // explicação da regra em letra menor (Configurações > Explicar mensagens).
             messageText = UIFactory.Label("Message", root, "", (int)(48 * s), TextAnchor.MiddleCenter, c, c, new Vector2(0f, 190f * s), new Vector2(900f, 80f));
-            // BANDEIRA da direção de prova (amarela, azul, VSC...) + contagem para devolver posição.
-            flagBg = UIFactory.Panel("FlagBg", root, tc, tc, new Vector2(0f, -206f * s), new Vector2(820f * s, 42f * s), new Color(1f, 0.85f, 0.1f, 0.9f));
+            messageSubText = UIFactory.Label("MessageSub", root, "", (int)(26 * s), TextAnchor.MiddleCenter, c, c, new Vector2(0f, 144f * s), new Vector2(900f, 40f), new Color(0.9f, 0.92f, 0.95f));
+            // BANDEIRA da direção de prova (amarela, azul, VSC...) + contagem para devolver posição — À ESQUERDA, logo abaixo do
+            // mini-mapa (nos jogos oficiais a faixa de bandeiras fica à esquerda, separada dos avisos do centro). A janela de TV do
+            // safety car termina em ~381 px do topo; a faixa começa embaixo dela.
+            var tlf = new Vector2(0f, 1f);
+            float mapBottom = 24f + 120f * s + (compact ? 150f : 230f);
+            flagBg = UIFactory.Panel("FlagBg", root, tlf, tlf, new Vector2(24f, -(mapBottom + 8f)), new Vector2(640f * s, FlagBandH * s), new Color(1f, 0.85f, 0.1f, 0.9f));
             flagBg.sprite = MenuTheme.RoundedSprite(200, 12, 8);
-            flagText = UIFactory.Label("FlagText", flagBg.transform, "", (int)(24 * s), TextAnchor.MiddleCenter, c, c, Vector2.zero, new Vector2(800f * s, 40f * s), Color.black);
-            // ÍCONE da bandeira EM CIMA da faixa, centralizado na frase (a faixa desceu 50 px para caber abaixo do clima).
-            flagIcon = UIFactory.Panel("FlagIcon", flagBg.transform, new Vector2(0.5f, 1f), new Vector2(0.5f, 0f), new Vector2(0f, 3f * s), new Vector2(66f * s, 45f * s), Color.white);
+            flagText = UIFactory.Label("FlagText", flagBg.transform, "", (int)(28 * s), TextAnchor.MiddleLeft, tlf, tlf, new Vector2(64f * s, -3f * s), new Vector2(568f * s, 40f * s), Color.black);
+            flagText.fontStyle = FontStyle.Bold;
+            // Nome longo (azul, devolver posição): a letra diminui só o necessário para caber na faixa.
+            flagText.horizontalOverflow = HorizontalWrapMode.Wrap; flagText.verticalOverflow = VerticalWrapMode.Truncate;
+            flagText.resizeTextForBestFit = true; flagText.resizeTextMinSize = (int)(20 * s); flagText.resizeTextMaxSize = (int)(28 * s);
+            flagSubText = UIFactory.Label("FlagSub", flagBg.transform, "", (int)(23 * s), TextAnchor.UpperLeft, tlf, tlf, new Vector2(64f * s, -42f * s), new Vector2(568f * s, 30f * s), Color.black);
+            flagSubText.horizontalOverflow = HorizontalWrapMode.Wrap; flagSubText.verticalOverflow = VerticalWrapMode.Truncate;
+            flagSubText.resizeTextForBestFit = true; flagSubText.resizeTextMinSize = (int)(17 * s); flagSubText.resizeTextMaxSize = (int)(23 * s);
+            // Ícone tremulando à ESQUERDA do texto, dentro da faixa.
+            flagIcon = UIFactory.Panel("FlagIcon", flagBg.transform, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(6f * s, 0f), new Vector2(52f * s, 36f * s), Color.white);
             flagIcon.raycastTarget = false;
             flagIcon.preserveAspect = true;
-            flagIconLabel = UIFactory.Label("FlagIconLabel", flagIcon.transform, "", (int)(16 * s), TextAnchor.MiddleCenter, c, c, new Vector2(4f * s, 3f * s), new Vector2(62f * s, 32f * s), Color.black);
+            flagIconLabel = UIFactory.Label("FlagIconLabel", flagIcon.transform, "", (int)(13 * s), TextAnchor.MiddleCenter, c, c, new Vector2(3f * s, 2f * s), new Vector2(50f * s, 26f * s), Color.black);
             flagIconLabel.fontStyle = FontStyle.Bold;
             flagIconLabel.raycastTarget = false;
             flagBg.gameObject.SetActive(false);
@@ -849,8 +864,28 @@ namespace RaceX.UI
         void OnRaceNotice(RaceEntry e, string msg)
         {
             if (e != entry || messageText == null) return;
-            messageText.text = msg;
-            messageTimer = 4.5f;
+            ShowMessage(msg, 4.5f);
+        }
+
+        const float FlagBandH = 48f, FlagBandSubH = 78f;
+
+        /// <summary>Título antes do " — " (formato da FIA: o que, quem, onde) e explicação depois dele.</summary>
+        static void SplitMessage(string msg, out string title, out string detail)
+        {
+            int k = string.IsNullOrEmpty(msg) ? -1 : msg.IndexOf(" — ", System.StringComparison.Ordinal);
+            title = k < 0 ? (msg ?? "") : msg.Substring(0, k);
+            detail = k < 0 ? "" : msg.Substring(k + 3);
+        }
+
+        /// <summary>Mensagem central: título grande e explicação menor embaixo (só com Configurações > Explicar mensagens ligada).
+        /// split = false mostra o texto inteiro como título (rádio da equipe: é a fala do engenheiro, não uma regra).</summary>
+        void ShowMessage(string msg, float seconds, bool split = true)
+        {
+            string title = msg ?? "", detail = "";
+            if (split) SplitMessage(msg, out title, out detail);
+            messageText.text = title;
+            if (messageSubText != null) messageSubText.text = SettingsManager.MessageHints ? detail : "";
+            messageTimer = seconds;
         }
 
         /// <summary>Faixa da bandeira (5 Hz): devolução de posição tem prioridade; verde = escondida.</summary>
@@ -868,12 +903,12 @@ namespace RaceX.UI
             bool urgent = RaceX.Core.RaceControl.IsHazard(f) || f == RaceX.Core.RaceFlag.Black || f == RaceX.Core.RaceFlag.BlackOrange;
             if (RaceX.Core.RaceControl.GiveBack(car, out string gbName, out float gbLeft))
             {
-                txt = "DEVOLVA A POSIÇÃO a " + gbName + " — " + Mathf.CeilToInt(gbLeft) + " s";
+                txt = "DEVOLVA A POSIÇÃO a " + gbName + " · " + Mathf.CeilToInt(gbLeft) + " s — ou punição";
                 col = new Color(1f, 0.55f, 0.1f);
             }
             else if (f != RaceX.Core.RaceFlag.Green && (urgent || g.Length == 0))
             {
-                txt = RaceX.Core.RaceControl.FlagText(f);
+                txt = RaceX.Core.RaceControl.FlagTextFor(car, f);
                 col = RaceX.Core.RaceControl.FlagColor(f);
                 icon = RaceX.Core.RaceControl.IconKey(f);
             }
@@ -888,8 +923,20 @@ namespace RaceX.UI
             if (on)
             {
                 flagBg.color = new Color(col.r, col.g, col.b, 0.92f);
-                flagText.text = txt;
-                flagText.color = col.r + col.g + col.b < 0.6f ? Color.white : Color.black;
+                SplitMessage(txt, out string ft, out string fd);
+                if (!SettingsManager.MessageHints) fd = "";
+                Color tc2 = col.r + col.g + col.b < 0.6f ? Color.white : Color.black;
+                if (flagText.text != ft) flagText.text = ft;
+                if (flagSubText.text != fd) flagSubText.text = fd;
+                flagText.color = tc2;
+                flagSubText.color = tc2;
+                float h = (fd.Length > 0 ? FlagBandSubH : FlagBandH) * (compact ? 0.7f : 1f);
+                var frt = flagBg.rectTransform;
+                if (Mathf.Abs(frt.sizeDelta.y - h) > 0.5f) frt.sizeDelta = new Vector2(frt.sizeDelta.x, h);
+                // Sem explicação, o título fica centrado na faixa; com ela, sobe para a 1ª linha.
+                var trt = flagText.rectTransform;
+                float ty = fd.Length > 0 ? -3f * (compact ? 0.7f : 1f) : -(h - trt.sizeDelta.y) * 0.5f;
+                if (Mathf.Abs(trt.anchoredPosition.y - ty) > 0.5f) trt.anchoredPosition = new Vector2(trt.anchoredPosition.x, ty);
             }
             flagIconKey = on ? icon : null;
             if (flagIcon != null)
@@ -980,9 +1027,8 @@ namespace RaceX.UI
                 }
             }
             if (e != entry) return;
-            messageText.text = (best ? "MELHOR VOLTA  " : "VOLTA  ") + FormatTime(lapTime);
-            messageTimer = 3f;
-            if (e.finished) { messageText.text = "CHEGADA!  " + e.position + "º"; messageTimer = 5f; }
+            ShowMessage((best ? "MELHOR VOLTA  " : "VOLTA  ") + FormatTime(lapTime), 3f);
+            if (e.finished) ShowMessage("CHEGADA!  " + e.position + "º", 5f);
         }
 
         bool resultsHidden;
@@ -1176,7 +1222,7 @@ namespace RaceX.UI
                 }
                 // FURO: aviso na tela uma vez por pneu destruído.
                 bool punctNow = pitSys && RaceX.Core.PitLaneSystem.HasPuncture(car);
-                if (punctNow && !punctureWarned) { messageText.text = "FURO! VÁ PARA O BOX"; messageTimer = 4f; }
+                if (punctNow && !punctureWarned) ShowMessage("FURO! VÁ PARA O BOX", 4f);
                 punctureWarned = punctNow;
                 if (weatherText != null)
                 {
@@ -1266,11 +1312,14 @@ namespace RaceX.UI
                 }
                 if (pitInfoText != null)
                 {
-                    // token: -3 sem pit, -2 no pit (autopilot), -1 sem janela, >=0 distância em m.
+                    // token: -3 oculto, -2 no pit (autopilot), -1 sem janela, >=0 distância em m. O aviso só aparece com o box
+                    // pedido (botão PIT) ou chamado pela equipe (rádio/estratégia) — pedido do usuário, 06/11; fora disso, oculto.
                     float d = pitOn ? RaceX.Core.PitLaneSystem.DistanceToPitEntry(car) : 0f;
                     if (pitOn) UpdatePitRadio(car, d, lapNo);
-                    int token = !pitOn ? -3
-                        : entry != null && entry.car != null && entry.car.pitControlled ? -2
+                    bool inPitRoute = entry != null && entry.car != null && entry.car.pitControlled;
+                    bool wanted = pitOn && entry != null && !entry.retired && (inPitRoute || RaceX.Core.PitLaneSystem.EntryGuideFor(car));   // fora da corrida: oculto
+                    int token = !wanted ? -3
+                        : inPitRoute ? -2
                         : d < 0f ? -1 : Mathf.RoundToInt(d);
                     if (token != lastPitToken)
                     {
@@ -1309,7 +1358,7 @@ namespace RaceX.UI
             if (messageTimer > 0f)
             {
                 messageTimer -= Time.deltaTime;
-                if (messageTimer <= 0f) messageText.text = "";
+                if (messageTimer <= 0f) { messageText.text = ""; if (messageSubText != null) messageSubText.text = ""; }
             }
             // Janela de TV do safety car.
             if (scPipFrame != null)
@@ -1404,14 +1453,12 @@ namespace RaceX.UI
             // Chamadas CRÍTICAS (dano/furo) passam mesmo com o rádio do pit desligado (ele só silencia os avisos de rotina).
             bool critical = msg.StartsWith("BOX, BOX") || msg.StartsWith("FURO") || msg.StartsWith("Perda de pressão");
             if (SettingsManager.PitRadio == 0 && !critical) return;
-            messageText.text = "RÁDIO: " + msg;
-            messageTimer = 6f;
+            ShowMessage("RÁDIO: " + msg, 6f, false);
         }
 
         void ShowRadio(string msg)
         {
-            messageText.text = "RÁDIO: " + msg;
-            messageTimer = 4f;
+            ShowMessage("RÁDIO: " + msg, 4f, false);
         }
 
         void UpdatePitRadio(RaceX.Car.CarController car, float distToEntry, int lapNo)

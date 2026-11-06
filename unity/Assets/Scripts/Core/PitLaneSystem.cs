@@ -119,16 +119,7 @@ namespace RaceX.Core
             if (entryLineR == null) return;
             bool show = false;
             for (int i = 0; i < cars.Count && !show; i++)
-            {
-                var st = cars[i];
-                if (st == null || !st.isHuman || st.car == null || st.inPit || st.exiting || st.holding) continue;
-                if (st.requested || st.dmgCall.Length > 0) { show = true; break; }
-                if (race.Settings.laps < 900 && st.stopsDone < st.stopLaps.Count)
-                {
-                    var pg = race.GetProgress(race.GetEntry(st.car));
-                    if (pg != null && pg.lap >= st.stopLaps[st.stopsDone]) show = true;
-                }
-            }
+                if (cars[i] != null && cars[i].isHuman && GuideWanted(cars[i])) show = true;
             EntryGuideOn = show;
             // Com a linha de traçado ligada, a faixa azul é o PRÓPRIO tracejado (RacingLineGuide fica azul e mais largo e só
             // desvia na entrada do box — pedido do usuário). A faixa separada ao lado só aparece com a linha desligada.
@@ -151,6 +142,29 @@ namespace RaceX.Core
 
         /// <summary>Box pedido/chamado para o jogador: o tracejado do traçado vira o caminho AZUL até o box.</summary>
         public static bool EntryGuideOn;
+
+        /// <summary>Caminho até o box faz sentido para este carro: o jogador apertou PIT, a equipe chamou pelo rádio (dano/furo) ou
+        /// é a volta da parada da estratégia. Fora do box, saindo ou segurado na garagem = não.</summary>
+        bool GuideWanted(CarState st)
+        {
+            if (st == null || st.car == null || st.inPit || st.exiting || st.holding) return false;
+            if (st.requested || st.dmgCall.Length > 0) return true;
+            if (race != null && race.Settings.laps < 900 && st.stopsDone < st.stopLaps.Count)
+            {
+                var pg = race.GetProgress(race.GetEntry(st.car));
+                if (pg != null && pg.lap >= st.stopLaps[st.stopsDone]) return true;
+            }
+            return false;
+        }
+
+        /// <summary>HUD: mostra "PIT: ENTRE NA FAIXA LARANJA"/"PIT A N m" só quando o box foi pedido ou chamado para ESTE carro
+        /// (pedido do usuário, 06/11: fora disso fica oculto). Por carro — na tela dividida cada jogador vê o seu.</summary>
+        public static bool EntryGuideFor(CarController c)
+        {
+            if (instance == null || c == null) return false;
+            foreach (var st in instance.cars) if (st != null && st.car == c) return instance.GuideWanted(st);
+            return false;
+        }
 
         /// <summary>Lateral do caminho azul na distância d da pista — o MESMO caminho para o jogador (tracejado azul), para a IA e o
         /// piloto automático (CarAI, preparação para o box) e para a rota que o box assume (BuildEntryRoute): 0 (em cima do
@@ -683,8 +697,16 @@ namespace RaceX.Core
             }
         }
 
-        /// <summary>Composto seco que cobre as voltas que faltam (macio se der, senão médio, senão duro).</summary>
-        static int DryForLaps(int laps) => laps <= CompoundLife(0) ? 0 : laps <= CompoundLife(1) ? 1 : 2;
+        /// <summary>Composto seco que cobre as voltas que faltam (macio se der, senão médio, senão duro).
+        /// v106: com a pista abaixo de HardMinTrackC o duro NÃO entra (fica o médio; o pneu gasto chama outra parada) — corrida de 05/11 a
+        /// 32 °C: os 10 carros que montaram o duro rodaram com ele abaixo de 80 °C (janela 105–135) por até 11 voltas e 2 deles tiveram
+        /// perda total; no autoteste a 26 °C, idem. Na F1 as equipes fogem do duro em dia frio pelo mesmo motivo.</summary>
+        static int DryForLaps(int laps) => laps <= CompoundLife(0) ? 0 : (laps <= CompoundLife(1) || HardTooCold) ? 1 : 2;
+
+        /// <summary>Pista fria demais para o duro entrar na janela no ritmo de corrida (valor de projeto, pelo modelo térmico e pelas medições
+        /// de 05–06/11: a 32 °C a IA não passa de ~80–90 °C no duro).</summary>
+        const float HardMinTrackC = 38f;
+        static bool HardTooCold => WeatherSystem.Active && WeatherSystem.TrackTemp < HardMinTrackC;
 
         /// <summary>Parada nesta volta com o composto c; com pneu de chuva o resto da prova segue nele (a equipe
         /// refaz de novo se o tempo mudar). No seco, um stint até o fim com o composto que cobre as voltas.</summary>

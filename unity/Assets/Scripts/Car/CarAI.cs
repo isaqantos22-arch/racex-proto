@@ -518,6 +518,14 @@ namespace RaceX.Car
             car.throttleInput = cachedThrottle;
             car.brakeInput = cachedBrake;
             car.handbrake = false;
+            // Volante seguro até o metro que o caderno aprendeu nesta curva (v106): nunca abaixo de 85% do máximo já virado nela.
+            if (holdDirT != 0 && !car.pitControlled && reverseTimer <= 0f && slideHold <= 0f)
+            {
+                float sH = car.steerInput * holdDirT;
+                if (sH > holdPeakF) holdPeakF = sH;
+                if (holdPeakF > 0.12f && sH < 0.85f * holdPeakF) car.steerInput = holdDirT * 0.85f * holdPeakF;
+            }
+            else if (holdDirT == 0) holdPeakF = 0f;
             if (UseFrontSlipControl && !car.pitControlled && reverseTimer <= 0f) LimitFrontSlip();   // v100c–e medido pior: desligado
             if (!car.pitControlled && reverseTimer <= 0f) StabilizeSlide();
             if (!car.pitControlled && reverseTimer <= 0f && slideHold <= 0f) ControlUndersteer();
@@ -539,6 +547,11 @@ namespace RaceX.Car
         // caminho da última pensada (velocidade de curva pela curvatura real)
         bool pUseLine, pPlayerLine, lastPitPrep; float pLineHere, pHalf = 6f;
         readonly float[] pathBuf = new float[160];
+        /// <summary>Zona de segurança da PONTA DA MURETA da entrada do box (v106, pedido do usuário em 06/11): só os últimos 40 m antes
+        /// dela (a ponta fica 12 m antes do corredor → 52 m). Antes eram 150 m (traçado a 3 m da borda) e 200 m (sem o pé embaixo do
+        /// jogador): a IA tirava o pé cedo e fazia a última curva do Circuito Verde a 80–125 km/h, onde o jogador passa a 156–162.</summary>
+        const float BicoZoneM = 52f;
+
         float PathLatAt(float sd, float L)
         {
             float lat;
@@ -551,7 +564,7 @@ namespace RaceX.Car
             if (!lastPitPrep && !car.pitControlled && RaceX.Core.PitLaneSystem.LaneInfo(out float plsP, out float pllP))
             {
                 float relS = Mathf.Repeat(sd - plsP + 60f, L) - 60f;
-                if (relS > -60f && relS < 20f) lat = Mathf.Max(lat, -(pHalf - 3.0f));
+                if (relS > -BicoZoneM && relS < 20f) lat = Mathf.Max(lat, -(pHalf - 3.0f));
                 if (relS > -40f && relS < pllP + 15f) lat = Mathf.Max(lat, -(pHalf - 1.1f));
             }
             return lat;
@@ -658,9 +671,11 @@ namespace RaceX.Car
             understeerT += Time.fixedDeltaTime;
             if (understeerT < 0.08f) return;
             // Só tira o pé e desvira até o pico — sem frear: a freada no meio da curva (v100c) fez quem vinha atrás acertar a
-            // traseira (2 perdas totais a 118–124 km/h).
-            if (UseFrontSlipControl) car.throttleInput = 0f;
-            if (UseFrontSlipControl && car.FrontSideSlip > peak * 1.1f) car.steerInput *= 0.9f;
+            // traseira (2 perdas totais a 118–124 km/h). Na corrida em ritmo de IA ficou desligado (medido pior); no MODO CALMO
+            // (fila do SC, bandeiras, piloto automático do jogador) vale (v106: o automático do SC saía de frente com 60% de pé).
+            bool actUs = UseFrontSlipControl || calmNow;
+            if (actUs) car.throttleInput = 0f;
+            if (actUs && car.FrontSideSlip > peak * 1.1f) car.steerInput *= 0.9f;
             if (!understeerLearned && understeerT > 0.35f)
             {
                 understeerLearned = true;
@@ -717,6 +732,33 @@ namespace RaceX.Car
         /// CarController.ApplySteering — o volante retangular da F2 cai para 23% a 180 km/h).</summary>
         float EffectiveMaxSteer() => MaxSteerAt(car.spec, car.SpeedKmh);
 
+        /// <summary>LIÇÃO GERAL (v105): perda total numa curva → todos os pilotos do MESMO carro nesta pista recebem cautela nessa curva
+        /// (−2% de velocidade, tirar o pé 3 m antes) — o carro destruído não aprende mais, e os outros repetiam o mesmo erro.
+        /// v106 (corrida de 05/11: 8 perdas totais e NENHUMA lição): a direção de prova desliga a IA no mesmo quadro da perda total
+        /// (RaceControl.OnTotaled), então o Think nunca chegava aqui — agora a direção de prova chama isto ANTES de desligar. A curva é a
+        /// da observação ou, fora dela (a saída de pista anterior já tinha anulado), a curva do lugar onde o carro estava.</summary>
+        public void LearnFromWreck()
+        {
+            if (wreckLessonDone || !coachOn || coachMap == null || coachKey == null || coachMap.corners.Count == 0) return;
+            int cid = obsCorner;
+            if (cid < 0 || cid >= coachMap.corners.Count)
+            {
+                var z = CornerCoach.Zone(coachMap, lastThinkAlong);
+                cid = z != null ? z.id : -1;
+            }
+            if (cid < 0 || cid >= coachMap.corners.Count) return;
+            wreckLessonDone = true;
+            int cut = coachKey.IndexOf('|');
+            string suffix = cut >= 0 ? coachKey.Substring(cut) : coachKey;
+            int nb = CornerCoach.SharedLesson(suffix, cid, 0.02f, 3f);
+            var en = race != null ? race.GetEntry(car) : null;
+            string line = "LICAO GERAL " + (en != null ? en.name : name) + " perda total na C" + cid + " (along " + lastThinkAlong.ToString("0") + "): cautela para " + nb + " pilotos";
+            if (AutoTest.Active) AutoTest.Log(line); else Debug.Log("[CADERNO] " + line);
+        }
+
+        /// <summary>Sessão de CORRIDA (voltas contadas; treino e classificação usam laps ≥ 900).</summary>
+        bool InRaceSession => race != null && race.Settings != null && race.Settings.laps < 900;
+
         void UpdatePracticeCycle()
         {
             int lap = race.LapOf(car);
@@ -733,18 +775,7 @@ namespace RaceX.Car
         {
             if (car.wrecked)
             {
-                // LIÇÃO GERAL (v105): perda total dentro da janela de uma curva → todos os pilotos do MESMO carro nesta pista recebem
-                // cautela nessa curva (−2% de velocidade, tirar o pé 3 m antes) — o carro destruído não aprende mais, e os outros
-                // repetiam o mesmo erro (teste de 05/11: 4 perdas totais no bico da mureta saindo da última curva).
-                if (!wreckLessonDone && coachOn && obsCorner >= 0 && coachMap != null && obsCorner < coachMap.corners.Count && coachKey != null)
-                {
-                    wreckLessonDone = true;
-                    int cut = coachKey.IndexOf('|');
-                    string suffix = cut >= 0 ? coachKey.Substring(cut) : coachKey;
-                    int nb = CornerCoach.SharedLesson(suffix, obsCorner, 0.02f, 3f);
-                    string line = "LICAO GERAL " + name + " perda total na C" + obsCorner + ": cautela para " + nb + " pilotos";
-                    if (AutoTest.Active) AutoTest.Log(line); else Debug.Log("[CADERNO] " + line);
-                }
+                LearnFromWreck();
                 cachedSteer = 0f; cachedThrottle = 0f; cachedBrake = 1f; return;
             }
             int d = (int)difficulty;
@@ -765,6 +796,22 @@ namespace RaceX.Car
             // curvas 0 e 1 do Circuito Verde (teste de 05/11: 35 "saídas" de carros voltando do box).
             if (wasPitCtl && !car.pitControlled) StartExitHold(along, L);
             wasPitCtl = car.pitControlled;
+            // PNEU FRIO GRAU A GRAU (v106, pedido do usuário em 06/11): a confiança sobe com a temperatura (ColdTyreMul). Se a
+            // temperatura PARA de subir (15 s sem ganhar 0,05 °C/s — pneu duro em pista fria), o piloto se acostuma com a aderência que
+            // tem: a margem some devagar (1% de confiança por segundo). Recomeça com pneu novo, na largada e depois de SC/VSC.
+            float tyreNowC = TyreAvgTempC();
+            if (car.pitControlled || car.inputLocked) { coldTrust = 0f; tyrePlateauT = 0f; tyreRateEma = 0f; }
+            bool neutralForCold = RaceX.Core.RaceControl.Neutralized(car);
+            if (wasNeutralForCold && !neutralForCold) { coldTrust = 0f; tyrePlateauT = 0f; }
+            wasNeutralForCold = neutralForCold;
+            if (tyreTLast > -900f) tyreRateEma = Mathf.Lerp(tyreRateEma, (tyreNowC - tyreTLast) / Mathf.Max(0.02f, thinkDt), 0.05f);
+            tyreTLast = tyreNowC;
+            if (!neutralForCold && speed > 15f)
+            {
+                if (tyreRateEma < 0.05f) tyrePlateauT += thinkDt; else tyrePlateauT = Mathf.Max(0f, tyrePlateauT - 2f * thinkDt);
+                // Até METADE da margem: tirar a margem toda com o pneu frio parado (teste de 06/11, pista a 26 °C) dobrou as perdas totais.
+                if (tyrePlateauT > 15f) coldTrust = Mathf.MoveTowards(coldTrust, 0.5f, 0.01f * thinkDt);
+            }
             if (race != null && race.Settings.laps >= 900 && !car.pitControlled) UpdatePracticeCycle();
             if (wasLocked && !car.inputLocked)
             {
@@ -780,9 +827,11 @@ namespace RaceX.Car
             var myPose = spline.PoseAtDistance(along);
             float myLat = Vector3.Dot(transform.position - myPose.position, myPose.rotation * Vector3.right);
             lastMyLat = myLat;
+            float latRateNow = (myLat - prevLatThink) / Mathf.Max(0.02f, thinkDt);   // m/s de lateral (+ = para a direita)
+            prevLatThink = myLat;
             float half = RoadHalf();
             // Traçado ideal: na zona do pit a linha fica a ≥ 3 m da borda esquerda (mureta laranja e o bico da entrada).
-            if (RaceX.Core.PitLaneSystem.LaneInfo(out float pzs, out float pzl)) RacingLine.SetPitZone(pzs - 150f, pzs + pzl + 20f, -(half - 3f));
+            if (RaceX.Core.PitLaneSystem.LaneInfo(out float pzs, out float pzl)) RacingLine.SetPitZone(pzs - BicoZoneM, pzs + pzl + 20f, -(half - 3f));
             float edge = Mathf.Max(1.5f, half - 1.25f); // centro do carro NUNCA mirado além disto
             // MODO CALMO (v104, pedido do usuário em 04/11 depois de perder a corrida com o piloto automático rodando na chuva:
             // "todos devem andar no traçado, respeitando a velocidade da bandeira — sem ultrapassar, sem zigue-zague; só acelerar,
@@ -795,7 +844,26 @@ namespace RaceX.Car
                         || flagEarly == RaceFlag.Yellow || flagEarly == RaceFlag.DoubleYellow || flagEarly == RaceFlag.VSC || flagEarly == RaceFlag.SafetyCar
                         || (isHumanCar && RaceX.Core.SafetyCar.AutopilotOn(car)));
             float calmEdge = Mathf.Max(1.5f, half - 1.6f);
+            calmNow = calm;
             UpdateCoach(d, calm, L);
+            // Volante SEGURO nesta curva até o metro aprendido (v106): o FixedUpdate não deixa o volante voltar abaixo de 85% do máximo
+            // que já virou nela (sem o "solta e puxa de novo"). Só seguindo a linha (não ultrapassando, desviando, no box ou no modo calmo).
+            holdDirT = 0;
+            if (coachOn && coachMap != null && coachBook != null && !calm && (latReason == LatLine || latReason == LatLimit))
+            {
+                var ch = CornerCoach.Zone(coachMap, along);
+                var nh = ch != null ? CornerCoach.Find(coachBook, ch.id) : null;
+                if (nh != null && nh.holdTo > 0f)
+                {
+                    float pch = CornerCoach.Rel(along, ch.start, L);
+                    if (pch >= 0f && pch <= nh.holdTo)
+                    {
+                        holdDirT = ch.dir;
+                        if (holdCornerT != ch.id) { holdCornerT = ch.id; holdPeakF = 0f; }
+                    }
+                }
+            }
+            if (holdDirT == 0) holdCornerT = -1;
             // DIAGNÓSTICO (piloto automático no carro do jogador): fora da pista, registra o porquê (1x/s).
             if (Mathf.Abs(myLat) > half + 0.5f && Time.time - diagLogT > 1f && race != null && race.GetEntry(car) != null && race.GetEntry(car).isHuman)
             {
@@ -879,6 +947,25 @@ namespace RaceX.Car
             bool localYellow = flagNow == RaceFlag.Yellow || flagNow == RaceFlag.DoubleYellow;
             float flagFactor = RaceX.Core.RaceControl.SpeedFactor(car);
             float flagCap = localYellow ? targetSpeed * flagFactor : flagFactor < 0.999f ? maxSpeed * flagFactor : float.PositiveInfinity;
+            // BANDEIRA AZUL (v106): o "tira o pé" era 0,94 da velocidade MÁXIMA do carro (~315 km/h) — sem efeito numa pista de
+            // 180 km/h: o retardatário seguia no ritmo e segurava o líder (corrida de 05/11: 41 punições de azul e o toque do jogador
+            // na traseira do M. Costa). Agora: na reta, onde ele abre o traçado, TIRA O PÉ de verdade (alvo logo abaixo da velocidade
+            // atual = solta o acelerador sem frear) até o líder passar; na curva alivia 3% da velocidade do trecho e segura a faixa.
+            // v106d (autoteste de 06/11, volta 9: retardatários sob azul a 13–33 km/h na reta, amarela dupla e o líder preso atrás): o
+            // alvo "logo abaixo da velocidade atual" era refeito a cada pensada e o carro nunca voltava a acelerar — ia perdendo
+            // velocidade enquanto a azul durasse. Agora, como o retardatário na F1: em cada reta tira o pé por no máximo 1,5 s e no máximo
+            // até 85% da velocidade com que começou a tirar; depois segue no ritmo, só segurando a faixa aberta.
+            if (flagNow == RaceFlag.Blue)
+            {
+                bool blueStraight = Mathf.Abs(near01) < 0.15f && Mathf.Abs(far01) < 0.25f;
+                if (blueStraight)
+                {
+                    if (blueLiftStraight != straightId) { blueLiftStraight = straightId; blueLiftT = 0f; blueLiftV = speed; }
+                    blueLiftT += thinkDt;
+                    if (blueLiftT <= 1.5f) flagCap = Mathf.Min(targetSpeed, Mathf.Max(speed - 0.35f, blueLiftV * 0.85f));
+                }
+                else flagCap = targetSpeed * 0.97f;
+            }
             // SC/VSC (pedido do usuário: "não frear todo mundo"): o teto NÃO entra de uma vez. Na F1 o piloto tem de ficar
             // acima de um TEMPO MÍNIMO (delta) pelo menos uma vez por setor de fiscais — reduz ao longo do trecho, não
             // crava o freio. O teto parte da velocidade atual e desce a NeutralDecel (tirar o pé + freio leve).
@@ -1072,8 +1159,17 @@ namespace RaceX.Car
                 // UMA tentativa por carro por reta: desistiu, só tenta de novo depois da próxima curva (ou se ele tiver problema de
                 // verdade). Antes a tentativa expirava em 4,5 s, o carro voltava para trás dele e já abria de novo — o vaivém.
                 bool retryBlocked = aheadCar == lastPassCar && lastPassStraight == straightId && !bigOpportunity;
+                // v106 (pedido do usuário em 06/11: "na reta, longe da curva, ele não pode frear — joga o carro para o lado e acelera"):
+                // mais rápido (≥ 1,5 m/s) e longe da freada da curva, pode tentar DE NOVO na mesma reta (no máximo 2 por reta) 2,5 s
+                // depois da tentativa anterior.
+                if (passTriesStraightId != straightId) { passTriesStraightId = straightId; passTriesStraight = 0; }
+                if (retryBlocked && straightAhead && !brakingAhead && closing > 1.5f && Time.time - lastPassEndT > 2.5f && passTriesStraight < 2)
+                    retryBlocked = false;
+                // Ultrapassagem é entre 2 carros, no máximo 3 (pedido do usuário): carro que já tem outro AO LADO não é atacado (seria
+                // três lado a lado). Contornar carro parado não conta.
+                bool threeWide = !aheadStationary && !slowObstacle && TargetHasCarAlongside(aheadCar);
                 bool wantsPass = ((!scQueue && !calm) || queueObstacle) && !pracYield && !pitPrep && launchBlend > 0.3f && aheadGap < trigger
-                                 && reasonOk && !retryBlocked
+                                 && reasonOk && !retryBlocked && !threeWide
                                  && (queueObstacle || RaceX.Core.RaceControl.MayOvertake(car, aheadCar)); // amarela/VSC/devolução
                 if (wantsPass && (passCar != aheadCar || passSide == 0f))
                 {
@@ -1094,9 +1190,20 @@ namespace RaceX.Car
                     }
                     // Abrir para o lado onde já vem alguém mais rápido de trás = fechar esse carro: não tenta agora.
                     if (side != 0f && !aheadStationary && CutsOff(aheadLat + side * PassOffset(aheadCar), myLat, speed)) side = 0f;
+                    // NA CURVA (v106, pedido do usuário: "está um pouco mais rápido, vê um caminho livre na pista e aproveita a cinética do
+                    // carro — segurando e virando mais firme o volante por mais tempo para não sair da pista"): só ataca se a CONTA fecha —
+                    // o limite da curva NA LATERAL da ultrapassagem (por dentro ou por fora, aderência do pneu agora, freada e o que o
+                    // caderno aprendeu da curva) aguenta a minha velocidade. O piloto mais agressivo aceita até 102% do limite; o
+                    // cauteloso, 95%; os menos agressivos (e menos hábeis) só passam na reta.
+                    if (side != 0f && !aheadStationary && !slowObstacle && !straightAhead)
+                    {
+                        float sideLatC = Mathf.Clamp(aheadLat + side * PassOffset(aheadCar), -edge, edge);
+                        if (!CornerPassDriver || !(closing > 0.3f || cornerAttack) || !PassLineFeasible(sideLatC, along, speed)) side = 0f;
+                    }
                     if (side != 0f)
                     {
                         if (passCar != aheadCar) passSwitched = false;   // uma troca de lado por tentativa
+                        passTriesStraight++; PassTries++;
                         passCar = aheadCar;
                         passSide = side;
                         passDz = aheadGap + 4.5f; passLat = aheadLat; passFound = true;
@@ -1123,7 +1230,12 @@ namespace RaceX.Car
                 // FIM DA TENTATIVA (sem relógio na reta): perdendo terreno, ou chegando na curva sem estar emparelhado — por dentro
                 // basta o bico na altura da roda traseira dele; por fora tem de estar na frente. Aí encaixa atrás e freia junto.
                 bool losing = !contour && passDz > passDzMin + 10f;
-                bool notAlongside = !contour && ((inCorner && passDz > 6.5f) || (brakingAhead && !inCorner && !inside && passDz > 2.5f));
+                // v106: na curva ou chegando nela sem estar emparelhado, a tentativa CONTINUA se a conta da curva na lateral da
+                // ultrapassagem ainda fecha e ele segue mais rápido (antes acabava sempre — na saída de curva ficava freando atrás).
+                bool keepInCorner = !contour && CornerPassDriver && passCar != null && speed > Mathf.Max(0f, passCar.ForwardSpeed) + 0.3f
+                                    && (inCorner || brakingAhead) && PassLineFeasible(passHoldLat, along, speed);
+                if (keepInCorner && inCorner) passInCornerSeen = true;
+                bool notAlongside = !contour && !keepInCorner && ((inCorner && passDz > 6.5f) || (brakingAhead && !inCorner && !inside && passDz > 2.5f));
                 if (losing || notAlongside || passAge > 15f) EndPass();
                 else
                 {
@@ -1164,6 +1276,7 @@ namespace RaceX.Car
                 }
             }
             else if (passCar != null) EndPass();
+            passingPrev = passing;
 
             if (aheadCar != null && !car.pitControlled)
             {
@@ -1313,7 +1426,7 @@ namespace RaceX.Car
                 // esquerda da reta dos boxes, 6 dos 9 carros destruídos nos treinos de 03/11 ficaram em 36–54 m, lateral −7 a −11 (um
                 // deles ultrapassando pela esquerda a 154 km/h). No trecho do bico: ≥ 2 m da borda; traçado a ≥ 3 m.
                 // Trecho do bico: ≥ 3 m da borda para TODOS (quem cede a vez também — Hiro Tanaka chegou a −7 m com alvo −4).
-                if (relP > -60f && relP < 20f) targetLat = Mathf.Max(targetLat, -(half - 3.0f));
+                if (relP > -BicoZoneM && relP < 20f) targetLat = Mathf.Max(targetLat, -(half - 3.0f));
             }
 
             // Saída do box: rente à borda do lado do pit (lateral negativa) até o fim da 1ª curva depois do corredor.
@@ -1396,7 +1509,10 @@ namespace RaceX.Car
             // meu), freio JUNTO com ele — mantém a distância em vez de frear no MEU ponto e chegar em cima dele (como o piloto que vê a
             // luz de freio do da frente). Cada IA freia num ponto (habilidade); com os carros juntos (largada) quem vinha atrás acertava
             // quem freou antes — v91/v92: engavetamento e perda total na curva 1.
-            if (aheadCar != null && !car.pitControlled && aheadGap < 25f)
+            // v106 (relato do usuário: "freia atrás do carro em vez de ultrapassar; freou na reta longe da curva"): não vale para quem
+            // está ULTRAPASSANDO esse carro, nem longe da MINHA freada (só colado, a menos de 10 m) — senão copiava a freada antecipada
+            // do da frente na reta e nunca saía de trás.
+            if (aheadCar != null && !car.pitControlled && aheadGap < 25f && !(passing && aheadCar == passCar) && (brakingAhead || aheadGap < 10f))
             {
                 var aPack = aheadCar.Ai;
                 if (aPack != null && aPack.enabled && aPack.CornerSpeedAheadCached < targetSpeed)
@@ -1449,7 +1565,7 @@ namespace RaceX.Car
                 {
                     if (pitPrep || car.pitControlled || !RaceX.Core.PitLaneSystem.LaneInfo(out float plsS, out float pllS)) return lat;
                     float relS = Mathf.Repeat(sd - plsS + 60f, L) - 60f;
-                    if (relS > -60f && relS < 20f) lat = Mathf.Max(lat, -(half - 3.0f));
+                    if (relS > -BicoZoneM && relS < 20f) lat = Mathf.Max(lat, -(half - 3.0f));
                     if (relS > -40f && relS < pllS + 15f) lat = Mathf.Max(lat, -(half - 1.1f));
                     return lat;
                 }
@@ -1569,7 +1685,7 @@ namespace RaceX.Car
                 if (greenHere && RaceX.Core.PitLaneSystem.LaneInfo(out float plsG, out float pllG))
                 {
                     float relG = Mathf.Repeat(along - plsG + 200f, L) - 200f;
-                    if (relG > -200f && relG < 20f) greenHere = false;
+                    if (relG > -BicoZoneM && relG < 20f) greenHere = false;
                 }
             }
             else greenHere = WeatherSystem.Wetness < 0.15f
@@ -1595,6 +1711,10 @@ namespace RaceX.Car
                 {
                     bool slippery = WeatherSystem.Wetness > 0.15f || RaceX.Core.PitLaneSystem.TireTemp(car) < 0.6f;
                     throttle = Mathf.Min(throttle, slippery ? 0.45f : 0.6f);
+                    // v106 (corrida de 05/11, piloto automático sob SC saiu da pista 2×): 60% de acelerador com o volante TODO virado, em
+                    // 1ª/2ª marcha, empurrava o carro de frente (volta 14: −12° de roda a 67 km/h e só 0,2 g de curva) ou soltava a traseira
+                    // (volta 12). Como o piloto faz: quanto mais volante, menos pé — com o volante no batente, 25% do teto.
+                    throttle *= Mathf.Lerp(1f, 0.25f, Mathf.InverseLerp(0.3f, 0.9f, Mathf.Abs(steer)));
                 }
             }
             else
@@ -1635,6 +1755,14 @@ namespace RaceX.Car
             {
                 throttle = 0f;
                 brake = Mathf.Max(brake, Mathf.Clamp01((speed - aheadSpeed) / 6f));
+            }
+
+            // MODO CALMO perto da BORDA indo para fora (v106): solta o acelerador e freia de leve — o carro aperta a curva em vez de
+            // sair (corrida de 05/11: o piloto automático do SC foi a 9,5 m e 11,9 m de lateral com acelerador em 60%).
+            if (calm && Mathf.Abs(myLat) > half - 0.8f && latRateNow * Mathf.Sign(myLat) > 0.5f && speed > 8f)
+            {
+                throttle = 0f;
+                brake = Mathf.Max(brake, 0.25f);
             }
 
             bool pastLaunch = (Time.time - unlockTime) > 12f;
@@ -2008,7 +2136,19 @@ namespace RaceX.Car
             if (coachMap == null) coachMap = CornerCoach.MapFor(waypoints.Spline, TrackId);
             if (coachMap == null || coachMap.corners.Count == 0) { coachOn = false; return; }
             string key = OwnKey() + "|" + Mathf.RoundToInt(L);
-            if (key != coachKey) { coachKey = key; coachBook = CornerCoach.BookFor(key); }
+            if (key != coachKey)
+            {
+                coachKey = key; coachBook = CornerCoach.BookFor(key);
+                // v106 (corrida de 05/11: 158 testes que pioraram e 4 perdas totais na C3 com a escala do caderno em 1,035–1,07): na
+                // CORRIDA não se testa nada — cada curva começa com o MELHOR ajuste já medido (não com o teste que estava em curso no
+                // treino) e o caderno só aprende com os erros. Testes ficam para treino e classificação.
+                if (InRaceSession && coachBook != null)
+                    foreach (var nt in coachBook.notes)
+                    {
+                        if (nt.exp > 0 && nt.bestT < 900f) { nt.scale = Mathf.Min(nt.scale, nt.bestScale); nt.liftEarly = Mathf.Max(nt.liftEarly, nt.bestLift); if (nt.bestHold > 0.1f) nt.steerHold = nt.bestHold; }
+                        nt.exp = 0; nt.confirm = false;
+                    }
+            }
         }
 
         /// <summary>Teto da escala: Expert sem teto de projeto (até 1,40 — quem segura é a pista); Difícil até a velocidade do
@@ -2090,6 +2230,8 @@ namespace RaceX.Car
                 obsValid = idx >= 0 && CornerCoach.Rel(along, w.start - 30f, L) < 20f;
                 obsT0 = Time.time; obsDirty = false; obsContact = false; obsOff = obsSlide = obsPush = false;
                 obsEntryF = obsEntryR = obsExitF = obsExitR = 0f; obsTurnInOver = -99f;
+                obsPullState = 0; obsPeakSteer = 0f; obsPulls = 0; obsRelAlong = obsRepullAlong = obsPullEndAlong = -1f;
+                obsMaxOut = obsMaxIn = -99f; obsHoldUsed = false; obsSpeedRel = 0f; obsMinV = 999f;
             }
             if (obsCorner < 0 || !obsValid) return;
             // Saindo do box (corredor do pit fora do asfalto da pista), pneu frio, furo, dano ou largada: a passagem não ensina NADA —
@@ -2110,6 +2252,24 @@ namespace RaceX.Car
             if (offTrack && !obsOff) { obsOff = true; obsOffExit = exit; obsOffOutside = lastMyLat * c.dir < 0f; }
             if (beta > 14f && speed > 20f && !obsSlide) { obsSlide = true; obsSlideExit = exit; }
             if (contact) obsContact = true;
+            // PUXÕES (v106): virou → soltou (< 50% do pico) → virou de novo (> 70%) DENTRO da curva = soltou cedo. Guarda onde soltou, onde
+            // puxou de novo e até onde o último puxão foi; e quanto o carro chegou perto da borda de fora e de dentro.
+            {
+                float pc = CornerCoach.Rel(along, c.start, L), clen = CornerCoach.Rel(c.end, c.start, L);
+                if (pc >= 0f && pc <= clen + 20f)
+                {
+                    float sIn = car.SteerAngle * c.dir;   // graus de roda PARA DENTRO da curva
+                    if (sIn > obsPeakSteer) obsPeakSteer = sIn;
+                    if (obsPullState == 0 && sIn > 2f) obsPullState = 1;
+                    else if (obsPullState == 1 && obsPeakSteer > 3f && sIn < 0.5f * obsPeakSteer) { obsPullState = 2; obsRelAlong = pc; obsSpeedRel = speed; }
+                    else if (obsPullState == 2 && sIn > 0.7f * obsPeakSteer) { obsPullState = 1; obsPulls++; obsRepullAlong = pc; }
+                    if (obsPullState == 1) obsPullEndAlong = pc;
+                    if (holdDirT != 0) obsHoldUsed = true;
+                    if (pc <= clen) obsMinV = Mathf.Min(obsMinV, speed);
+                }
+                float outLat = -c.dir * lastMyLat;    // + = para FORA da curva
+                obsMaxOut = Mathf.Max(obsMaxOut, outLat); obsMaxIn = Mathf.Max(obsMaxIn, -outLat);
+            }
             // passagem que não mostra o limite: tráfego perto, ultrapassando, defendendo, cedendo, bandeira azul, contorno
             if (passCar != null || defendActive
                 || (aheadCar != null && aheadGap < 15f && aheadSpeed < speed + 1f)
@@ -2122,6 +2282,68 @@ namespace RaceX.Car
         {
             var n = CoachNote(c);
             float t = Time.time - obsT0;
+            // SEGURAR O VOLANTE PELO TEMPO CERTO (v106, pedido do usuário em 06/11: "deu um puxão de 1 s, soltou, o carro quase saiu, deu
+            // outro de 1 s e saiu — tem de aprender a dar UM puxão de 2 s e soltar para ver o que acontece; se ainda sair, 2,5 s, 3 s. Isso é
+            // evoluir, e acaba com os puxões"). Soltou e puxou de novo DENTRO da curva e chegou a 0,5 m da borda de fora (ou saiu) → na
+            // próxima segura direto até onde o último puxão terminou. Já segurando e ainda saiu por fora depois de soltar → +0,5 s;
+            // segurou e foi para DENTRO → −0,5 s. Vale também na corrida (é aprender com o erro, não teste).
+            if (!obsDirty && !obsContact)
+            {
+                float halfH = RoadHalf();
+                float clen = CornerCoach.Rel(c.end, c.start, waypoints.Spline.Length);
+                bool nearOut = (obsOff && obsOffOutside) || obsMaxOut > halfH - 0.5f;
+                bool nearIn = (obsOff && !obsOffOutside) || obsMaxIn > halfH - 0.5f;
+                float vh = Mathf.Max(10f, obsSpeedRel > 1f ? obsSpeedRel : car.ForwardSpeed);
+                float hb = n.holdTo;
+                string hc = null;
+                if (obsPulls >= 1) { RepullPasses++; if (nearOut) RepullNearOut++; }
+                if (obsPulls >= 1 && nearOut && obsPullEndAlong > 0f)
+                {
+                    if (n.holdTo < obsPullEndAlong - 1f)
+                    {
+                        n.holdTo = obsPullEndAlong;
+                        hc = "soltou o volante em " + obsRelAlong.ToString("0") + " m e puxou de novo em " + obsRepullAlong.ToString("0") + " m (" + (obsPulls + 1)
+                           + " puxoes) e quase saiu: na proxima segura direto ate " + n.holdTo.ToString("0") + " m (~" + (n.holdTo / vh).ToString("0.0") + " s)";
+                    }
+                    else { n.holdTo += 0.5f * vh; hc = "segurou ate " + hb.ToString("0") + " m, soltou e quase saiu: segura mais 0,5 s (ate " + n.holdTo.ToString("0") + " m)"; }
+                }
+                else if (n.holdTo > 0f && obsHoldUsed && nearOut) { n.holdTo += 0.5f * vh; hc = "segurou ate " + hb.ToString("0") + " m e saiu por fora depois: segura mais 0,5 s (ate " + n.holdTo.ToString("0") + " m)"; }
+                else if (n.holdTo > 0f && obsHoldUsed && nearIn) { n.holdTo = Mathf.Max(0f, n.holdTo - 0.5f * vh); hc = "segurou demais e foi para dentro: 0,5 s a menos (ate " + n.holdTo.ToString("0") + " m)"; }
+                n.holdTo = Mathf.Clamp(n.holdTo, 0f, clen + 40f);
+                // QUANTO DA VELOCIDADE DO JOGADOR (v106g, ver Note.overPlayer): passou a curva LIMPA chegando na velocidade-alvo (a dele ×
+                // overPlayer, 1% de folga) e com pneu sobrando → +1% na próxima; chegou perto do limite (frente ≥ 95% do pico, traseira
+                // ≥ 90%, frente escorregando ou a 0,6 m da borda de fora) → −0,5%; saiu/rodou → −1%. Teto = o do piloto (1,01–1,10).
+                float pMin = PlayerCornerMin(c);
+                if (pMin > 5f && obsMinV < 900f)
+                {
+                    float peakO = Mathf.Max(0.05f, car.SidePeakSlip);
+                    float fO = Mathf.Max(obsEntryF, obsExitF), rO = Mathf.Max(obsEntryR, obsExitR);
+                    bool errO = obsOff || obsSlide;
+                    bool nearO = obsPush || fO >= peakO * 0.95f || rO >= peakO * 0.9f || obsMaxOut > halfH - 0.6f;
+                    float reached = obsMinV / pMin;
+                    float capO = Mathf.Max(1f, playerPaceMul);
+                    float beforeO = n.overPlayer;
+                    string oc = null;
+                    if (errO) { n.overPlayer -= 0.01f; n.overDowns++; OverDowns++; oc = "errou na curva: -1%"; }
+                    else if (nearO) { n.overPlayer -= 0.005f; n.overDowns++; OverDowns++; oc = "quase no limite (frente " + fO.ToString("0.00") + " traseira " + rO.ToString("0.00") + " pico " + peakO.ToString("0.00") + " borda " + obsMaxOut.ToString("0.0") + " m): -0,5%"; }
+                    else if (reached >= n.overPlayer - 0.01f && n.overPlayer < capO - 0.001f) { n.overPlayer += 0.01f; n.overUps++; OverUps++; oc = "fez a curva limpa na velocidade-alvo (" + (reached * 100f).ToString("0") + "% da sua): proxima +1%"; }
+                    n.overPlayer = Mathf.Clamp(n.overPlayer, 0.85f, capO);
+                    if (oc != null && Mathf.Abs(n.overPlayer - beforeO) > 0.0001f)
+                    {
+                        CornerCoach.MarkDirty();
+                        var enO = race != null ? race.GetEntry(car) : null;
+                        string lineO = "APRENDE " + (enO != null ? enO.name : name) + " C" + c.id + " ritmo: " + oc + " -> " + (n.overPlayer * 100f).ToString("0.0") + "% da sua velocidade (teto " + (capO * 100f).ToString("0") + "%)";
+                        if (AutoTest.Active) AutoTest.Log(lineO); else Debug.Log("[CADERNO] " + lineO);
+                    }
+                }
+                if (hc != null)
+                {
+                    n.holdLessons++; HoldLessons++; CornerCoach.MarkDirty();
+                    var enH = race != null ? race.GetEntry(car) : null;
+                    string lineH = "APRENDE " + (enH != null ? enH.name : name) + " C" + c.id + " volante: " + hc;
+                    if (AutoTest.Active) AutoTest.Log(lineH); else Debug.Log("[CADERNO] " + lineH);
+                }
+            }
             float sk = Mathf.InverseLerp(0.95f, 1.16f, skill);
             // Margem depois do erro e passo de melhora pelo NÍVEL do piloto: o bom volta para perto do limite e melhora mais rápido.
             float margin = Mathf.Lerp(0.05f, 0.02f, sk);
@@ -2194,7 +2416,14 @@ namespace RaceX.Car
                 }
                 if (obsTurnInOver > 2.5f && coachLiftPlan) n.liftEarly += 5f;   // chegou rápido demais tirando o pé: tira antes
                 bool tyreRoom = f < peak * 0.85f && r < peak * 0.85f;
-                if (n.confirm) { }   // próxima passagem repete os ajustes do recorde (sem teste novo)
+                if (InRaceSession)
+                {
+                    // CORRIDA (v106): sem experimento — guarda o tempo, corrige só se passou do pico; nada de curva mais rápida.
+                    n.exp = 0; n.confirm = false;
+                    if (n.cool > 0) n.cool--;
+                    else if (f > peak * 1.15f || r > peak * 1.1f) { n.scale -= margin * 0.25f; coachHoldLap++; }
+                }
+                else if (n.confirm) { }   // próxima passagem repete os ajustes do recorde (sem teste novo)
                 else if (n.cool > 0) { n.cool--; }
                 else if (f > peak * 1.15f || r > peak * 1.1f) { n.scale -= margin * 0.25f; coachHoldLap++; }   // passou do pico sem sair
                 else
@@ -2244,8 +2473,34 @@ namespace RaceX.Car
             coachErrLap = coachUpLap = coachBackLap = coachHoldLap = 0; pullsLap = 0; pullsStrongLap = 0; precN = precOk = 0; discCond = discTyre = discBox = discFlag = discTraffic = 0;
         }
 
-        /// <summary>Margem de pneu frio: 0,88 com o pneu a ≤ 50% da temperatura até 1,0 a ≥ 90% (valor de projeto).</summary>
-        float ColdTyreMul() => Mathf.Lerp(0.88f, 1f, Mathf.InverseLerp(0.5f, 0.9f, PitLaneSystem.TireTemp(car)));
+        /// <summary>Margem de pneu frio: 0,88 com o pneu a ≤ 50% da temperatura até 1,0 a ≥ 90% (valor de projeto).
+        /// v106 (corrida de 05/11, pista a 32 °C): a aderência do pneu frio JÁ entra no limite (MuEffective → TireGrip → TempFactor);
+        /// a margem extra por cima dela, sem fim, prendia a IA no pneu DURO frio — andava 12% mais devagar, gerava pouco calor e
+        /// nunca entrava na janela (0,00–0,10 por até 11 voltas em 10 carros; 2 perdas totais, uma chamou o safety car). Agora a
+        /// margem vale só nas voltas iniciais (~1¼ volta depois de pneu novo, da largada ou do fim de SC/VSC), como pediu o usuário;
+        /// depois fica só a perda real de aderência, e o pneu esquenta.</summary>
+        /// v106b (pedido do usuário em 06/11: "conforme o pneu vai ganhando grau a grau, a confiança do piloto em fazer curvas mais
+        /// rápidas aumenta — um pouquinho por grau, sem saltos; esquentou, 100% de habilidade"): a margem é por GRAU abaixo da janela
+        /// do composto — 0,5% por °C, até 24 °C abaixo (0,88). Médio a 75 °C (janela 90): 0,925; 76 °C: 0,93; ... 90 °C: 1,0. Numa
+        /// curva de 130 km/h, ~0,7 km/h por grau, além do que a aderência do pneu frio já tira. Com a temperatura parada abaixo da
+        /// janela, a confiança (coldTrust) leva a margem a 1,0 aos poucos.</summary>
+        float ColdTyreMul()
+        {
+            int cmp = PitLaneSystem.Compound(car);
+            if (cmp < 0) return 1f;
+            float deficit = TyreModel.Low(cmp) - TyreAvgTempC();
+            if (deficit <= 0f) return 1f;
+            float byDegree = 1f - ColdPerDegree * Mathf.Min(deficit, ColdMaxDeficit);
+            return Mathf.Lerp(byDegree, 1f, coldTrust);
+        }
+        float TyreAvgTempC() => 0.25f * (PitLaneSystem.WheelTempC(car, 0) + PitLaneSystem.WheelTempC(car, 1) + PitLaneSystem.WheelTempC(car, 2) + PitLaneSystem.WheelTempC(car, 3));
+        const float ColdPerDegree = 0.005f, ColdMaxDeficit = 24f;
+        float coldTrust, tyreTLast = -999f, tyreRateEma, tyrePlateauT;
+        /// <summary>Piso da curva com pneu frio (pedido do usuário, 06/11): 110 km/h.</summary>
+        const float ColdFloorSpeed = 110f / 3.6f;
+        bool wasNeutralForCold;
+        bool calmNow;
+        float prevLatThink;
 
         static string ExpName(int e) => e == 1 ? "curva mais rapida" : e == 2 ? "tirar o pe depois" : e == 3 ? "tirar o pe antes e mais rapido" : "segurar mais o volante";
 
@@ -2507,6 +2762,7 @@ namespace RaceX.Car
                     vCorner = vPhys * DiffVMaxFraction[d] * FractionOverride * skill;
                     vCorner = Mathf.Min(vCorner, vPhys * AiMaxUsable);
                     bool playerRef = false;
+                    float vPlayerTgt = float.MaxValue;
                     if (d >= 2 && trackId >= 0 && paceCap == null)
                     {
                         // v100 (pedido do usuário): com volta limpa do jogador, ela É o alvo — playerPaceMul × a velocidade dele no
@@ -2518,6 +2774,11 @@ namespace RaceX.Car
                         // velocidade de saída gravada já é a que o carro aguenta; com 1,03–1,09 ali os carros saíam largos da última
                         // curva e 3 bateram no bico da mureta (treino v100g com estilo, 04/11). A vantagem fica onde a curva limita.
                         float mult = vPhys >= top * 0.999f ? Mathf.Min(playerPaceMul, 1f) : playerPaceMul;
+                        // v106f/g: na curva, a velocidade DO JOGADOR naquele trecho × o que o caderno já CONQUISTOU nessa curva (começa em
+                        // 1,00; +1% a cada passagem limpa na velocidade dele, −0,5% quando chegou perto do limite) — em TODAS as sessões.
+                        // As perdas totais da curva 1 e da curva 3 nos autotestes de 06/11 eram com alvo 1,06–1,07 × a velocidade dele de
+                        // uma vez (o fator do Expert, "às cegas") — ele já anda perto do limite real do carro.
+                        mult = vPhys < top * 0.999f ? Mathf.Min(mult, CornerOverPlayer(along + s)) : Mathf.Min(mult, 1f);
                         // Onde a LINHA dele foi cortada para dentro (ele passou além do limite que a IA mira), a curva da IA é mais
                         // fechada que a dele: a velocidade dele ali não vale com fator > 1 — e perde 1,5% (corrida de 04/11, PT em série).
                         if (style != null)
@@ -2525,7 +2786,7 @@ namespace RaceX.Car
                             float pl = PlayerStyle.LatAt(style, along + s, L);
                             if (!float.IsNaN(pl) && Mathf.Abs(pl) > playerLineEdge + 0.2f) mult = Mathf.Min(mult, 1f) * 0.985f;
                         }
-                        if (playerCleanV > 5f) { vCorner = Mathf.Min(playerCleanV * mult, vPhys * AiMaxUsable); playerRef = true; }
+                        if (playerCleanV > 5f) { vCorner = Mathf.Min(playerCleanV * mult, vPhys * AiMaxUsable); playerRef = true; vPlayerTgt = playerCleanV * mult; }
                     }
                     // Melhor volta PRÓPRIA (limpa): onde ele mesmo já passou mais rápido, pode repetir — até 98,5% do limite físico.
                     // Com a volta do jogador como alvo, ela não passa da faixa pedida.
@@ -2536,7 +2797,17 @@ namespace RaceX.Car
                         // teve 7 perdas totais (antes 3).
                         if (ov > 5f) vCorner = Mathf.Max(vCorner, Mathf.Min(ov * 0.995f, vPhysFull * AiMaxUsable));
                     }
-                    if (cn != null) vCorner = Mathf.Min(vPhys * cn.scale, top);
+                    if (cn != null)
+                    {
+                        // Ultrapassando (v106): a escala do caderno é da linha normal — na lateral da ultrapassagem vale no máximo a margem
+                        // do piloto (a mesma da conta que autorizou a manobra).
+                        float scUse = passingPrev && latReason == LatPass ? Mathf.Min(cn.scale, PassMargin) : cn.scale;
+                        vCorner = Mathf.Min(vPhys * scUse, top);
+                        // v106: a escala do caderno não passa do alvo pela volta do jogador (a velocidade dele no trecho). Corrida de 05/11:
+                        // na C3 a IA mirava 136–168 km/h onde ele passa a 118–124 — 4 perdas totais pelo lado de fora. Em TODAS as sessões
+                        // (pedido do usuário em 06/11: "de sexta a domingo").
+                        if (vPlayerTgt < float.MaxValue) vCorner = Mathf.Min(vCorner, vPlayerTgt);
+                    }
                 }
                 // A memória de trecho antiga (teto 7% abaixo do erro, de TODOS os carros do grupo) não vale na aproximação nem na curva
                 // de quem tem caderno: lá quem decide é o que ele mesmo aprendeu.
@@ -2564,11 +2835,22 @@ namespace RaceX.Car
                     // 150 m (+ o que ele aprendeu a tirar antes), planeja sem freio; senão é curva de freada.
                     float aC = Mathf.Max(6f, CornerCoach.CoastDecel(CoachGroup, 0.5f * (speed + vCorner)));   // 6 = medido no carro do jogador em curva (5,5–6,5)
                     float liftDist = (speed * speed - vCorner * vCorner) / (2f * aC);
-                    if (liftDist <= 150f + cn.liftEarly) { decelPlan = aC; liftPlan = true; }
+                    // v106 (pedido do usuário em 06/11: "nas retas, mesmo com pneu frio, acelerar ao máximo, não reduzir"): com pneu
+                    // frio (< 90%) não planeja "só tirando o pé" — esse plano solta o acelerador até 150 m antes, ainda na reta. Acelera
+                    // até o ponto de freada e freia (a freada já usa a aderência menor do pneu frio).
+                    if (liftDist <= 150f + cn.liftEarly && PitLaneSystem.TireTemp(car) >= 0.9f) { decelPlan = aC; liftPlan = true; }
                 }
                 // PNEU FRIO (pedido do usuário em 05/11: "enquanto não esquentar, não devem tentar fazer curvas rápidas"): além do que a
                 // aderência do pneu já tira, até 12% de margem na velocidade de curva com o pneu abaixo de 90% da temperatura.
-                if (vCorner < float.MaxValue && vCorner < top) vCorner *= ColdTyreMul();
+                // v106 (pedido do usuário em 06/11: "voltas mais lentas com piso médio de 110 km/h, considerando as curvas, para forçar
+                // mais o volante — ajuda os pneus a esquentarem"): a margem de pneu frio não baixa a curva abaixo de 110 km/h. Curva que
+                // aguenta mais que isso é feita a pelo menos 110 (carrega o pneu de lado = calor); curva mais lenta que 110 fica no limite
+                // dela (a perda de aderência do pneu frio já está no limite, via TireGrip).
+                if (vCorner < float.MaxValue && vCorner < top)
+                {
+                    float cm = ColdTyreMul();
+                    if (cm < 0.999f) vCorner = Mathf.Max(vCorner * cm, Mathf.Min(vCorner, ColdFloorSpeed));
+                }
                 float vAllowed = Mathf.Sqrt(vCorner * vCorner + 2f * decelPlan * sEff);
                 if (vAllowed < best) { best = vAllowed; bestLift = liftPlan; }
             }
@@ -2642,8 +2924,106 @@ namespace RaceX.Car
         /// <summary>Encerra a tentativa de ultrapassagem/contorno e lembra contra quem e em que reta (não tenta de novo na mesma).</summary>
         void EndPass()
         {
-            if (passCar != null) { lastPassCar = passCar; lastPassSide = passSide; lastPassEndT = Time.time; lastPassStraight = straightId; }
-            passCar = null; passSide = 0f; passTimer = 0f; cornerAttackActive = false;
+            if (passCar != null)
+            {
+                lastPassCar = passCar; lastPassSide = passSide; lastPassEndT = Time.time; lastPassStraight = straightId;
+                // Autoteste: ultrapassagem COMPLETA = terminou com o alvo 6,5 m atrás (não conta contorno de carro parado).
+                if (passFound && passDz <= -6.5f && !IsStationary(passCar)) { PassesDone++; if (passInCornerSeen) PassesInCorner++; }
+            }
+            passCar = null; passSide = 0f; passTimer = 0f; cornerAttackActive = false; passInCornerSeen = false;
+        }
+
+        /// <summary>Autoteste (v106): tentativas de ultrapassagem, completas e completas com a manobra mantida dentro da curva.</summary>
+        public static int PassTries, PassesDone, PassesInCorner;
+        bool passInCornerSeen, passingPrev;
+        // Volante seguro (v106): observação dos puxões na passagem e regra aplicada no FixedUpdate.
+        int obsPullState, obsPulls;
+        float obsPeakSteer, obsRelAlong, obsRepullAlong, obsPullEndAlong, obsMaxOut, obsMaxIn, obsSpeedRel;
+        bool obsHoldUsed;
+        int holdDirT, holdCornerT = -1;
+        float holdPeakF;
+        /// <summary>Autoteste: lições de "segurar o volante" aprendidas.</summary>
+        public static int HoldLessons;
+        /// <summary>Autoteste (v106g): passos de +1% e de −0,5%/−1% sobre a velocidade do jogador nas curvas.</summary>
+        public static int OverUps, OverDowns;
+        /// <summary>Autoteste: passagens limpas em que o volante soltou e puxou de novo dentro da curva (e quantas chegaram perto da borda).</summary>
+        public static int RepullPasses, RepullNearOut;
+        float obsMinV = 999f;
+
+        /// <summary>Quanto da velocidade do jogador o caderno já conquistou na curva do ponto "at" (1,00 sem caderno/curva).</summary>
+        float CornerOverPlayer(float at)
+        {
+            if (!coachOn || coachMap == null || coachBook == null) return 1f;
+            var cz = CornerCoach.Zone(coachMap, at);
+            var nz = cz != null ? CornerCoach.Find(coachBook, cz.id) : null;
+            return nz != null ? Mathf.Clamp(nz.overPlayer, 0.85f, 1.10f) : 1f;
+        }
+
+        /// <summary>Menor velocidade do JOGADOR (estilo) dentro da curva (0 = sem dado).</summary>
+        float PlayerCornerMin(CornerCoach.Corner c)
+        {
+            if (style == null || waypoints == null || waypoints.Spline == null) return 0f;
+            float L = waypoints.Spline.Length, m = float.MaxValue;
+            float clen = CornerCoach.Rel(c.end, c.start, L);
+            for (float a = 0f; a <= clen; a += 2f)
+            {
+                float pv = PlayerSpeedAt(c.start + a, L);
+                if (pv > 5f) m = Mathf.Min(m, pv);
+            }
+            return m < float.MaxValue ? m : 0f;
+        }
+        // Bandeira azul (v106d): tirar o pé por no máximo 1,5 s em cada reta.
+        int blueLiftStraight = -1;
+        float blueLiftT, blueLiftV;
+        int passTriesStraight, passTriesStraightId = -1;
+
+        /// <summary>Piloto que ataca também em curva (v106): agressivo ou habilidoso; os outros só passam na reta.</summary>
+        bool CornerPassDriver => Aggression >= 0.4f || skill >= 1.0f;
+
+        /// <summary>Quanto do limite da curva ele aceita ultrapassando (0,95 cauteloso … 1,02 o mais agressivo) — risco de derrapar.</summary>
+        float PassMargin => Mathf.Lerp(0.95f, 1.02f, Mathf.InverseLerp(0.25f, 0.95f, Aggression));
+
+        /// <summary>A CONTA da ultrapassagem em curva (v106): na lateral lat, nos próximos 70 m, o limite de cada ponto (curvatura da
+        /// pista NAQUELA lateral, física do carro com o pneu de agora, × o que o caderno aprendeu da curva se for menos que o normal ×
+        /// a margem do piloto), com a freada até lá. true = a minha velocidade cabe.</summary>
+        bool PassLineFeasible(float lat, float along, float speed)
+        {
+            var sp = waypoints != null ? waypoints.Spline : null;
+            if (sp == null) return false;
+            float margin = PassMargin;
+            float decel = BrakePlanDecel(speed);
+            float best = float.MaxValue;
+            for (float s = 0f; s <= 70f; s += 5f)
+            {
+                float ks = SignedCurvature(sp, along + s);
+                if (Mathf.Abs(ks) < 1e-4f) continue;
+                float k = Mathf.Abs(ks / Mathf.Max(0.5f, 1f - ks * lat));
+                float v = PhysicalCornerLimit(k) * margin;
+                if (coachOn && coachMap != null)
+                {
+                    var cz = CornerCoach.Zone(coachMap, along + s);
+                    var nz = cz != null ? CornerCoach.Find(coachBook, cz.id) : null;
+                    if (nz != null) v *= Mathf.Min(1f, nz.scale);
+                }
+                v *= ColdTyreMul();
+                float allowed = Mathf.Sqrt(v * v + 2f * decel * Mathf.Max(0f, s - 4f));
+                if (allowed < best) best = allowed;
+            }
+            return speed <= best;
+        }
+
+        /// <summary>O carro t já tem outro AO LADO (bico a bico, 1,2–4,5 m de lateral)? Atacá-lo seria três lado a lado.</summary>
+        bool TargetHasCarAlongside(CarController t)
+        {
+            if (t == null || race == null || race.entries == null) return false;
+            for (int i = 0; i < race.entries.Count; i++)
+            {
+                var e = race.entries[i];
+                if (e == null || e.car == null || e.car == car || e.car == t || !e.car.gameObject.activeInHierarchy) continue;
+                Vector3 lp = t.transform.InverseTransformPoint(e.car.transform.position);
+                if (Mathf.Abs(lp.z) < 5.5f && Mathf.Abs(lp.x) > 1.2f && Mathf.Abs(lp.x) < 4.5f) return true;
+            }
+            return false;
         }
 
         /// <summary>VÃO LIVRE para contornar carro(s) PARADO(S) (destruído, abandonou, rodado/parado) a obsDz metros à frente:

@@ -199,6 +199,8 @@ namespace RaceX.Core
                 case "mixed": f.kind = WeatherKind.Dry; f.rainStart = 0.15f; f.rainEnd = 0.6f; f.changeTo = WeatherKind.HeavyRain; break;
                 default: f.kind = WeatherKind.Dry; break;
             }
+            // Autoteste: air=N fixa a temperatura do ar (v106: repetir a pista a ~32 °C da corrida do usuário — nublado com ar 25).
+            if (AutoTest.Active && float.TryParse(AutoTest.GetCfg("air", ""), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float airT)) f.airTemp = airT;
             f.trackTemp = TrackTempFor(f.kind, f.airTemp, f.sunGain, InitialWetness(f.kind));
             return f;
         }

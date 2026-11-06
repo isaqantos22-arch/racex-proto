@@ -518,7 +518,7 @@ namespace RaceX.Core
                                 }
                             if (unlapping.Count > 0)
                             {
-                                RaceControl.Broadcast("RETARDATÁRIOS PODEM ULTRAPASSAR — quem levou volta passa a fila e o safety car");
+                                RaceControl.Broadcast("RETARDATÁRIOS PODEM ULTRAPASSAR — passe a fila e o safety car");
                                 Debug.Log("[SC] desdobramento liberado para " + unlapping.Count + " carro(s)");
                             }
                         }
@@ -533,7 +533,7 @@ namespace RaceX.Core
                         if (((unlapDone || noUnlap) && !hazard && Time.time - deployedAt > 60f) || tooLong || lapsLeft <= 1)
                         {
                             phase = Phase.InThisLap;
-                            RaceControl.Broadcast("SAFETY CAR NESTA VOLTA — luzes apagadas; relargada na linha");
+                            RaceControl.Broadcast("SAFETY CAR NESTA VOLTA — relargada na linha");
                             Debug.Log("[SC] safety car entra nesta volta");
                         }
                     }
@@ -593,7 +593,7 @@ namespace RaceX.Core
                         // PIT pedido com o piloto automático: CONTINUA no automático e entra no box na próxima passagem pela
                         // entrada (o pit assume o carro como faz com a IA); depois da parada volta para a fila sozinho.
                         // Antes soltava o carro na hora (pedido do usuário: "era para ter mantido o piloto automático").
-                        if (PitLaneSystem.IsPitRequested(e.car) && !a.pitNotified) { a.pitNotified = true; RaceControl.Tell(e, "PIT PEDIDO — o piloto automático leva o carro ao box na próxima entrada"); }
+                        if (PitLaneSystem.IsPitRequested(e.car) && !a.pitNotified) { a.pitNotified = true; RaceControl.Tell(e, "PIT PEDIDO — o automático leva ao box"); }
                         if (!PitLaneSystem.IsPitRequested(e.car) && !PitLaneSystem.IsInPitFlow(e.car)) a.pitNotified = false;
                         // tecla P (o controle do jogador fica desligado no automático)
                         if (UnityEngine.Input.GetKeyDown(KeyCode.P)) PitLaneSystem.RequestPit(e.car);
@@ -643,7 +643,7 @@ namespace RaceX.Core
             // Colisões FICAM LIGADAS (pedido do usuário, 04/11: "retardatários passavam DENTRO dos carros da fila" — era o carro dele,
             // em piloto automático, sem colisão com ninguém). A IA guarda distância; nada atravessa nada.
             a.ignoring = false;
-            RaceControl.Tell(e, "PILOTO AUTOMÁTICO: o carro segue a fila do safety car até a BANDEIRA VERDE");
+            RaceControl.Tell(e, "PILOTO AUTOMÁTICO — até a bandeira verde");
             Debug.Log("[SC] piloto automático LIGADO no " + e.name);
         }
 
@@ -747,11 +747,11 @@ namespace RaceX.Core
             if (Instance == null || !Deployed) return "";
             switch (Instance.phase)
             {
-                case Phase.Exiting: return "SAFETY CAR NA PISTA — reduza, forme a fila, sem ultrapassar";
-                case Phase.Leading when Instance.AnyAuto(): return "SAFETY CAR — PILOTO AUTOMÁTICO NA FILA ATÉ A BANDEIRA VERDE";
-                case Phase.Leading: return Instance.unlapping.Count > 0 ? "SAFETY CAR — RETARDATÁRIOS PODEM ULTRAPASSAR" : "SAFETY CAR — fila atrás do líder, sem ultrapassar (pit aberto)";
+                case Phase.Exiting: return "SAFETY CAR NA PISTA — forme a fila, sem ultrapassar";
+                case Phase.Leading when Instance.AnyAuto(): return "SAFETY CAR — piloto automático até a verde";
+                case Phase.Leading: return Instance.unlapping.Count > 0 ? "SAFETY CAR — retardatários podem passar" : "SAFETY CAR — sem ultrapassar";
                 case Phase.InThisLap: case Phase.Entering: return "SAFETY CAR NESTA VOLTA — relargada na linha";
-                default: return "RELARGADA NA LINHA — sem ultrapassar até a linha";
+                default: return "RELARGADA — ultrapasse só após a linha";
             }
         }
     }
